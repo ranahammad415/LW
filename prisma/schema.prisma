@@ -1,0 +1,846 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  OWNER
+  PM
+  TEAM_MEMBER
+  CONTRACTOR
+  CLIENT
+}
+
+enum OnboardingStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETE
+}
+
+enum PackageTier {
+  STARTER
+  GROWTH
+  PRO
+  ENTERPRISE
+}
+
+model User {
+  id               String    @id @default(uuid())
+  email            String    @unique @db.VarChar(255)
+  passwordHash     String    @db.VarChar(255)
+  role             Role
+  name             String    @db.VarChar(255)
+  avatarUrl        String?   @db.VarChar(500)
+  phone            String?   @db.VarChar(50)
+  timezone         String?   @default("UTC") @db.VarChar(100)
+  twoFaSecret      String?   @db.VarChar(255)
+  twoFaEnabled     Boolean   @default(false)
+  twoFaBackupCodes Json?
+  googleId         String?   @unique @db.VarChar(255)
+  googleEmail      String?   @db.VarChar(255)
+  googleLinkedAt   DateTime?
+  lastLoginAt      DateTime?
+  lastLoginIp      String?   @db.VarChar(45)
+  isActive         Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @default(now()) @updatedAt
+
+  clientAccess                ClientUser[]         @relation("UserClientAccess")
+  addedClientUsers            ClientUser[]         @relation("AddedByRelation")
+  managedClientsLead          ClientAccount[]      @relation("LeadPmRelation")
+  managedClientsSec           ClientAccount[]      @relation("SecondaryPmRelation")
+  projectsLed                 Project[]            @relation("ProjectLeadPm")
+  assignedTasks               Task[]               @relation("TaskAssignees")
+  tasksCreated                Task[]               @relation("TasksCreated")
+  issuesReported              ClientIssue[]        @relation("IssueReporter")
+  assignedIssues              ClientIssue[]       @relation("IssueAssignee")
+  issueComments               IssueComment[]       @relation("CommentAuthor")
+  issueActivities             IssueActivityLog[]   @relation("IssueActivityActor")
+  taskActivities              TaskActivityLog[]    @relation("TaskActivityActor")
+  meetingsHosted              MeetingRecord[]      @relation("MeetingHost")
+  dailyStandups               DailyStandup[]
+  deliverableVersionsUploaded DeliverableVersion[]
+  systemAlerts                SystemAlert[]
+  taskComments                TaskComment[]
+  taskCommentReactions        TaskCommentReaction[] @relation("TaskCommentReactor")
+  taskAttachments             TaskAttachment[]      @relation("TaskAttachmentUploader")
+  inputRequestsCreated        ClientInputRequest[]  @relation("InputRequestedBy")
+  inputRequestsResponded      ClientInputRequest[]  @relation("InputRespondedBy")
+  keywordComments             KeywordComment[]
+  keywordSuggestionsReviewed  KeywordSuggestion[] @relation("KeywordSuggestionReviewer")
+  notificationLogs            NotificationLog[]
+  notificationPreferences     NotificationPreference[]
+  pmUpdatesAuthored           ClientPMUpdate[]      @relation("PMUpdateAuthor")
+}
+
+model SystemAlert {
+  id        String   @id @default(uuid())
+  userId    String
+  type      String   @db.VarChar(50)
+  message   String   @db.VarChar(500)
+  isRead    Boolean  @default(false)
+  actionUrl String?  @db.VarChar(500)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model NotificationTemplate {
+  id           String   @id @default(uuid())
+  slug         String   @unique @db.VarChar(100)
+  name         String   @db.VarChar(255)
+  description  String?  @db.VarChar(500)
+  category     String   @db.VarChar(50)
+  subject      String   @db.VarChar(500)
+  bodyHtml     String   @db.LongText
+  bodyText     String?  @db.LongText
+  inAppMessage String   @db.VarChar(500)
+  variables    Json?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @default(now()) @updatedAt
+}
+
+model NotificationLog {
+  id            String    @id @default(uuid())
+  recipientId   String
+  templateSlug  String    @db.VarChar(100)
+  channel       String    @db.VarChar(20)
+  subject       String?   @db.VarChar(500)
+  message       String    @db.VarChar(2000)
+  emailSentAt   DateTime?
+  emailError    String?   @db.VarChar(500)
+  emailDeferred Boolean   @default(false)
+  isRead        Boolean   @default(false)
+  actionUrl     String?   @db.VarChar(500)
+  metadata      Json?
+  createdAt     DateTime  @default(now())
+
+  recipient User @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+}
+
+model NotificationPreference {
+  id           String  @id @default(uuid())
+  userId       String
+  templateSlug String  @db.VarChar(100)
+  emailEnabled Boolean @default(true)
+  inAppEnabled Boolean @default(true)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, templateSlug])
+}
+
+model DailyStandup {
+  id        String   @id @default(uuid())
+  userId    String
+  date      DateTime @db.Date
+  yesterday String   @db.LongText
+  today     String   @db.LongText
+  blockers  String?  @db.LongText
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+}
+
+model Package {
+  id                  String          @id @default(uuid())
+  name                PackageTier
+  maxKeywords         Int             @default(10)
+  keywordsLimit       Int?
+  projectsLimit       Int?
+  contentPiecesLimit  Int?
+  backlinksLimit      Int?
+  schemaPagesLimit    Int?
+  llmTestsLimit       Int?
+  storageGbLimit      Decimal?        @db.Decimal(8, 2)
+  reportHistoryMonths Int?
+  teamMembersLimit    Int?
+  lookerReportsLimit  Int?
+  createdAt           DateTime        @default(now())
+  clients             ClientAccount[]
+}
+
+model ClientAccount {
+  id               String            @id @default(uuid())
+  packageId        String?
+  agencyName       String            @db.VarChar(255)
+  websiteUrl       String?           @db.VarChar(500)
+  industry         String?           @db.VarChar(255)
+  country          String?           @db.VarChar(100)
+  timezone         String?           @db.VarChar(100)
+  leadPmId         String?
+  secondaryPmId    String?
+  onboardingStatus OnboardingStatus? @default(PENDING)
+  onboardingStep   Int               @default(1)
+  healthScore      Int?
+  isActive         Boolean           @default(true)
+  analyticsGoogleEmail String?       @db.VarChar(255)
+  internalNotes    String?           @db.LongText
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @default(now()) @updatedAt
+
+  package             Package?             @relation(fields: [packageId], references: [id])
+  leadPm              User?                @relation("LeadPmRelation", fields: [leadPmId], references: [id])
+  secondaryPm         User?                @relation("SecondaryPmRelation", fields: [secondaryPmId], references: [id])
+  clientUsers         ClientUser[]
+  projects            Project[]
+  lookerEmbeds        LookerEmbed[]
+  monthlyReports      MonthlyReport[]
+  clientAssets        ClientAsset[]
+  keywordSuggestions  KeywordSuggestion[]
+  businessUpdates     BusinessUpdate[]
+  clientIssues        ClientIssue[]
+  meetingRecords      MeetingRecord[]
+  intakeSubmissions   IntakeSubmission[]
+  contractRecords    ContractRecord[]
+  onboardingChecklists OnboardingChecklist[]
+  metricSnapshots    ClientMetricSnapshot[]
+  roiConfig          ClientROIConfig?
+  pmUpdates          ClientPMUpdate[]
+}
+
+model IntakeSubmission {
+  id            String   @id @default(uuid())
+  clientId      String
+  projectId     String?
+  submittedById String
+  data          Json
+  submittedAt   DateTime @default(now())
+
+  client  ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  project Project?      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model ContractRecord {
+  id          String   @id @default(uuid())
+  clientId    String
+  projectId   String?
+  signerName  String   @db.VarChar(255)
+  signerEmail String   @db.VarChar(255)
+  signerIp    String?  @db.VarChar(45)
+  userAgent   String?  @db.VarChar(500)
+  signedAt    DateTime @default(now())
+
+  client  ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  project Project?      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model OnboardingChecklist {
+  id                         String    @id @default(uuid())
+  clientId                   String
+  projectId                  String?   @unique
+  logoUploaded               Boolean   @default(false)
+  brandGuidelinesUploaded    Boolean   @default(false)
+  brandColorsAdded           Boolean   @default(false)
+  brandColors                String?   @db.VarChar(1000)
+  contentAssetsUploaded      Boolean   @default(false)
+  notificationPrefsConfirmed Boolean   @default(false)
+  notifEmail                 Boolean   @default(true)
+  notifWhatsapp              Boolean   @default(false)
+  notifInApp                 Boolean   @default(true)
+  profilePhotoAdded          Boolean   @default(false)
+  profilePhotoUrl            String?   @db.VarChar(500)
+  completedAt                DateTime?
+
+  client  ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  project Project?      @relation("ProjectOnboardingChecklist", fields: [projectId], references: [id], onDelete: Cascade)
+}
+
+model ClientUser {
+  id                     String   @id @default(uuid())
+  clientId               String
+  userId                 String
+  jobTitle               String?  @db.VarChar(255)
+  isPrimaryContact       Boolean  @default(false)
+  canApproveDeliverables Boolean  @default(true)
+  canSignContracts       Boolean  @default(false)
+  addedById              String?
+  addedAt                DateTime @default(now())
+
+  client  ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  user    User          @relation("UserClientAccess", fields: [userId], references: [id], onDelete: Cascade)
+  addedBy User?         @relation("AddedByRelation", fields: [addedById], references: [id])
+
+  @@unique([clientId, userId])
+}
+
+enum ProjectType {
+  SEO_CAMPAIGN
+  AEO_GEO_CAMPAIGN
+  WEBSITE_DESIGN
+  WEBSITE_DEVELOPMENT
+  SOCIAL_MEDIA_CAMPAIGN
+  ONE_OFF_PROJECT
+}
+
+enum ProjectStatus {
+  SETUP
+  ACTIVE
+  PAUSED
+  COMPLETED
+  ARCHIVED
+}
+
+enum TaskStatus {
+  TO_DO
+  IN_PROGRESS
+  NEEDS_REVIEW
+  REVISION_NEEDED
+  BLOCKED
+  WAITING_DEPENDENCY
+  COMPLETED
+  CANCELLED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+model Project {
+  id              String        @id @default(uuid())
+  clientId        String
+  name            String        @db.VarChar(255)
+  projectType     ProjectType
+  status          ProjectStatus @default(SETUP)
+  onboardingStep  Int           @default(1)
+  leadPmId        String?
+  wpUrl              String?       @db.VarChar(500)
+  wpApiKey           String?       @db.VarChar(255)
+  wpThemeName        String?       @db.VarChar(255)
+  wpThemeVersion     String?       @db.VarChar(100)
+  wpPlugins          Json?
+  wpSiteInfoSyncedAt DateTime?
+  gscSiteUrl         String?       @db.VarChar(500)
+  gscLastSyncedAt    DateTime?
+  createdAt          DateTime      @default(now())
+  updatedAt   DateTime      @default(now()) @updatedAt
+
+  client             ClientAccount       @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  leadPm             User?               @relation("ProjectLeadPm", fields: [leadPmId], references: [id])
+  tasks              Task[]
+  sitemapNodes       SitemapNode[]
+  trackedKeywords    KeywordTrack[]
+  promptLogs         PromptLog[]
+  clientAssets       ClientAsset[]
+  keywordSuggestions KeywordSuggestion[]
+  businessUpdates    BusinessUpdate[]
+  clientIssues       ClientIssue[]
+  wpPages            WpPage[]
+  contentReviews     WpContentReview[]
+  intakeSubmissions  IntakeSubmission[]
+  contractRecords    ContractRecord[]
+  onboardingChecklist OnboardingChecklist? @relation("ProjectOnboardingChecklist")
+}
+
+model SitemapNode {
+  id        String   @id @default(uuid())
+  projectId String
+  url       String   @db.VarChar(500)
+  title     String?  @db.VarChar(255)
+  pageType  String   @default("PAGE") @db.VarChar(50)
+  createdAt DateTime @default(now())
+
+  project  Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  keywords KeywordTrack[]
+}
+
+model KeywordTrack {
+  id            String   @id @default(uuid())
+  projectId     String
+  keyword       String   @db.VarChar(500)
+  volume        Int?
+  currentRank   Int?
+  targetUrl     String?  @db.VarChar(500)
+  status        String   @default("PROPOSED") @db.VarChar(50)
+  sitemapNodeId String?
+  clientNote    String?  @db.LongText
+  suggestedKeyword   String?
+  suggestedTargetUrl String?
+  suggestedNotes     String?  @db.LongText
+  updatedAt     DateTime @default(now()) @updatedAt
+
+  project     Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sitemapNode SitemapNode?     @relation(fields: [sitemapNodeId], references: [id], onDelete: SetNull)
+  comments    KeywordComment[]
+}
+
+model KeywordComment {
+  id             String       @id @default(uuid())
+  keywordTrackId String
+  userId         String
+  message        String       @db.LongText
+  createdAt      DateTime     @default(now())
+
+  keywordTrack   KeywordTrack @relation(fields: [keywordTrackId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id])
+}
+
+model PromptLog {
+  id              String   @id @default(uuid())
+  projectId       String
+  platform        String   @db.VarChar(100)
+  promptQuery     String   @db.LongText
+  llmResponse     String   @db.LongText
+  notes           String?  @db.LongText
+  keyword         String?  @db.VarChar(500)
+  targetUrl       String?  @db.VarChar(500)
+  cited           Boolean?
+  competitorsCited Json?
+  sentimentScore  String?  @db.VarChar(20)
+  linkedWpPageId  String?
+  createdAt       DateTime @default(now())
+
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  linkedWpPage WpPage?  @relation(fields: [linkedWpPageId], references: [id], onDelete: SetNull)
+  automatedRuns AeoAutomatedRun[]
+}
+
+model AeoAutomatedRun {
+  id              String   @id @default(uuid())
+  promptLogId     String
+  runDate         DateTime @default(now())
+  wasCited        Boolean?
+  responseSnippet String?  @db.LongText
+
+  promptLog PromptLog @relation(fields: [promptLogId], references: [id], onDelete: Cascade)
+}
+
+
+
+model WpAccessPreset {
+  id           String   @id @default(uuid())
+  name         String   @db.VarChar(255)
+  capabilities Json
+  createdAt    DateTime @default(now())
+
+  tasks  Task[]
+  issues ClientIssue[]
+}
+
+
+
+model Task {
+  id            String       @id @default(uuid())
+  projectId     String
+  title         String       @db.VarChar(500)
+  description   String?      @db.LongText
+  taskType      String       @db.VarChar(100)
+  priority      TaskPriority @default(MEDIUM)
+  dueDate       DateTime?
+  createdById   String?
+  status        TaskStatus   @default(TO_DO)
+  clientVisible Boolean      @default(true)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @default(now()) @updatedAt
+
+  parentTaskId     String?
+  wpAccessPresetId String?
+  parentTask       Task?          @relation("SubTasks", fields: [parentTaskId], references: [id], onDelete: SetNull)
+  subTasks         Task[]         @relation("SubTasks")
+  wpAccessPreset   WpAccessPreset? @relation(fields: [wpAccessPresetId], references: [id], onDelete: SetNull)
+
+  milestone String? @db.VarChar(100)
+
+  requiresClientInput   Boolean @default(false)
+  clientRequestNote    String? @db.LongText
+  clientProvidedInput  Boolean @default(false)
+  clientProvidedResponse String? @db.LongText
+
+  project        Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assignees      User[]               @relation("TaskAssignees")
+  createdBy      User?                @relation("TasksCreated", fields: [createdById], references: [id])
+  dependsOnTasks Task[]               @relation("TaskDependencies")
+  blockingTasks  Task[]               @relation("TaskDependencies")
+  deliverables   DeliverableVersion[]
+  comments       TaskComment[]
+  attachments    TaskAttachment[]
+  activityLogs   TaskActivityLog[]
+  wpPages        WpPage[]
+  clientInputRequests ClientInputRequest[]
+}
+
+model DeliverableVersion {
+  id           String   @id @default(uuid())
+  taskId       String
+  version      Int
+  fileUrl      String   @db.VarChar(500)
+  notes        String?  @db.LongText
+  uploadedById String
+  createdAt    DateTime @default(now())
+
+  task       Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  uploadedBy User @relation(fields: [uploadedById], references: [id])
+}
+
+model TaskComment {
+  id        String    @id @default(uuid())
+  taskId    String
+  userId    String
+  parentId  String?
+  content   String    @db.LongText
+  createdAt DateTime  @default(now())
+  editedAt  DateTime?
+
+  task      Task                   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user      User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent    TaskComment?           @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies   TaskComment[]          @relation("CommentReplies")
+  reactions TaskCommentReaction[]
+}
+
+model TaskCommentReaction {
+  id        String   @id @default(uuid())
+  commentId String
+  userId    String
+  emoji     String   @db.VarChar(20)
+  createdAt DateTime @default(now())
+
+  comment TaskComment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  user    User        @relation("TaskCommentReactor", fields: [userId], references: [id])
+
+  @@unique([commentId, userId, emoji])
+}
+
+model TaskAttachment {
+  id           String   @id @default(uuid())
+  taskId       String
+  uploadedById String
+  fileName     String   @db.VarChar(255)
+  fileUrl      String   @db.VarChar(500)
+  fileSize     Int?
+  createdAt    DateTime @default(now())
+
+  task       Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  uploadedBy User @relation("TaskAttachmentUploader", fields: [uploadedById], references: [id])
+}
+
+model TaskActivityLog {
+  id        String   @id @default(uuid())
+  taskId    String
+  actorId   String
+  action    String   @db.VarChar(100)
+  detail    String?  @db.VarChar(500)
+  createdAt DateTime @default(now())
+
+  task  Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  actor User @relation("TaskActivityActor", fields: [actorId], references: [id])
+}
+
+model LookerEmbed {
+  id        String   @id @default(uuid())
+  clientId  String
+  label     String   @db.VarChar(255)
+  url       String   @db.LongText
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  client ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
+}
+
+enum ReportStatus {
+  DRAFT
+  PM_REVIEW
+  DELIVERED
+}
+
+model MonthlyReport {
+  id        String       @id @default(uuid())
+  clientId  String
+  month     Int
+  year      Int
+  status    ReportStatus @default(DRAFT)
+  aiContent Json?
+  createdAt DateTime     @default(now())
+
+  client ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@unique([clientId, month, year])
+}
+
+model ClientAsset {
+  id         String   @id @default(uuid())
+  clientId   String
+  projectId  String?
+  folder     String
+  filename   String
+  fileUrl    String
+  uploadNote String?  @db.LongText
+  uploadedAt DateTime @default(now())
+
+  client  ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  project Project?      @relation(fields: [projectId], references: [id])
+}
+
+model KeywordSuggestion {
+  id           String    @id @default(uuid())
+  clientId     String
+  projectId    String?
+  keyword      String
+  targetPage   String?
+  priority     String
+  notes        String?   @db.LongText
+  status       String    @default("PENDING")
+  submittedAt  DateTime  @default(now())
+  reviewedBy   String?
+  reviewedAt   DateTime?
+  reviewNote   String?   @db.LongText
+
+  client   ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  project  Project?      @relation(fields: [projectId], references: [id])
+  reviewer User?         @relation("KeywordSuggestionReviewer", fields: [reviewedBy], references: [id])
+}
+
+model BusinessUpdate {
+  id          String   @id @default(uuid())
+  clientId    String
+  projectId   String?
+  updateType  String
+  details     String   @db.LongText
+  submittedAt DateTime @default(now())
+
+  client  ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  project Project?      @relation(fields: [projectId], references: [id])
+}
+
+model ClientIssue {
+  id                String    @id @default(uuid())
+  clientId          String
+  projectId         String?
+  reportedById      String
+  assigneeId        String?
+  wpAccessPresetId  String?
+  title             String    @db.VarChar(500)
+  description       String    @db.LongText
+  status            String    @default("OPEN")
+  priority          String    @default("MEDIUM")
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @default(now()) @updatedAt
+  resolvedAt        DateTime?
+
+  client         ClientAccount   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  project        Project?        @relation(fields: [projectId], references: [id])
+  reportedBy     User            @relation("IssueReporter", fields: [reportedById], references: [id])
+  assignee       User?           @relation("IssueAssignee", fields: [assigneeId], references: [id])
+  wpAccessPreset WpAccessPreset? @relation(fields: [wpAccessPresetId], references: [id])
+  comments       IssueComment[]
+  activityLogs   IssueActivityLog[]
+}
+
+model IssueComment {
+  id            String    @id @default(uuid())
+  issueId       String
+  authorId      String
+  body          String    @db.LongText
+  attachmentUrl String?   @db.VarChar(500)
+  createdAt     DateTime  @default(now())
+  editedAt      DateTime?
+
+  issue  ClientIssue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  author User        @relation("CommentAuthor", fields: [authorId], references: [id])
+}
+
+model IssueActivityLog {
+  id        String   @id @default(uuid())
+  issueId   String
+  actorId   String
+  action    String   @db.VarChar(100)
+  detail    String?  @db.VarChar(500)
+  createdAt DateTime @default(now())
+
+  issue ClientIssue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  actor User        @relation("IssueActivityActor", fields: [actorId], references: [id])
+}
+
+model MeetingRecord {
+  id           String   @id @default(uuid())
+  clientId     String
+  hostId       String
+  title        String   @db.VarChar(255)
+  scheduledAt  DateTime
+  status       String   @default("UPCOMING")
+  meetingLink  String?  @db.VarChar(500)
+  summary      String?  @db.LongText
+  recordingUrl String?  @db.VarChar(500)
+  createdAt    DateTime @default(now())
+
+  client ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  host   User          @relation("MeetingHost", fields: [hostId], references: [id])
+}
+
+model WpPage {
+  id               String   @id @default(uuid())
+  projectId        String
+  wpPostId         Int
+  title            String   @db.VarChar(500)
+  slug             String   @db.VarChar(500)
+  status           String   @db.VarChar(50)
+  postType         String   @db.VarChar(50)
+  url              String   @db.VarChar(500)
+  content          String   @db.LongText
+  excerpt          String?  @db.LongText
+  featuredImageUrl String?  @db.VarChar(500)
+  template         String?  @db.VarChar(200)
+  seoTitle         String?  @db.VarChar(500)
+  seoDescription   String?  @db.LongText
+  contentHash      String   @db.VarChar(64)
+  taskId           String?
+  modifiedAt       DateTime?
+  syncedAt         DateTime @default(now())
+  createdAt        DateTime @default(now())
+
+  project   Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  task      Task?            @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  snapshots WpPageSnapshot[]
+  promptLogs PromptLog[]
+
+  @@unique([projectId, wpPostId])
+}
+
+model WpPageSnapshot {
+  id               String   @id @default(uuid())
+  wpPageId         String
+  title            String   @db.VarChar(500)
+  content          String   @db.LongText
+  status           String   @db.VarChar(50)
+  template         String?  @db.VarChar(200)
+  seoTitle         String?  @db.VarChar(500)
+  seoDescription   String?  @db.LongText
+  featuredImageUrl String?  @db.VarChar(500)
+  contentHash      String   @db.VarChar(64)
+  eventType        String   @default("updated") @db.VarChar(50)
+  contentExcerpt   String?  @db.LongText
+  aiSummary        String?  @db.LongText
+  wpUserId         String?  @db.VarChar(255)
+  wpUserName       String?  @db.VarChar(255)
+  ipAddress        String?  @db.VarChar(100)
+  userAgent        String?  @db.VarChar(500)
+  isElementor      Boolean?
+  syncedAt         DateTime @default(now())
+
+  wpPage WpPage @relation(fields: [wpPageId], references: [id], onDelete: Cascade)
+}
+
+model WpContentReview {
+  id               String    @id @default(uuid())
+  projectId        String
+  wpPipelineId     Int
+  wpPostId         Int
+  postTitle        String    @db.VarChar(500)
+  status           String    @db.VarChar(50)
+  submittedByName  String?   @db.VarChar(200)
+  submittedById    String?   @db.VarChar(100)
+  pmMemberName     String?   @db.VarChar(200)
+  pmMemberId       String?   @db.VarChar(100)
+  pmPreviewUrl     String?   @db.VarChar(1000)
+  clientPreviewUrl String?   @db.VarChar(1000)
+  pmDecision       String?   @db.VarChar(50)
+  pmComment        String?   @db.LongText
+  clientDecision   String?   @db.VarChar(50)
+  clientComment    String?   @db.LongText
+  workerNote       String?   @db.LongText
+  pmReviewedAt     String?   @db.VarChar(50)
+  clientReviewedAt String?   @db.VarChar(50)
+  revisionNumber   Int       @default(1)
+  lastEventType    String?   @db.VarChar(100)
+  isPublished      Boolean   @default(false)
+  publishedAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @default(now()) @updatedAt
+
+  project Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  events  WpContentReviewEvent[]
+
+  @@unique([projectId, wpPipelineId])
+}
+
+model WpContentReviewEvent {
+  id               String   @id @default(uuid())
+  contentReviewId  String
+  eventType        String   @db.VarChar(100)
+  status           String   @db.VarChar(50)
+  revisionNumber   Int      @default(1)
+  workerNote       String?  @db.LongText
+  pmComment        String?  @db.LongText
+  pmDecision       String?  @db.VarChar(50)
+  clientComment    String?  @db.LongText
+  clientDecision   String?  @db.VarChar(50)
+  pmReviewedAt     String?  @db.VarChar(50)
+  clientReviewedAt String?  @db.VarChar(50)
+  createdAt        DateTime @default(now())
+
+  contentReview WpContentReview @relation(fields: [contentReviewId], references: [id], onDelete: Cascade)
+}
+
+model ClientInputRequest {
+  id            String    @id @default(uuid())
+  taskId        String
+  requestedById String
+  requestNote   String    @db.LongText
+  status        String    @default("PENDING") // PENDING | FULFILLED | CANCELLED
+  responseText  String?   @db.LongText
+  respondedById String?
+  requestedAt   DateTime  @default(now())
+  respondedAt   DateTime?
+
+  task          Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  requestedBy   User      @relation("InputRequestedBy", fields: [requestedById], references: [id])
+  respondedBy   User?     @relation("InputRespondedBy", fields: [respondedById], references: [id])
+}
+
+enum MetricType {
+  MASTER_VISIBILITY
+  GROWTH_INDEX
+  COMPETITOR_THREAT
+  CONTENT_GAP
+  AI_SEARCH_READINESS
+}
+
+model ClientMetricSnapshot {
+  id         String     @id @default(uuid())
+  clientId   String
+  metricType MetricType
+  value      String     @db.VarChar(100)
+  label      String?    @db.VarChar(100)
+  change     String?    @db.VarChar(100)
+  createdAt  DateTime   @default(now())
+
+  client ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId, metricType, createdAt])
+}
+
+model ClientROIConfig {
+  id                      String   @id @default(uuid())
+  clientId                String   @unique
+  retainerCost            Float    @default(0)
+  estimatedValueGenerated Float    @default(0)
+  leadValue               Float    @default(0)
+  trafficValue            Float    @default(0)
+  roiPercentage           Float    @default(0)
+  updatedAt               DateTime @default(now()) @updatedAt
+
+  client ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
+}
+
+model ClientPMUpdate {
+  id        String   @id @default(uuid())
+  clientId  String
+  message   String   @db.LongText
+  authorId  String
+  createdAt DateTime @default(now())
+
+  client ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  author User          @relation("PMUpdateAuthor", fields: [authorId], references: [id])
+}
+
