@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
+    "postinstall": "prisma generate",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
@@ -39,11 +40,11 @@
     "mysql2": "^3.11.0",
     "node-cron": "^4.2.1",
     "nodemailer": "^8.0.5",
-    "zod": "^3.23.0"
+    "zod": "^3.23.0",
+    "dotenv": "^16.4.5",
+    "prisma": "^6.0.0"
   },
   "devDependencies": {
-    "dotenv": "^16.4.5",
-    "prisma": "^6.0.0",
     "vitest": "^2.1.0"
   },
   "engines": {

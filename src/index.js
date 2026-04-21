@@ -122,7 +122,10 @@ app.register(pmDigestRoutes, { prefix: '/api/pm' });
 app.register(pmClientDashboardRoutes, { prefix: '/api/pm' });
 app.register(wpWebhookRoutes, { prefix: '/api/webhooks' });
 
-app.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));
+app.get('/health', async (req) => {
+  req.log.info('Health check hit');
+  return { status: 'ok', timestamp: new Date().toISOString() };
+});
 
 const port = Number(process.env.PORT) || 3000;
 try {
@@ -131,6 +134,7 @@ try {
   if (gscOk) app.log.info('Google Search Console integration enabled');
 
   await app.listen({ port, host: '0.0.0.0' });
+  app.log.info(`App started on port ${port}`);
 
   cron.schedule('0 3 * * *', async () => {
     app.log.info('Starting daily WP page sync for all projects...');
