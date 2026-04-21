@@ -75,6 +75,8 @@ model User {
   notificationLogs            NotificationLog[]
   notificationPreferences     NotificationPreference[]
   pmUpdatesAuthored           ClientPMUpdate[]      @relation("PMUpdateAuthor")
+
+  @@map("user")
 }
 
 model SystemAlert {
@@ -87,6 +89,8 @@ model SystemAlert {
   createdAt DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("systemalert")
 }
 
 model NotificationTemplate {
@@ -103,6 +107,8 @@ model NotificationTemplate {
   isActive     Boolean  @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @default(now()) @updatedAt
+
+  @@map("notificationtemplate")
 }
 
 model NotificationLog {
@@ -121,6 +127,8 @@ model NotificationLog {
   createdAt     DateTime  @default(now())
 
   recipient User @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@map("notificationlog")
 }
 
 model NotificationPreference {
@@ -133,6 +141,7 @@ model NotificationPreference {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, templateSlug])
+  @@map("notificationpreference")
 }
 
 model DailyStandup {
@@ -147,6 +156,7 @@ model DailyStandup {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, date])
+  @@map("dailystandup")
 }
 
 model Package {
@@ -165,6 +175,8 @@ model Package {
   lookerReportsLimit  Int?
   createdAt           DateTime        @default(now())
   clients             ClientAccount[]
+
+  @@map("package")
 }
 
 model ClientAccount {
@@ -204,6 +216,8 @@ model ClientAccount {
   metricSnapshots    ClientMetricSnapshot[]
   roiConfig          ClientROIConfig?
   pmUpdates          ClientPMUpdate[]
+
+  @@map("clientaccount")
 }
 
 model IntakeSubmission {
@@ -216,6 +230,8 @@ model IntakeSubmission {
 
   client  ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
   project Project?      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("intakesubmission")
 }
 
 model ContractRecord {
@@ -230,6 +246,8 @@ model ContractRecord {
 
   client  ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
   project Project?      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("contractrecord")
 }
 
 model OnboardingChecklist {
@@ -251,6 +269,8 @@ model OnboardingChecklist {
 
   client  ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
   project Project?      @relation("ProjectOnboardingChecklist", fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("onboardingchecklist")
 }
 
 model ClientUser {
@@ -269,6 +289,7 @@ model ClientUser {
   addedBy User?         @relation("AddedByRelation", fields: [addedById], references: [id])
 
   @@unique([clientId, userId])
+  @@map("clientuser")
 }
 
 enum ProjectType {
@@ -340,6 +361,8 @@ model Project {
   intakeSubmissions  IntakeSubmission[]
   contractRecords    ContractRecord[]
   onboardingChecklist OnboardingChecklist? @relation("ProjectOnboardingChecklist")
+
+  @@map("project")
 }
 
 model SitemapNode {
@@ -352,6 +375,8 @@ model SitemapNode {
 
   project  Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
   keywords KeywordTrack[]
+
+  @@map("sitemapnode")
 }
 
 model KeywordTrack {
@@ -372,6 +397,8 @@ model KeywordTrack {
   project     Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   sitemapNode SitemapNode?     @relation(fields: [sitemapNodeId], references: [id], onDelete: SetNull)
   comments    KeywordComment[]
+
+  @@map("keywordtrack")
 }
 
 model KeywordComment {
@@ -383,6 +410,8 @@ model KeywordComment {
 
   keywordTrack   KeywordTrack @relation(fields: [keywordTrackId], references: [id], onDelete: Cascade)
   user           User         @relation(fields: [userId], references: [id])
+
+  @@map("keywordcomment")
 }
 
 model PromptLog {
@@ -403,6 +432,8 @@ model PromptLog {
   project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   linkedWpPage WpPage?  @relation(fields: [linkedWpPageId], references: [id], onDelete: SetNull)
   automatedRuns AeoAutomatedRun[]
+
+  @@map("promptlog")
 }
 
 model AeoAutomatedRun {
@@ -413,6 +444,8 @@ model AeoAutomatedRun {
   responseSnippet String?  @db.LongText
 
   promptLog PromptLog @relation(fields: [promptLogId], references: [id], onDelete: Cascade)
+
+  @@map("aeoautomatedrun")
 }
 
 
@@ -425,6 +458,8 @@ model WpAccessPreset {
 
   tasks  Task[]
   issues ClientIssue[]
+
+  @@map("wpaccesspreset")
 }
 
 
@@ -467,6 +502,8 @@ model Task {
   activityLogs   TaskActivityLog[]
   wpPages        WpPage[]
   clientInputRequests ClientInputRequest[]
+
+  @@map("task")
 }
 
 model DeliverableVersion {
@@ -480,6 +517,8 @@ model DeliverableVersion {
 
   task       Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
   uploadedBy User @relation(fields: [uploadedById], references: [id])
+
+  @@map("deliverableversion")
 }
 
 model TaskComment {
@@ -496,6 +535,8 @@ model TaskComment {
   parent    TaskComment?           @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
   replies   TaskComment[]          @relation("CommentReplies")
   reactions TaskCommentReaction[]
+
+  @@map("taskcomment")
 }
 
 model TaskCommentReaction {
@@ -509,6 +550,7 @@ model TaskCommentReaction {
   user    User        @relation("TaskCommentReactor", fields: [userId], references: [id])
 
   @@unique([commentId, userId, emoji])
+  @@map("taskcommentreaction")
 }
 
 model TaskAttachment {
@@ -522,6 +564,8 @@ model TaskAttachment {
 
   task       Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
   uploadedBy User @relation("TaskAttachmentUploader", fields: [uploadedById], references: [id])
+
+  @@map("taskattachment")
 }
 
 model TaskActivityLog {
@@ -534,6 +578,8 @@ model TaskActivityLog {
 
   task  Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
   actor User @relation("TaskActivityActor", fields: [actorId], references: [id])
+
+  @@map("taskactivitylog")
 }
 
 model LookerEmbed {
@@ -546,6 +592,8 @@ model LookerEmbed {
   createdAt DateTime @default(now())
 
   client ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@map("lookerembed")
 }
 
 enum ReportStatus {
@@ -566,6 +614,7 @@ model MonthlyReport {
   client ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   @@unique([clientId, month, year])
+  @@map("monthlyreport")
 }
 
 model ClientAsset {
@@ -580,6 +629,8 @@ model ClientAsset {
 
   client  ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
   project Project?      @relation(fields: [projectId], references: [id])
+
+  @@map("clientasset")
 }
 
 model KeywordSuggestion {
@@ -599,6 +650,8 @@ model KeywordSuggestion {
   client   ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
   project  Project?      @relation(fields: [projectId], references: [id])
   reviewer User?         @relation("KeywordSuggestionReviewer", fields: [reviewedBy], references: [id])
+
+  @@map("keywordsuggestion")
 }
 
 model BusinessUpdate {
@@ -611,6 +664,8 @@ model BusinessUpdate {
 
   client  ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
   project Project?      @relation(fields: [projectId], references: [id])
+
+  @@map("businessupdate")
 }
 
 model ClientIssue {
@@ -635,6 +690,8 @@ model ClientIssue {
   wpAccessPreset WpAccessPreset? @relation(fields: [wpAccessPresetId], references: [id])
   comments       IssueComment[]
   activityLogs   IssueActivityLog[]
+
+  @@map("clientissue")
 }
 
 model IssueComment {
@@ -648,6 +705,8 @@ model IssueComment {
 
   issue  ClientIssue @relation(fields: [issueId], references: [id], onDelete: Cascade)
   author User        @relation("CommentAuthor", fields: [authorId], references: [id])
+
+  @@map("issuecomment")
 }
 
 model IssueActivityLog {
@@ -660,6 +719,8 @@ model IssueActivityLog {
 
   issue ClientIssue @relation(fields: [issueId], references: [id], onDelete: Cascade)
   actor User        @relation("IssueActivityActor", fields: [actorId], references: [id])
+
+  @@map("issueactivitylog")
 }
 
 model MeetingRecord {
@@ -676,6 +737,8 @@ model MeetingRecord {
 
   client ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
   host   User          @relation("MeetingHost", fields: [hostId], references: [id])
+
+  @@map("meetingrecord")
 }
 
 model WpPage {
@@ -705,6 +768,7 @@ model WpPage {
   promptLogs PromptLog[]
 
   @@unique([projectId, wpPostId])
+  @@map("wppage")
 }
 
 model WpPageSnapshot {
@@ -729,6 +793,8 @@ model WpPageSnapshot {
   syncedAt         DateTime @default(now())
 
   wpPage WpPage @relation(fields: [wpPageId], references: [id], onDelete: Cascade)
+
+  @@map("wppagesnapshot")
 }
 
 model WpContentReview {
@@ -762,6 +828,7 @@ model WpContentReview {
   events  WpContentReviewEvent[]
 
   @@unique([projectId, wpPipelineId])
+  @@map("wpcontentreview")
 }
 
 model WpContentReviewEvent {
@@ -780,6 +847,8 @@ model WpContentReviewEvent {
   createdAt        DateTime @default(now())
 
   contentReview WpContentReview @relation(fields: [contentReviewId], references: [id], onDelete: Cascade)
+
+  @@map("wpcontentreviewevent")
 }
 
 model ClientInputRequest {
@@ -796,6 +865,8 @@ model ClientInputRequest {
   task          Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
   requestedBy   User      @relation("InputRequestedBy", fields: [requestedById], references: [id])
   respondedBy   User?     @relation("InputRespondedBy", fields: [respondedById], references: [id])
+
+  @@map("clientinputrequest")
 }
 
 enum MetricType {
@@ -818,6 +889,7 @@ model ClientMetricSnapshot {
   client ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   @@index([clientId, metricType, createdAt])
+  @@map("clientmetricsnapshot")
 }
 
 model ClientROIConfig {
@@ -831,6 +903,8 @@ model ClientROIConfig {
   updatedAt               DateTime @default(now()) @updatedAt
 
   client ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@map("clientroiconfig")
 }
 
 model ClientPMUpdate {
@@ -842,5 +916,7 @@ model ClientPMUpdate {
 
   client ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
   author User          @relation("PMUpdateAuthor", fields: [authorId], references: [id])
+
+  @@map("clientpmupdate")
 }
 
