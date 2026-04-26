@@ -234,7 +234,7 @@ export async function notify({ slug, recipientIds, variables = {}, actionUrl = n
   } catch (err) {
     console.error(`[notify] Rich email build failed for "${slug}", falling back:`, err.message);
     // Fallback to simple layout
-    brandedHtml = wrapInBrandedLayout({
+    brandedHtml = await wrapInBrandedLayout({
       bodyHtml: renderTemplate(template.bodyHtml, variables),
       preheader: renderedSubject,
       actionUrl: fullActionUrl,

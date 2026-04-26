@@ -947,3 +947,23 @@ model ToolArticle {
   @@map("tool_articles")
 }
 
+model AgencySetting {
+  id                String   @id @default(uuid())
+  agencyName        String   @default("Localwaves") @db.VarChar(255)
+  logoUrl           String?  @db.VarChar(500)
+  address           String?  @db.VarChar(500)
+  phone             String?  @db.VarChar(50)
+  website           String?  @db.VarChar(500)
+  emailFromName     String?  @db.VarChar(255)
+  emailFromAddress  String?  @db.VarChar(255)
+  emailHeaderHtml   String?  @db.LongText
+  emailFooterHtml   String?  @db.LongText
+  emailPrimaryColor String   @default("#6366f1") @db.VarChar(20)
+  emailFooterText   String?  @db.VarChar(500)
+  copyrightText     String?  @db.VarChar(255)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @default(now()) @updatedAt
+
+  @@map("agency_setting")
+}
+
