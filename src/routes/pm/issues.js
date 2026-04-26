@@ -516,7 +516,7 @@ export async function pmIssueRoutes(app) {
         where: { id: issueId },
         include: {
           project: {
-            include: { client: { select: { secondaryPmId: true } } },
+            include: { client: { select: { leadPmId: true, secondaryPmId: true } } },
           },
           wpAccessPreset: { select: { id: true, capabilities: true } },
         },
@@ -530,7 +530,7 @@ export async function pmIssueRoutes(app) {
       const isPmOrOwner =
         user.role === 'OWNER' ||
         (user.role === 'PM' &&
-          (project?.leadPmId === user.id || project?.client?.secondaryPmId === user.id));
+          (project?.leadPmId === user.id || project?.client?.leadPmId === user.id || project?.client?.secondaryPmId === user.id));
 
       if (!isAssignee && !isPmOrOwner) {
         return reply.status(403).send({ message: 'You must be the assignee or PM/Owner to generate a WordPress login link' });

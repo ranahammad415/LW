@@ -60,6 +60,7 @@ export async function projectRoutes(app) {
       } else if (user.role === 'PM') {
         where.OR = [
           { leadPmId: user.id },
+          { client: { leadPmId: user.id } },
           { client: { secondaryPmId: user.id } },
         ];
       } else {
@@ -99,7 +100,7 @@ export async function projectRoutes(app) {
 
       const project = await prisma.project.findUnique({
         where: { id },
-        include: { client: { select: { secondaryPmId: true } } },
+        include: { client: { select: { leadPmId: true, secondaryPmId: true } } },
       });
       if (!project) return reply.status(404).send({ message: 'Project not found' });
       const canAccess = await ensureProjectAccess(project, user);
@@ -148,7 +149,7 @@ export async function projectRoutes(app) {
 
       const project = await prisma.project.findUnique({
         where: { id: projectId },
-        include: { client: { select: { secondaryPmId: true } } },
+        include: { client: { select: { leadPmId: true, secondaryPmId: true } } },
       });
       if (!project) return reply.status(404).send({ message: 'Project not found' });
       const canAccess = await ensureProjectAccess(project, user);
@@ -221,7 +222,7 @@ export async function projectRoutes(app) {
 
       const project = await prisma.project.findUnique({
         where: { id },
-        include: { client: { select: { secondaryPmId: true } } },
+        include: { client: { select: { leadPmId: true, secondaryPmId: true } } },
       });
       if (!project) return reply.status(404).send({ message: 'Project not found' });
       const canAccess = await ensureProjectAccess(project, user);
@@ -363,9 +364,9 @@ export async function projectRoutes(app) {
         if (project.leadPmId !== user.id) {
           const client = await prisma.clientAccount.findUnique({
             where: { id: project.clientId },
-            select: { secondaryPmId: true },
+            select: { leadPmId: true, secondaryPmId: true },
           });
-          if (client?.secondaryPmId !== user.id) {
+          if (client?.leadPmId !== user.id && client?.secondaryPmId !== user.id) {
             return reply.status(403).send({ message: 'You do not have access to this project' });
           }
         }
@@ -507,7 +508,7 @@ export async function projectRoutes(app) {
 
       const project = await prisma.project.findUnique({
         where: { id },
-        include: { client: { select: { secondaryPmId: true } } },
+        include: { client: { select: { leadPmId: true, secondaryPmId: true } } },
       });
       if (!project) return reply.status(404).send({ message: 'Project not found' });
       const canAccess = await ensureProjectAccess(project, user);
@@ -564,7 +565,7 @@ export async function projectRoutes(app) {
       }
       const project = await prisma.project.findUnique({
         where: { id },
-        include: { client: { select: { secondaryPmId: true } } },
+        include: { client: { select: { leadPmId: true, secondaryPmId: true } } },
       });
       if (!project) return reply.status(404).send({ message: 'Project not found' });
       const canAccess = await ensureProjectAccess(project, user);
@@ -586,7 +587,7 @@ export async function projectRoutes(app) {
       const { id } = request.params;
       const project = await prisma.project.findUnique({
         where: { id },
-        include: { tasks: { select: { assignees: { select: { id: true } } } }, client: { select: { secondaryPmId: true } } },
+        include: { tasks: { select: { assignees: { select: { id: true } } } }, client: { select: { leadPmId: true, secondaryPmId: true } } },
       });
       if (!project) return reply.status(404).send({ message: 'Project not found' });
       const canAccess = await ensureProjectAccess(project, user);
@@ -659,7 +660,7 @@ export async function projectRoutes(app) {
       const { id, wpPostId } = request.params;
       const project = await prisma.project.findUnique({
         where: { id },
-        include: { tasks: { select: { assignees: { select: { id: true } } } }, client: { select: { secondaryPmId: true } } },
+        include: { tasks: { select: { assignees: { select: { id: true } } } }, client: { select: { leadPmId: true, secondaryPmId: true } } },
       });
       if (!project) return reply.status(404).send({ message: 'Project not found' });
       const canAccess = await ensureProjectAccess(project, user);
@@ -719,7 +720,7 @@ export async function projectRoutes(app) {
       const { id, wpPostId } = request.params;
       const project = await prisma.project.findUnique({
         where: { id },
-        include: { tasks: { select: { assignees: { select: { id: true } } } }, client: { select: { secondaryPmId: true } } },
+        include: { tasks: { select: { assignees: { select: { id: true } } } }, client: { select: { leadPmId: true, secondaryPmId: true } } },
       });
       if (!project) return reply.status(404).send({ message: 'Project not found' });
       const canAccess = await ensureProjectAccess(project, user);
@@ -750,7 +751,7 @@ export async function projectRoutes(app) {
 
       const project = await prisma.project.findUnique({
         where: { id },
-        include: { tasks: { select: { assignees: { select: { id: true } } } }, client: { select: { secondaryPmId: true } } },
+        include: { tasks: { select: { assignees: { select: { id: true } } } }, client: { select: { leadPmId: true, secondaryPmId: true } } },
       });
       if (!project) return reply.status(404).send({ message: 'Project not found' });
       const canAccess = await ensureProjectAccess(project, user);
@@ -779,7 +780,7 @@ export async function projectRoutes(app) {
 
       const project = await prisma.project.findUnique({
         where: { id },
-        include: { tasks: { select: { assignees: { select: { id: true } } } }, client: { select: { secondaryPmId: true } } },
+        include: { tasks: { select: { assignees: { select: { id: true } } } }, client: { select: { leadPmId: true, secondaryPmId: true } } },
       });
       if (!project) return reply.status(404).send({ message: 'Project not found' });
       const canAccess = await ensureProjectAccess(project, user);
@@ -969,7 +970,7 @@ export async function projectRoutes(app) {
 
       const project = await prisma.project.findUnique({
         where: { id: projectId },
-        include: { client: { select: { secondaryPmId: true } } },
+        include: { client: { select: { leadPmId: true, secondaryPmId: true } } },
       });
 
       if (!project) {
@@ -1022,7 +1023,7 @@ export async function projectRoutes(app) {
 
       const project = await prisma.project.findUnique({
         where: { id },
-        include: { client: { select: { secondaryPmId: true } } },
+        include: { client: { select: { leadPmId: true, secondaryPmId: true } } },
       });
       if (!project) return reply.status(404).send({ message: 'Project not found' });
       const canAccess = await ensureProjectAccess(project, request.user);
@@ -1100,7 +1101,7 @@ export async function projectRoutes(app) {
 
       const project = await prisma.project.findUnique({
         where: { id },
-        include: { client: { select: { secondaryPmId: true } } },
+        include: { client: { select: { leadPmId: true, secondaryPmId: true } } },
       });
       if (!project) {
         return reply.status(404).send({ message: 'Project not found' });
@@ -1161,7 +1162,7 @@ export async function projectRoutes(app) {
 
       const project = await prisma.project.findUnique({
         where: { id: projectId },
-        include: { client: { select: { secondaryPmId: true } } },
+        include: { client: { select: { leadPmId: true, secondaryPmId: true } } },
       });
       if (!project) {
         return reply.status(404).send({ message: 'Project not found' });
@@ -1194,7 +1195,7 @@ export async function projectRoutes(app) {
 
       const project = await prisma.project.findUnique({
         where: { id },
-        include: { client: { select: { secondaryPmId: true } } },
+        include: { client: { select: { leadPmId: true, secondaryPmId: true } } },
       });
       if (!project) return reply.status(404).send({ message: 'Project not found' });
       const canAccess = await ensureProjectAccess(project, request.user);
@@ -1229,7 +1230,7 @@ export async function projectRoutes(app) {
 
       const project = await prisma.project.findUnique({
         where: { id },
-        include: { client: { select: { secondaryPmId: true } } },
+        include: { client: { select: { leadPmId: true, secondaryPmId: true } } },
       });
       if (!project) return reply.status(404).send({ message: 'Project not found' });
       const canAccess = await ensureProjectAccess(project, request.user);
@@ -1265,7 +1266,7 @@ export async function projectRoutes(app) {
 
       const project = await prisma.project.findUnique({
         where: { id },
-        include: { client: { select: { secondaryPmId: true } } },
+        include: { client: { select: { leadPmId: true, secondaryPmId: true } } },
       });
       if (!project) return reply.status(404).send({ message: 'Project not found' });
       const canAccess = await ensureProjectAccess(project, request.user);
@@ -1396,7 +1397,7 @@ export async function projectRoutes(app) {
 
       const project = await prisma.project.findUnique({
         where: { id },
-        include: { tasks: { select: { assignees: { select: { id: true } } } }, client: { select: { secondaryPmId: true } } },
+        include: { tasks: { select: { assignees: { select: { id: true } } } }, client: { select: { leadPmId: true, secondaryPmId: true } } },
       });
       if (!project) {
         return reply.status(404).send({ message: 'Project not found' });
@@ -1626,7 +1627,7 @@ export async function projectRoutes(app) {
 
       const project = await prisma.project.findUnique({
         where: { id: projectId },
-        include: { tasks: { select: { assignees: { select: { id: true } } } }, client: { select: { secondaryPmId: true } } },
+        include: { tasks: { select: { assignees: { select: { id: true } } } }, client: { select: { leadPmId: true, secondaryPmId: true } } },
       });
       if (!project) {
         return reply.status(404).send({ message: 'Project not found' });
@@ -1685,7 +1686,7 @@ export async function projectRoutes(app) {
 
       const project = await prisma.project.findUnique({
         where: { id: projectId },
-        include: { tasks: { select: { assignees: { select: { id: true } } } }, client: { select: { secondaryPmId: true } } },
+        include: { tasks: { select: { assignees: { select: { id: true } } } }, client: { select: { leadPmId: true, secondaryPmId: true } } },
       });
       if (!project) {
         return reply.status(404).send({ message: 'Project not found' });
@@ -1744,7 +1745,7 @@ export async function projectRoutes(app) {
 
       const project = await prisma.project.findUnique({
         where: { id: projectId },
-        include: { tasks: { select: { assignees: { select: { id: true } } } }, client: { select: { secondaryPmId: true } } },
+        include: { tasks: { select: { assignees: { select: { id: true } } } }, client: { select: { leadPmId: true, secondaryPmId: true } } },
       });
       if (!project) return reply.status(404).send({ message: 'Project not found' });
       const canAccess = await ensureProjectAccess(project, user);

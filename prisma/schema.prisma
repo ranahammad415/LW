@@ -920,3 +920,30 @@ model ClientPMUpdate {
   @@map("clientpmupdate")
 }
 
+model ToolCrawlSession {
+  id        Int      @id @default(autoincrement())
+  url       String   @db.VarChar(500)
+  domain    String   @db.VarChar(255)
+  report    String   @db.LongText
+  createdAt DateTime @default(now())
+
+  articles ToolArticle[]
+
+  @@map("tool_crawl_sessions")
+}
+
+model ToolArticle {
+  id              Int      @id @default(autoincrement())
+  crawlId         Int
+  topic           String   @db.VarChar(500)
+  title           String?  @db.VarChar(500)
+  content         String   @db.LongText
+  metaDescription String?  @db.VarChar(500)
+  wordCount       Int?
+  createdAt       DateTime @default(now())
+
+  crawl ToolCrawlSession @relation(fields: [crawlId], references: [id], onDelete: Cascade)
+
+  @@map("tool_articles")
+}
+

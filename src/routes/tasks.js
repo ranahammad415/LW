@@ -206,6 +206,7 @@ export async function taskRoutes(app) {
       if (user.role === 'PM') {
         const isAssigned =
           project.leadPmId === user.id ||
+          project.client.leadPmId === user.id ||
           project.client.secondaryPmId === user.id;
         if (!isAssigned) {
           return reply.status(403).send({ message: 'You are not assigned to this project' });
@@ -518,6 +519,7 @@ Return the id of the single most restrictive preset that still allows this task 
         user.role === 'OWNER' ||
         (user.role === 'PM' &&
           (task.project.leadPmId === user.id ||
+            task.project.client.leadPmId === user.id ||
             task.project.client.secondaryPmId === user.id)) ||
         (isAssignee && (user.role === 'TEAM_MEMBER' || user.role === 'CONTRACTOR'));
 
@@ -642,6 +644,7 @@ Return the id of the single most restrictive preset that still allows this task 
         user.role === 'OWNER' ||
         (user.role === 'PM' &&
           (task.project.leadPmId === user.id ||
+            task.project.client.leadPmId === user.id ||
             task.project.client.secondaryPmId === user.id)) ||
         (isAssignee && (user.role === 'TEAM_MEMBER' || user.role === 'CONTRACTOR'));
 
@@ -800,6 +803,7 @@ Return the id of the single most restrictive preset that still allows this task 
         user.role === 'OWNER' ||
         (user.role === 'PM' &&
           (task.project.leadPmId === user.id ||
+            task.project.client.leadPmId === user.id ||
             task.project.client.secondaryPmId === user.id));
 
       if (!canUpdate) {
@@ -882,6 +886,7 @@ Return the id of the single most restrictive preset that still allows this task 
         user.role === 'OWNER' ||
         (user.role === 'PM' &&
           (task.project.leadPmId === user.id ||
+            task.project.client.leadPmId === user.id ||
             task.project.client.secondaryPmId === user.id)) ||
         ((user.role === 'TEAM_MEMBER' || user.role === 'CONTRACTOR') &&
           task.assignees?.some((a) => a.id === user.id));
@@ -965,6 +970,7 @@ Return the id of the single most restrictive preset that still allows this task 
         user.role === 'OWNER' ||
         (user.role === 'PM' &&
           (task.project.leadPmId === user.id ||
+            task.project.client.leadPmId === user.id ||
             task.project.client.secondaryPmId === user.id)) ||
         ((user.role === 'TEAM_MEMBER' || user.role === 'CONTRACTOR') &&
           task.assignees?.some((a) => a.id === user.id));
@@ -1055,6 +1061,7 @@ Return the id of the single most restrictive preset that still allows this task 
         user.role === 'OWNER' ||
         (user.role === 'PM' &&
           (task.project.leadPmId === user.id ||
+            task.project.client.leadPmId === user.id ||
             task.project.client.secondaryPmId === user.id)) ||
         ((user.role === 'TEAM_MEMBER' || user.role === 'CONTRACTOR') &&
           task.assignees?.some((a) => a.id === user.id));
@@ -1296,6 +1303,7 @@ Return the id of the single most restrictive preset that still allows this task 
         user.role === 'OWNER' ||
         (user.role === 'PM' &&
           (task.project.leadPmId === user.id ||
+            task.project.client.leadPmId === user.id ||
             task.project.client.secondaryPmId === user.id)) ||
         ((user.role === 'TEAM_MEMBER' || user.role === 'CONTRACTOR') &&
           task.assignees?.some((a) => a.id === user.id));
@@ -1388,7 +1396,7 @@ Return the id of the single most restrictive preset that still allows this task 
       const { id: taskId } = request.params;
       const task = await prisma.task.findUnique({ where: { id: taskId }, include: { project: { include: { client: true } }, assignees: { select: { id: true } } } });
       if (!task) return reply.status(404).send({ message: 'Task not found' });
-      const canAccess = user.role === 'OWNER' || (user.role === 'PM' && (task.project.leadPmId === user.id || task.project.client.secondaryPmId === user.id)) || ((user.role === 'TEAM_MEMBER' || user.role === 'CONTRACTOR') && task.assignees?.some((a) => a.id === user.id));
+      const canAccess = user.role === 'OWNER' || (user.role === 'PM' && (task.project.leadPmId === user.id || task.project.client.leadPmId === user.id || task.project.client.secondaryPmId === user.id)) || ((user.role === 'TEAM_MEMBER' || user.role === 'CONTRACTOR') && task.assignees?.some((a) => a.id === user.id));
       if (!canAccess) return reply.status(403).send({ message: 'Access denied' });
       const attachments = await prisma.taskAttachment.findMany({ where: { taskId }, orderBy: { createdAt: 'desc' }, include: { uploadedBy: { select: { id: true, name: true } } } });
       return reply.send(attachments.map((a) => ({ id: a.id, taskId: a.taskId, fileName: a.fileName, fileUrl: a.fileUrl, fileSize: a.fileSize, createdAt: a.createdAt.toISOString(), uploadedBy: a.uploadedBy })));
@@ -1403,7 +1411,7 @@ Return the id of the single most restrictive preset that still allows this task 
       const { id: taskId } = request.params;
       const task = await prisma.task.findUnique({ where: { id: taskId }, include: { project: { include: { client: true } }, assignees: { select: { id: true } } } });
       if (!task) return reply.status(404).send({ message: 'Task not found' });
-      const canAccess = user.role === 'OWNER' || (user.role === 'PM' && (task.project.leadPmId === user.id || task.project.client.secondaryPmId === user.id)) || ((user.role === 'TEAM_MEMBER' || user.role === 'CONTRACTOR') && task.assignees?.some((a) => a.id === user.id));
+      const canAccess = user.role === 'OWNER' || (user.role === 'PM' && (task.project.leadPmId === user.id || task.project.client.leadPmId === user.id || task.project.client.secondaryPmId === user.id)) || ((user.role === 'TEAM_MEMBER' || user.role === 'CONTRACTOR') && task.assignees?.some((a) => a.id === user.id));
       if (!canAccess) return reply.status(403).send({ message: 'Access denied' });
       const data = await request.file();
       if (!data) return reply.status(400).send({ message: 'No file uploaded' });
@@ -1497,7 +1505,7 @@ Return the id of the single most restrictive preset that still allows this task 
       const task = await prisma.task.findUnique({ where: { id: taskId }, include: { project: { include: { client: true } }, assignees: { select: { id: true } } } });
       if (!task) return reply.status(404).send({ message: 'Task not found' });
       const { user } = request;
-      const canAccess = user.role === 'OWNER' || (user.role === 'PM' && (task.project.leadPmId === user.id || task.project.client.secondaryPmId === user.id)) || ((user.role === 'TEAM_MEMBER' || user.role === 'CONTRACTOR') && task.assignees?.some((a) => a.id === user.id));
+      const canAccess = user.role === 'OWNER' || (user.role === 'PM' && (task.project.leadPmId === user.id || task.project.client.leadPmId === user.id || task.project.client.secondaryPmId === user.id)) || ((user.role === 'TEAM_MEMBER' || user.role === 'CONTRACTOR') && task.assignees?.some((a) => a.id === user.id));
       if (!canAccess) return reply.status(403).send({ message: 'Access denied' });
       const requests = await prisma.clientInputRequest.findMany({
         where: { taskId },

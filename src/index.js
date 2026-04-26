@@ -43,6 +43,7 @@ import { pmPipelineRoutes } from './routes/pm/pipeline.js';
 import { pmDigestRoutes } from './routes/pm/digest.js';
 import { pmClientDashboardRoutes } from './routes/pm/clientDashboard.js';
 import { wpWebhookRoutes } from './routes/webhooks.js';
+import { toolRoutes } from './routes/tool.js';
 import cron from 'node-cron';
 import { syncAllProjects } from './lib/wpSync.js';
 import { runScheduledAeoSweep } from './lib/aeoRunner.js';
@@ -121,6 +122,7 @@ app.register(pmPipelineRoutes, { prefix: '/api/pm' });
 app.register(pmDigestRoutes, { prefix: '/api/pm' });
 app.register(pmClientDashboardRoutes, { prefix: '/api/pm' });
 app.register(wpWebhookRoutes, { prefix: '/api/webhooks' });
+app.register(toolRoutes, { prefix: '/api/tool' });
 
 app.get('/health', async (req) => {
   req.log.info('Health check hit');

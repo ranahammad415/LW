@@ -7,9 +7,9 @@ export async function ensureProjectAccess(project, user) {
     if (project.leadPmId === user.id) return true;
     const client = await prisma.clientAccount.findUnique({
       where: { id: project.clientId },
-      select: { secondaryPmId: true },
+      select: { leadPmId: true, secondaryPmId: true },
     });
-    return client?.secondaryPmId === user.id;
+    return client?.leadPmId === user.id || client?.secondaryPmId === user.id;
   }
   if (user.role === 'TEAM_MEMBER' || user.role === 'CONTRACTOR') {
     const tasksWithAssignees = Array.isArray(project.tasks) && project.tasks.every((t) => Array.isArray(t.assignees));

@@ -727,6 +727,57 @@ export async function adminClientRoutes(app) {
     }
   );
 
+  // ── Get Looker analytics embeds for a specific client ──
+  app.get(
+    '/clients/:id/analytics',
+    {
+      onRequest: [app.verifyJwt, app.requireOwner],
+      schema: {
+        params: {
+          type: 'object',
+          properties: { id: { type: 'string', minLength: 1 } },
+          required: ['id'],
+        },
+        response: {
+          200: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                label: { type: 'string' },
+                url: { type: 'string' },
+                sortOrder: { type: 'integer' },
+              },
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const client = await prisma.clientAccount.findUnique({
+        where: { id: request.params.id },
+      });
+      if (!client) {
+        return reply.status(404).send({ message: 'Client not found' });
+      }
+
+      const embeds = await prisma.lookerEmbed.findMany({
+        where: { clientId: request.params.id, isActive: true },
+        orderBy: { sortOrder: 'asc' },
+      });
+
+      return reply.send(
+        embeds.map((e) => ({
+          id: e.id,
+          label: e.label,
+          url: e.url,
+          sortOrder: e.sortOrder,
+        }))
+      );
+    }
+  );
+
   // ── Reset password for a client user ──
   app.post(
     '/clients/:id/reset-password',
