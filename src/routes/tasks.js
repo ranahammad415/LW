@@ -608,6 +608,7 @@ Return the id of the single most restrictive preset that still allows this task 
             },
             priority: { type: 'string' },
             title: { type: 'string' },
+            description: { type: 'string', nullable: true },
             dueDate: { type: 'string', nullable: true },
             wpAccessPresetId: { type: 'string', format: 'uuid', nullable: true },
           },
@@ -626,7 +627,7 @@ Return the id of the single most restrictive preset that still allows this task 
     async (request, reply) => {
       const { user } = request;
       const { id } = request.params;
-      const { assigneeIds, priority, title, dueDate, wpAccessPresetId } = request.body || {};
+      const { assigneeIds, priority, title, description, dueDate, wpAccessPresetId } = request.body || {};
 
       const task = await prisma.task.findUnique({
         where: { id },
@@ -659,6 +660,7 @@ Return the id of the single most restrictive preset that still allows this task 
       if (idList !== null) data.assignees = idList.length ? { set: idList.map((uid) => ({ id: uid })) } : { set: [] };
       if (validPriority) data.priority = validPriority;
       if (typeof title === 'string' && title.trim().length > 0) data.title = title.trim().slice(0, 500);
+      if (description !== undefined) data.description = typeof description === 'string' && description.trim().length > 0 ? description.trim() : null;
       if (dueDate !== undefined) {
         if (dueDate === null || dueDate === '') {
           data.dueDate = null;
@@ -739,6 +741,7 @@ Return the id of the single most restrictive preset that still allows this task 
         assignees: updated.assignees,
         ...(validPriority && { priority: updated.priority }),
         ...(data.title !== undefined && { title: updated.title }),
+        ...(data.description !== undefined && { description: updated.description }),
         ...(data.dueDate !== undefined && { dueDate: updated.dueDate?.toISOString() ?? null }),
         ...(data.wpAccessPresetId !== undefined && {
           wpAccessPresetId: updated.wpAccessPresetId,
@@ -1372,11 +1375,28 @@ Return the id of the single most restrictive preset that still allows this task 
         });
       }
 
-      await prisma.taskComment.deleteMany({ where: { taskId: id } });
-      await prisma.taskAttachment.deleteMany({ where: { taskId: id } });
-      await prisma.deliverableVersion.deleteMany({ where: { taskId: id } });
-      await prisma.task.updateMany({ where: { parentTaskId: id }, data: { parentTaskId: null } });
-      await prisma.task.delete({ where: { id } });
+      // Helper to clean up and delete a single task by id
+      async function cleanAndDeleteTask(taskId) {
+        await prisma.taskCommentReaction.deleteMany({ where: { comment: { taskId } } });
+        await prisma.taskComment.deleteMany({ where: { taskId } });
+        await prisma.taskAttachment.deleteMany({ where: { taskId } });
+        await prisma.deliverableVersion.deleteMany({ where: { taskId } });
+        await prisma.clientInputRequest.deleteMany({ where: { taskId } });
+        await prisma.taskActivityLog.deleteMany({ where: { taskId } });
+        await prisma.task.update({
+          where: { id: taskId },
+          data: { assignees: { set: [] }, dependsOnTasks: { set: [] }, blockingTasks: { set: [] } },
+        });
+        await prisma.wpPage.updateMany({ where: { taskId }, data: { taskId: null } });
+        await prisma.task.delete({ where: { id: taskId } });
+      }
+
+      // Delete all subtasks first, then the parent task
+      const subtasks = await prisma.task.findMany({ where: { parentTaskId: id }, select: { id: true } });
+      for (const sub of subtasks) {
+        await cleanAndDeleteTask(sub.id);
+      }
+      await cleanAndDeleteTask(id);
 
       return reply.send({});
     }

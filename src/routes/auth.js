@@ -7,8 +7,16 @@ import { loginBodySchema } from '../schemas/auth.js';
 
 const accessSecret = process.env.JWT_ACCESS_SECRET;
 const refreshSecret = process.env.JWT_REFRESH_SECRET;
-const accessExpiresIn = process.env.JWT_ACCESS_EXPIRES_IN || '15m';
-const refreshExpiresIn = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
+
+// Role-based session TTL configuration
+const SESSION_CONFIG = {
+  OWNER:       { accessExpiresIn: '1h',  refreshExpiresIn: '30d', refreshMaxAge: 30 * 86400 },
+  PM:          { accessExpiresIn: '1h',  refreshExpiresIn: '30d', refreshMaxAge: 30 * 86400 },
+  TEAM_MEMBER: { accessExpiresIn: '15m', refreshExpiresIn: '7d',  refreshMaxAge: 7 * 86400  },
+  CONTRACTOR:  { accessExpiresIn: '15m', refreshExpiresIn: '7d',  refreshMaxAge: 7 * 86400  },
+  CLIENT:      { accessExpiresIn: '15m', refreshExpiresIn: '14d', refreshMaxAge: 14 * 86400 },
+};
+const DEFAULT_SESSION = { accessExpiresIn: '15m', refreshExpiresIn: '7d', refreshMaxAge: 7 * 86400 };
 
 if (!accessSecret || accessSecret.length < 32) {
   throw new Error('JWT_ACCESS_SECRET must be set and at least 32 characters');
@@ -55,22 +63,23 @@ export async function authRoutes(app) {
           return reply.status(401).send({ message: 'Invalid email or password' });
         }
 
+        const sess = SESSION_CONFIG[user.role] || DEFAULT_SESSION;
         const accessToken = jwt.sign(
           { sub: user.id, role: user.role },
           accessSecret,
-          { expiresIn: accessExpiresIn }
+          { expiresIn: sess.accessExpiresIn }
         );
         const refreshToken = jwt.sign(
           { sub: user.id, type: 'refresh' },
           refreshSecret,
-          { expiresIn: refreshExpiresIn }
+          { expiresIn: sess.refreshExpiresIn }
         );
 
         reply.setCookie('refreshToken', refreshToken, {
           httpOnly: true,
           secure: process.env.NODE_ENV === 'production',
           sameSite: 'lax',
-          maxAge: 7 * 24 * 60 * 60,
+          maxAge: sess.refreshMaxAge,
           path: '/api/auth',
         });
 
@@ -131,10 +140,11 @@ export async function authRoutes(app) {
         return reply.status(401).send({ message: 'User not found or inactive' });
       }
 
+      const sess = SESSION_CONFIG[user.role] || DEFAULT_SESSION;
       const accessToken = jwt.sign(
         { sub: user.id, role: user.role },
         accessSecret,
-        { expiresIn: accessExpiresIn }
+        { expiresIn: sess.accessExpiresIn }
       );
 
       return reply.send({ accessToken });
@@ -281,20 +291,41 @@ export async function authRoutes(app) {
       }
 
       // If still no user, check if this Google email matches any ClientAccount.analyticsGoogleEmail
+      // or any ClientAnalyticsEmail entry
       // This allows clients whose portal email differs from their Google/analytics email to sign in
       if (!user) {
-        const clientAccount = await prisma.clientAccount.findFirst({
-          where: { analyticsGoogleEmail: googleEmail.toLowerCase() },
+        // Check the new multi-email table first
+        const analyticsEmailEntry = await prisma.clientAnalyticsEmail.findFirst({
+          where: { email: googleEmail.toLowerCase() },
           include: {
-            clientUsers: {
-              include: { user: true },
-              take: 1,
+            client: {
+              include: {
+                clientUsers: {
+                  include: { user: true },
+                  take: 1,
+                },
+              },
             },
           },
         });
 
-        if (clientAccount?.clientUsers?.[0]?.user) {
-          user = clientAccount.clientUsers[0].user;
+        let matchedClientAccount = analyticsEmailEntry?.client || null;
+
+        // Fall back to legacy single-email field
+        if (!matchedClientAccount) {
+          matchedClientAccount = await prisma.clientAccount.findFirst({
+            where: { analyticsGoogleEmail: googleEmail.toLowerCase() },
+            include: {
+              clientUsers: {
+                include: { user: true },
+                take: 1,
+              },
+            },
+          });
+        }
+
+        if (matchedClientAccount?.clientUsers?.[0]?.user) {
+          user = matchedClientAccount.clientUsers[0].user;
           // Auto-link this Google account to the client user
           await prisma.user.update({
             where: { id: user.id },
@@ -313,22 +344,23 @@ export async function authRoutes(app) {
       }
 
       // Generate tokens
+      const sess = SESSION_CONFIG[user.role] || DEFAULT_SESSION;
       const accessTokenVal = jwt.sign(
         { sub: user.id, role: user.role },
         accessSecret,
-        { expiresIn: accessExpiresIn }
+        { expiresIn: sess.accessExpiresIn }
       );
       const refreshTokenVal = jwt.sign(
         { sub: user.id, type: 'refresh' },
         refreshSecret,
-        { expiresIn: refreshExpiresIn }
+        { expiresIn: sess.refreshExpiresIn }
       );
 
       reply.setCookie('refreshToken', refreshTokenVal, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax',
-        maxAge: 7 * 24 * 60 * 60,
+        maxAge: sess.refreshMaxAge,
         path: '/api/auth',
       });
 
@@ -356,6 +388,21 @@ export async function authRoutes(app) {
     }
   );
 
+  // ── Logout: clear refresh cookie ──
+  app.post(
+    '/logout',
+    {},
+    async (request, reply) => {
+      reply.clearCookie('refreshToken', {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        path: '/api/auth',
+      });
+      return reply.send({ message: 'Logged out' });
+    }
+  );
+
   // ── Google Auth Status: check if client has linked Google and analytics access ──
   app.get(
     '/google/status',
@@ -378,25 +425,37 @@ export async function authRoutes(app) {
       const clientIds = clientUsers.map((cu) => cu.clientId);
 
       let analyticsGoogleEmail = null;
+      let analyticsGoogleEmails = [];
       let analyticsAccessGranted = false;
 
       if (clientIds.length > 0) {
-        const clients = await prisma.clientAccount.findMany({
-          where: { id: { in: clientIds } },
-          select: { analyticsGoogleEmail: true },
+        // Fetch from multi-email table
+        const emailEntries = await prisma.clientAnalyticsEmail.findMany({
+          where: { clientId: { in: clientIds } },
+          select: { email: true },
         });
+        analyticsGoogleEmails = emailEntries.map((e) => e.email);
 
-        // Use the first non-null analyticsGoogleEmail
-        const clientWithEmail = clients.find((c) => c.analyticsGoogleEmail);
-        analyticsGoogleEmail = clientWithEmail?.analyticsGoogleEmail || null;
+        // Fall back to legacy field if no multi-email entries
+        if (analyticsGoogleEmails.length === 0) {
+          const clients = await prisma.clientAccount.findMany({
+            where: { id: { in: clientIds } },
+            select: { analyticsGoogleEmail: true },
+          });
+          const legacyEmail = clients.find((c) => c.analyticsGoogleEmail)?.analyticsGoogleEmail;
+          if (legacyEmail) analyticsGoogleEmails = [legacyEmail];
+        }
 
-        if (!analyticsGoogleEmail) {
+        analyticsGoogleEmail = analyticsGoogleEmails[0] || null;
+
+        if (analyticsGoogleEmails.length === 0) {
           // No restriction configured — allow access
           analyticsAccessGranted = true;
         } else if (user?.googleEmail) {
-          // Check if linked Google email matches the required email
-          analyticsAccessGranted =
-            user.googleEmail.toLowerCase() === analyticsGoogleEmail.toLowerCase();
+          // Check if linked Google email matches ANY of the allowed emails
+          analyticsAccessGranted = analyticsGoogleEmails.some(
+            (e) => e.toLowerCase() === user.googleEmail.toLowerCase()
+          );
         }
       }
 
@@ -404,6 +463,7 @@ export async function authRoutes(app) {
         googleLinked: !!(user?.googleId),
         googleEmail: user?.googleEmail || null,
         analyticsGoogleEmail,
+        analyticsGoogleEmails,
         analyticsAccessGranted,
       });
     }

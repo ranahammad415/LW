@@ -290,6 +290,10 @@ export async function adminClientRoutes(app) {
             orderBy: { name: 'asc' },
             select: { id: true, name: true, status: true, projectType: true },
           },
+          analyticsEmails: {
+            orderBy: { addedAt: 'asc' },
+            select: { id: true, email: true, addedAt: true },
+          },
         },
       });
 
@@ -311,6 +315,7 @@ export async function adminClientRoutes(app) {
         healthScore: client.healthScore,
         isActive: client.isActive,
         analyticsGoogleEmail: client.analyticsGoogleEmail ?? null,
+        analyticsEmails: client.analyticsEmails || [],
         package: client.package,
         clientUsers: client.clientUsers,
         projects: client.projects.map((p) => ({
@@ -677,7 +682,7 @@ export async function adminClientRoutes(app) {
     }
   );
 
-  // ── Set analytics Google email for a client account ──
+  // ── Set analytics Google email for a client account (legacy + multi-email) ──
   app.patch(
     '/clients/:id/analytics-google',
     {
@@ -692,15 +697,6 @@ export async function adminClientRoutes(app) {
           type: 'object',
           properties: {
             analyticsGoogleEmail: { type: 'string', nullable: true },
-          },
-        },
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              id: { type: 'string' },
-              analyticsGoogleEmail: { type: 'string', nullable: true },
-            },
           },
         },
       },
@@ -720,10 +716,108 @@ export async function adminClientRoutes(app) {
         data: { analyticsGoogleEmail: email },
       });
 
+      // Also sync to the new multi-email table
+      if (email) {
+        await prisma.clientAnalyticsEmail.upsert({
+          where: { clientId_email: { clientId: request.params.id, email } },
+          create: { clientId: request.params.id, email },
+          update: {},
+        });
+      }
+
       return reply.send({
         id: updated.id,
         analyticsGoogleEmail: updated.analyticsGoogleEmail,
       });
+    }
+  );
+
+  // ── Add an analytics Google email ──
+  app.post(
+    '/clients/:id/analytics-emails',
+    {
+      onRequest: [app.verifyJwt, app.requireOwner],
+      schema: {
+        params: {
+          type: 'object',
+          properties: { id: { type: 'string', minLength: 1 } },
+          required: ['id'],
+        },
+        body: {
+          type: 'object',
+          properties: { email: { type: 'string' } },
+          required: ['email'],
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+      const client = await prisma.clientAccount.findUnique({ where: { id } });
+      if (!client) return reply.status(404).send({ message: 'Client not found' });
+
+      const email = request.body.email?.trim().toLowerCase();
+      if (!email) return reply.status(400).send({ message: 'Email is required' });
+
+      // Check for duplicate
+      const existing = await prisma.clientAnalyticsEmail.findUnique({
+        where: { clientId_email: { clientId: id, email } },
+      });
+      if (existing) return reply.status(409).send({ message: 'Email already added' });
+
+      const entry = await prisma.clientAnalyticsEmail.create({
+        data: { clientId: id, email },
+      });
+
+      // Keep legacy field in sync: set to first email if empty
+      if (!client.analyticsGoogleEmail) {
+        await prisma.clientAccount.update({
+          where: { id },
+          data: { analyticsGoogleEmail: email },
+        });
+      }
+
+      return reply.status(201).send(entry);
+    }
+  );
+
+  // ── Remove an analytics Google email ──
+  app.delete(
+    '/clients/:id/analytics-emails/:emailId',
+    {
+      onRequest: [app.verifyJwt, app.requireOwner],
+      schema: {
+        params: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', minLength: 1 },
+            emailId: { type: 'string', minLength: 1 },
+          },
+          required: ['id', 'emailId'],
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id, emailId } = request.params;
+
+      const entry = await prisma.clientAnalyticsEmail.findFirst({
+        where: { id: emailId, clientId: id },
+      });
+      if (!entry) return reply.status(404).send({ message: 'Email not found' });
+
+      await prisma.clientAnalyticsEmail.delete({ where: { id: emailId } });
+
+      // Sync legacy field: if we just deleted the one in the legacy field, update it
+      const remaining = await prisma.clientAnalyticsEmail.findMany({
+        where: { clientId: id },
+        orderBy: { addedAt: 'asc' },
+        take: 1,
+      });
+      await prisma.clientAccount.update({
+        where: { id },
+        data: { analyticsGoogleEmail: remaining[0]?.email || null },
+      });
+
+      return reply.send({ success: true });
     }
   );
 
@@ -937,6 +1031,357 @@ export async function adminClientRoutes(app) {
           clientAccountIds: clientUsers.map((cu) => cu.clientId),
         },
       });
+    }
+  );
+
+  // ── List client users (OWNER only) ──
+  app.get(
+    '/clients/:id/users',
+    {
+      onRequest: [app.verifyJwt, app.requireOwner],
+      schema: {
+        params: {
+          type: 'object',
+          properties: { id: { type: 'string', minLength: 1 } },
+          required: ['id'],
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+      const client = await prisma.clientAccount.findUnique({ where: { id } });
+      if (!client) return reply.status(404).send({ message: 'Client not found' });
+
+      const clientUsers = await prisma.clientUser.findMany({
+        where: { clientId: id },
+        include: {
+          user: { select: { id: true, email: true, name: true, phone: true, avatarUrl: true, lastLoginAt: true, isActive: true } },
+          addedBy: { select: { id: true, name: true } },
+        },
+        orderBy: { addedAt: 'asc' },
+      });
+
+      return reply.send(clientUsers.map((cu) => ({
+        id: cu.id,
+        userId: cu.user.id,
+        role: cu.role,
+        jobTitle: cu.jobTitle,
+        isPrimaryContact: cu.isPrimaryContact,
+        canApproveDeliverables: cu.canApproveDeliverables,
+        canSignContracts: cu.canSignContracts,
+        addedBy: cu.addedBy ? { id: cu.addedBy.id, name: cu.addedBy.name } : null,
+        addedAt: cu.addedAt,
+        user: {
+          id: cu.user.id,
+          name: cu.user.name,
+          email: cu.user.email,
+          phone: cu.user.phone,
+          avatarUrl: cu.user.avatarUrl,
+          lastLoginAt: cu.user.lastLoginAt,
+          isActive: cu.user.isActive,
+        },
+      })));
+    }
+  );
+
+  // ── Add a client user (OWNER only) ──
+  app.post(
+    '/clients/:id/users',
+    {
+      onRequest: [app.verifyJwt, app.requireOwner],
+      schema: {
+        params: {
+          type: 'object',
+          properties: { id: { type: 'string', minLength: 1 } },
+          required: ['id'],
+        },
+        body: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            email: { type: 'string', format: 'email' },
+            password: { type: 'string' },
+            jobTitle: { type: 'string', nullable: true },
+            role: { type: 'string' },
+            canApproveDeliverables: { type: 'boolean' },
+            canSignContracts: { type: 'boolean' },
+          },
+          required: ['name', 'email'],
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+      const ownerId = request.user.id;
+      const body = request.body || {};
+
+      const client = await prisma.clientAccount.findUnique({ where: { id }, select: { id: true, agencyName: true } });
+      if (!client) return reply.status(404).send({ message: 'Client not found' });
+
+      const contactEmail = body.email.trim().toLowerCase();
+      const contactName = body.name.trim();
+      const role = ['ADMIN', 'MEMBER', 'VIEWER'].includes(body.role) ? body.role : 'MEMBER';
+
+      // Check if user already linked
+      const existingLink = await prisma.clientUser.findFirst({
+        where: { clientId: id, user: { email: contactEmail } },
+      });
+      if (existingLink) {
+        return reply.status(400).send({ message: 'This user is already linked to this client' });
+      }
+
+      const result = await prisma.$transaction(async (tx) => {
+        let user = await tx.user.findUnique({ where: { email: contactEmail } });
+        let plainPassword = null;
+
+        if (!user) {
+          plainPassword = body.password && body.password.trim().length >= 8 ? body.password.trim() : generateTemporaryPassword();
+          const passwordHash = await bcrypt.hash(plainPassword, BCRYPT_ROUNDS);
+          user = await tx.user.create({
+            data: {
+              email: contactEmail,
+              passwordHash,
+              role: 'CLIENT',
+              name: contactName,
+              phone: null,
+            },
+          });
+        }
+
+        const clientUser = await tx.clientUser.create({
+          data: {
+            clientId: id,
+            userId: user.id,
+            jobTitle: body.jobTitle?.trim() || null,
+            role,
+            isPrimaryContact: false,
+            canApproveDeliverables: body.canApproveDeliverables ?? true,
+            canSignContracts: body.canSignContracts ?? false,
+            addedById: ownerId,
+          },
+        });
+
+        // Log activity
+        await tx.clientActivityLog.create({
+          data: {
+            clientId: id,
+            userId: ownerId,
+            action: 'user_added',
+            detail: `${contactName} (${contactEmail}) added to account`,
+            metadata: { addedUserId: user.id, role },
+          },
+        });
+
+        return { clientUser, user, plainPassword };
+      });
+
+      // Notify the new user with welcome email
+      notify({
+        slug: 'welcome_email',
+        recipientIds: [result.user.id],
+        variables: {
+          contactName: result.user.name,
+          clientName: client.agencyName,
+          loginUrl: process.env.FRONTEND_URL || 'https://app.yourdomain.com',
+          tempPassword: result.plainPassword || '(existing password)',
+        },
+        actionUrl: '/portal/client',
+        metadata: { clientId: id },
+      }).catch(() => {});
+
+      // Notify existing client users about the new member
+      const existingUsers = await prisma.clientUser.findMany({
+        where: { clientId: id, userId: { not: result.user.id } },
+        select: { userId: true },
+      });
+      if (existingUsers.length > 0) {
+        notify({
+          slug: 'client_user_added',
+          recipientIds: existingUsers.map((cu) => cu.userId),
+          variables: { addedName: result.user.name, clientName: client.agencyName },
+          actionUrl: '/portal/client',
+          metadata: { clientId: id },
+        }).catch(() => {});
+      }
+
+      return reply.status(201).send({
+        id: result.clientUser.id,
+        userId: result.user.id,
+        role: result.clientUser.role,
+        jobTitle: result.clientUser.jobTitle,
+        isPrimaryContact: result.clientUser.isPrimaryContact,
+        canApproveDeliverables: result.clientUser.canApproveDeliverables,
+        canSignContracts: result.clientUser.canSignContracts,
+        addedAt: result.clientUser.addedAt,
+        user: {
+          id: result.user.id,
+          name: result.user.name,
+          email: result.user.email,
+          phone: result.user.phone || null,
+          avatarUrl: result.user.avatarUrl || null,
+          lastLoginAt: result.user.lastLoginAt || null,
+        },
+        tempPassword: result.plainPassword,
+      });
+    }
+  );
+
+  // ── Edit a client user (OWNER only) ──
+  app.patch(
+    '/clients/:id/users/:userId',
+    {
+      onRequest: [app.verifyJwt, app.requireOwner],
+      schema: {
+        params: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', minLength: 1 },
+            userId: { type: 'string', format: 'uuid' },
+          },
+          required: ['id', 'userId'],
+        },
+        body: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            phone: { type: 'string', nullable: true },
+            jobTitle: { type: 'string', nullable: true },
+            role: { type: 'string' },
+            canApproveDeliverables: { type: 'boolean' },
+            canSignContracts: { type: 'boolean' },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id, userId } = request.params;
+      const body = request.body || {};
+
+      const clientUser = await prisma.clientUser.findFirst({
+        where: { clientId: id, userId },
+        include: { user: { select: { id: true, email: true, name: true } } },
+      });
+      if (!clientUser) {
+        return reply.status(404).send({ message: 'Client user not found' });
+      }
+
+      // Prevent demoting last ADMIN
+      if (body.role && body.role !== 'ADMIN' && clientUser.role === 'ADMIN') {
+        const adminCount = await prisma.clientUser.count({
+          where: { clientId: id, role: 'ADMIN' },
+        });
+        if (adminCount <= 1) {
+          return reply.status(400).send({ message: 'Cannot demote the last admin user' });
+        }
+      }
+
+      const cuData = {};
+      if (body.jobTitle !== undefined) cuData.jobTitle = body.jobTitle?.trim() || null;
+      if (body.role && ['ADMIN', 'MEMBER', 'VIEWER'].includes(body.role)) cuData.role = body.role;
+      if (body.canApproveDeliverables !== undefined) cuData.canApproveDeliverables = body.canApproveDeliverables;
+      if (body.canSignContracts !== undefined) cuData.canSignContracts = body.canSignContracts;
+
+      const userData = {};
+      if (body.name !== undefined) userData.name = body.name.trim().slice(0, 255);
+      if (body.phone !== undefined) userData.phone = body.phone?.trim() || null;
+
+      const ops = [];
+      if (Object.keys(cuData).length > 0) {
+        ops.push(prisma.clientUser.update({ where: { id: clientUser.id }, data: cuData }));
+      }
+      if (Object.keys(userData).length > 0) {
+        ops.push(prisma.user.update({ where: { id: userId }, data: userData }));
+      }
+      if (ops.length > 0) await prisma.$transaction(ops);
+
+      const updated = await prisma.clientUser.findFirst({
+        where: { clientId: id, userId },
+        include: { user: { select: { id: true, email: true, name: true, phone: true, avatarUrl: true } } },
+      });
+
+      return reply.send({
+        id: updated.id,
+        userId: updated.user.id,
+        role: updated.role,
+        jobTitle: updated.jobTitle,
+        isPrimaryContact: updated.isPrimaryContact,
+        canApproveDeliverables: updated.canApproveDeliverables,
+        canSignContracts: updated.canSignContracts,
+        user: {
+          id: updated.user.id,
+          name: updated.user.name,
+          email: updated.user.email,
+          phone: updated.user.phone,
+          avatarUrl: updated.user.avatarUrl,
+          lastLoginAt: null,
+        },
+      });
+    }
+  );
+
+  // ── Remove a client user (OWNER only) ──
+  app.delete(
+    '/clients/:id/users/:userId',
+    {
+      onRequest: [app.verifyJwt, app.requireOwner],
+      schema: {
+        params: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', minLength: 1 },
+            userId: { type: 'string', format: 'uuid' },
+          },
+          required: ['id', 'userId'],
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id, userId } = request.params;
+
+      const clientUser = await prisma.clientUser.findFirst({
+        where: { clientId: id, userId },
+        include: { user: { select: { id: true, name: true, email: true } } },
+      });
+      if (!clientUser) {
+        return reply.status(404).send({ message: 'Client user not found' });
+      }
+
+      if (clientUser.isPrimaryContact) {
+        return reply.status(400).send({ message: 'Cannot remove the primary contact' });
+      }
+
+      const client = await prisma.clientAccount.findUnique({ where: { id }, select: { agencyName: true } });
+
+      await prisma.$transaction(async (tx) => {
+        await tx.clientUser.delete({ where: { id: clientUser.id } });
+
+        await tx.clientActivityLog.create({
+          data: {
+            clientId: id,
+            userId: request.user.id,
+            action: 'user_removed',
+            detail: `${clientUser.user.name} (${clientUser.user.email}) removed from account`,
+            metadata: { removedUserId: userId },
+          },
+        });
+      });
+
+      // Notify remaining client users
+      const remainingUsers = await prisma.clientUser.findMany({
+        where: { clientId: id },
+        select: { userId: true },
+      });
+      if (remainingUsers.length > 0) {
+        notify({
+          slug: 'client_user_removed',
+          recipientIds: remainingUsers.map((cu) => cu.userId),
+          variables: { removedName: clientUser.user.name, clientName: client?.agencyName || '' },
+          actionUrl: '/portal/client',
+          metadata: { clientId: id },
+        }).catch(() => {});
+      }
+
+      return reply.send({ deleted: true });
     }
   );
 }

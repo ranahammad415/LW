@@ -307,6 +307,56 @@ const templates = [
     bodyText: 'A client has updated their onboarding intake data for project "{{projectName}}".',
     inAppMessage: 'Client updated intake data for {{projectName}}',
     variables: ['projectName', 'clientName', 'actionUrl'] },
+
+  // ── Multi-User Client Team Notifications ──
+  { slug: 'client_input_fulfilled_team', name: 'Team: Input Fulfilled', description: 'Notifies other client users when a teammate provides requested input', category: 'client_input',
+    subject: '{{responderName}} provided input on: {{taskTitle}}',
+    bodyHtml: '<p><strong>{{responderName}}</strong> has provided the requested information for task <strong>{{taskTitle}}</strong> in project <strong>{{projectName}}</strong>.</p>',
+    bodyText: '{{responderName}} provided input on task "{{taskTitle}}" in project "{{projectName}}".',
+    inAppMessage: '{{responderName}} provided input on "{{taskTitle}}"',
+    variables: ['responderName', 'taskTitle', 'projectName', 'actionUrl'] },
+
+  { slug: 'client_asset_uploaded_team', name: 'Team: Asset Uploaded', description: 'Notifies other client users when a teammate uploads an asset', category: 'client_input',
+    subject: '{{uploaderName}} uploaded: {{filename}}',
+    bodyHtml: '<p><strong>{{uploaderName}}</strong> uploaded a new asset: <strong>{{filename}}</strong>.</p>',
+    bodyText: '{{uploaderName}} uploaded a new asset: "{{filename}}".',
+    inAppMessage: '{{uploaderName}} uploaded asset: {{filename}}',
+    variables: ['uploaderName', 'filename', 'clientName', 'actionUrl'] },
+
+  { slug: 'client_keyword_submitted_team', name: 'Team: Keyword Submitted', description: 'Notifies other client users when a teammate suggests a keyword', category: 'client_input',
+    subject: '{{submitterName}} suggested keyword: "{{keyword}}"',
+    bodyHtml: '<p><strong>{{submitterName}}</strong> suggested a new keyword: <strong>\u201c{{keyword}}\u201d</strong>.</p>',
+    bodyText: '{{submitterName}} suggested keyword: "{{keyword}}".',
+    inAppMessage: '{{submitterName}} suggested keyword: "{{keyword}}"',
+    variables: ['submitterName', 'keyword', 'clientName', 'actionUrl'] },
+
+  { slug: 'client_update_posted_team', name: 'Team: Business Update Posted', description: 'Notifies other client users when a teammate posts a business update', category: 'client_input',
+    subject: '{{posterName}} posted a business update',
+    bodyHtml: '<p><strong>{{posterName}}</strong> posted a business update ({{updateType}}).</p>',
+    bodyText: '{{posterName}} posted a business update ({{updateType}}).',
+    inAppMessage: '{{posterName}} posted a business update: {{updateType}}',
+    variables: ['posterName', 'updateType', 'clientName', 'actionUrl'] },
+
+  { slug: 'client_issue_created_team', name: 'Team: Issue Created', description: 'Notifies other client users when a teammate reports an issue', category: 'client_input',
+    subject: '{{reporterName}} reported an issue: {{issueTitle}}',
+    bodyHtml: '<p><strong>{{reporterName}}</strong> reported a new issue: <strong>{{issueTitle}}</strong>.</p>',
+    bodyText: '{{reporterName}} reported an issue: "{{issueTitle}}".',
+    inAppMessage: '{{reporterName}} reported issue: "{{issueTitle}}"',
+    variables: ['reporterName', 'issueTitle', 'clientName', 'actionUrl'] },
+
+  { slug: 'client_user_added', name: 'Team: User Added', description: 'Notifies existing client users when a new member is added', category: 'client',
+    subject: '{{addedName}} has joined {{clientName}}',
+    bodyHtml: '<p><strong>{{addedName}}</strong> has been added to the <strong>{{clientName}}</strong> portal account.</p>',
+    bodyText: '{{addedName}} has been added to the {{clientName}} portal account.',
+    inAppMessage: '{{addedName}} has joined {{clientName}}',
+    variables: ['addedName', 'clientName', 'actionUrl'] },
+
+  { slug: 'client_user_removed', name: 'Team: User Removed', description: 'Notifies remaining client users when a member is removed', category: 'client',
+    subject: '{{removedName}} has been removed from {{clientName}}',
+    bodyHtml: '<p><strong>{{removedName}}</strong> has been removed from the <strong>{{clientName}}</strong> portal account.</p>',
+    bodyText: '{{removedName}} has been removed from the {{clientName}} portal account.',
+    inAppMessage: '{{removedName}} has been removed from {{clientName}}',
+    variables: ['removedName', 'clientName', 'actionUrl'] },
 ];
 
 async function seedNotificationTemplates() {

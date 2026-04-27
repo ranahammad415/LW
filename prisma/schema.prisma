@@ -69,6 +69,7 @@ model User {
   taskCommentReactions        TaskCommentReaction[] @relation("TaskCommentReactor")
   taskAttachments             TaskAttachment[]      @relation("TaskAttachmentUploader")
   inputRequestsCreated        ClientInputRequest[]  @relation("InputRequestedBy")
+  clientActivityLogs          ClientActivityLog[]   @relation("ClientActivityActor")
   inputRequestsResponded      ClientInputRequest[]  @relation("InputRespondedBy")
   keywordComments             KeywordComment[]
   keywordSuggestionsReviewed  KeywordSuggestion[] @relation("KeywordSuggestionReviewer")
@@ -216,6 +217,8 @@ model ClientAccount {
   metricSnapshots    ClientMetricSnapshot[]
   roiConfig          ClientROIConfig?
   pmUpdates          ClientPMUpdate[]
+  activityLogs        ClientActivityLog[]
+  analyticsEmails     ClientAnalyticsEmail[]
 
   @@map("clientaccount")
 }
@@ -278,6 +281,7 @@ model ClientUser {
   clientId               String
   userId                 String
   jobTitle               String?  @db.VarChar(255)
+  role                   String   @default("MEMBER") @db.VarChar(50)
   isPrimaryContact       Boolean  @default(false)
   canApproveDeliverables Boolean  @default(true)
   canSignContracts       Boolean  @default(false)
@@ -290,6 +294,34 @@ model ClientUser {
 
   @@unique([clientId, userId])
   @@map("clientuser")
+}
+
+model ClientActivityLog {
+  id        String   @id @default(uuid())
+  clientId  String
+  userId    String
+  action    String   @db.VarChar(100)
+  detail    String?  @db.VarChar(1000)
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  client ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  user   User          @relation("ClientActivityActor", fields: [userId], references: [id])
+
+  @@index([clientId, createdAt])
+  @@map("clientactivitylog")
+}
+
+model ClientAnalyticsEmail {
+  id       String @id @default(uuid())
+  clientId String
+  email    String @db.VarChar(255)
+  addedAt  DateTime @default(now())
+
+  client ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@unique([clientId, email])
+  @@map("clientanalyticsemail")
 }
 
 enum ProjectType {

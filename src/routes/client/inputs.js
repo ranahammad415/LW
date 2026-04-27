@@ -24,10 +24,7 @@ export async function clientInputRoutes(app) {
       onRequest: [app.verifyJwt, app.requireClient],
     },
     async (request, reply) => {
-      const clientIds = await getClientIdsForUser(request.user.id);
-      if (clientIds.length === 0) {
-        return reply.status(404).send({ message: 'No client account linked to this user' });
-      }
+      const clientIds = request.clientAccountIds;
 
       const projects = await prisma.project.findMany({
         where: { clientId: { in: clientIds } },
@@ -42,13 +39,10 @@ export async function clientInputRoutes(app) {
   app.post(
     '/inputs/assets',
     {
-      onRequest: [app.verifyJwt, app.requireClient],
+      onRequest: [app.verifyJwt, app.requireClient, app.requireClientWriter],
     },
     async (request, reply) => {
-      const clientIds = await getClientIdsForUser(request.user.id);
-      if (clientIds.length === 0) {
-        return reply.status(404).send({ message: 'No client account linked to this user' });
-      }
+      const clientIds = request.clientAccountIds;
 
       const data = await request.file();
       if (!data) {
@@ -114,6 +108,27 @@ export async function clientInputRoutes(app) {
         }
       } catch (_) {}
 
+      // Notify other client users about the asset upload
+      try {
+        const otherUsers = await prisma.clientUser.findMany({
+          where: { clientId, userId: { not: request.user.id } },
+          select: { userId: true },
+        });
+        if (otherUsers.length > 0) {
+          const assetClientName = (await prisma.clientAccount.findUnique({ where: { id: clientId }, select: { agencyName: true } }))?.agencyName || '';
+          notify({
+            slug: 'client_asset_uploaded_team',
+            recipientIds: otherUsers.map((cu) => cu.userId),
+            variables: { uploaderName: request.user.name || 'A team member', filename: fileName, clientName: assetClientName },
+            actionUrl: '/portal/client/inputs',
+            metadata: { assetId: asset.id },
+          }).catch(() => {});
+        }
+        await prisma.clientActivityLog.create({
+          data: { clientId, userId: request.user.id, action: 'asset_uploaded', detail: `Uploaded ${fileName}`, metadata: { assetId: asset.id, folder } },
+        });
+      } catch (_) {}
+
       return reply.status(201).send(asset);
     }
   );
@@ -121,7 +136,7 @@ export async function clientInputRoutes(app) {
   app.post(
     '/inputs/keywords',
     {
-      onRequest: [app.verifyJwt, app.requireClient],
+      onRequest: [app.verifyJwt, app.requireClient, app.requireClientWriter],
       schema: {
         body: {
           type: 'object',
@@ -138,10 +153,7 @@ export async function clientInputRoutes(app) {
       },
     },
     async (request, reply) => {
-      const clientIds = await getClientIdsForUser(request.user.id);
-      if (clientIds.length === 0) {
-        return reply.status(404).send({ message: 'No client account linked to this user' });
-      }
+      const clientIds = request.clientAccountIds;
 
       const body = request.body || {};
       const clientId = body.clientId && clientIds.includes(body.clientId)
@@ -181,6 +193,27 @@ export async function clientInputRoutes(app) {
         }
       } catch (_) {}
 
+      // Notify other client users about the keyword suggestion
+      try {
+        const otherUsers = await prisma.clientUser.findMany({
+          where: { clientId, userId: { not: request.user.id } },
+          select: { userId: true },
+        });
+        if (otherUsers.length > 0) {
+          const kwClientName = (await prisma.clientAccount.findUnique({ where: { id: clientId }, select: { agencyName: true } }))?.agencyName || '';
+          notify({
+            slug: 'client_keyword_submitted_team',
+            recipientIds: otherUsers.map((cu) => cu.userId),
+            variables: { submitterName: request.user.name || 'A team member', keyword: body.keyword, clientName: kwClientName },
+            actionUrl: '/portal/client/inputs',
+            metadata: { keywordSuggestionId: keyword.id },
+          }).catch(() => {});
+        }
+        await prisma.clientActivityLog.create({
+          data: { clientId, userId: request.user.id, action: 'keyword_submitted', detail: `Suggested keyword "${body.keyword}"`, metadata: { keywordSuggestionId: keyword.id } },
+        });
+      } catch (_) {}
+
       return reply.status(201).send(keyword);
     }
   );
@@ -189,7 +222,7 @@ export async function clientInputRoutes(app) {
   app.delete(
     '/inputs/keywords/:id',
     {
-      onRequest: [app.verifyJwt, app.requireClient],
+      onRequest: [app.verifyJwt, app.requireClient, app.requireClientWriter],
       schema: {
         params: {
           type: 'object',
@@ -199,10 +232,7 @@ export async function clientInputRoutes(app) {
       },
     },
     async (request, reply) => {
-      const clientIds = await getClientIdsForUser(request.user.id);
-      if (clientIds.length === 0) {
-        return reply.status(404).send({ message: 'No client account linked to this user' });
-      }
+      const clientIds = request.clientAccountIds;
 
       const { id } = request.params;
 
@@ -224,7 +254,7 @@ export async function clientInputRoutes(app) {
   app.post(
     '/inputs/updates',
     {
-      onRequest: [app.verifyJwt, app.requireClient],
+      onRequest: [app.verifyJwt, app.requireClient, app.requireClientWriter],
       schema: {
         body: {
           type: 'object',
@@ -239,10 +269,7 @@ export async function clientInputRoutes(app) {
       },
     },
     async (request, reply) => {
-      const clientIds = await getClientIdsForUser(request.user.id);
-      if (clientIds.length === 0) {
-        return reply.status(404).send({ message: 'No client account linked to this user' });
-      }
+      const clientIds = request.clientAccountIds;
 
       const body = request.body || {};
       const clientId = body.clientId && clientIds.includes(body.clientId)
@@ -280,6 +307,27 @@ export async function clientInputRoutes(app) {
         }
       } catch (_) {}
 
+      // Notify other client users about the business update
+      try {
+        const otherUsers = await prisma.clientUser.findMany({
+          where: { clientId, userId: { not: request.user.id } },
+          select: { userId: true },
+        });
+        if (otherUsers.length > 0) {
+          const buClientName = (await prisma.clientAccount.findUnique({ where: { id: clientId }, select: { agencyName: true } }))?.agencyName || '';
+          notify({
+            slug: 'client_update_posted_team',
+            recipientIds: otherUsers.map((cu) => cu.userId),
+            variables: { posterName: request.user.name || 'A team member', updateType: body.updateType, clientName: buClientName },
+            actionUrl: '/portal/client/inputs',
+            metadata: { businessUpdateId: update.id },
+          }).catch(() => {});
+        }
+        await prisma.clientActivityLog.create({
+          data: { clientId, userId: request.user.id, action: 'update_posted', detail: `Posted business update: ${body.updateType}`, metadata: { businessUpdateId: update.id } },
+        });
+      } catch (_) {}
+
       return reply.status(201).send(update);
     }
   );
@@ -290,10 +338,7 @@ export async function clientInputRoutes(app) {
       onRequest: [app.verifyJwt, app.requireClient],
     },
     async (request, reply) => {
-      const clientIds = await getClientIdsForUser(request.user.id);
-      if (clientIds.length === 0) {
-        return reply.status(404).send({ message: 'No client account linked to this user' });
-      }
+      const clientIds = request.clientAccountIds;
 
       const [assets, keywords, updates] = await Promise.all([
         prisma.clientAsset.findMany({

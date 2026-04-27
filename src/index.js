@@ -11,7 +11,7 @@ import { authRoutes } from './routes/auth.js';
 import { userRoutes } from './routes/users.js';
 import { verifyJwt } from './lib/verifyJwt.js';
 import { requireOwner } from './lib/requireOwner.js';
-import { requireClient } from './lib/requireClient.js';
+import { requireClient, requireClientWriter } from './lib/requireClient.js';
 import { requirePM } from './lib/requirePM.js';
 import { adminDashboardRoutes } from './routes/admin/dashboard.js';
 import { adminClientRoutes } from './routes/admin/clients.js';
@@ -89,6 +89,7 @@ await app.register(cookie, {
 app.decorate('verifyJwt', verifyJwt);
 app.decorate('requireOwner', requireOwner);
 app.decorate('requireClient', requireClient);
+app.decorate('requireClientWriter', requireClientWriter);
 app.decorate('requirePM', requirePM);
 
 app.register(authRoutes, { prefix: '/api/auth' });

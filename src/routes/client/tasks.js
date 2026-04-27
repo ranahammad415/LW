@@ -54,7 +54,7 @@ export async function clientTasksRoutes(app) {
   app.patch(
     '/tasks/:id/fulfill-request',
     {
-      onRequest: [app.verifyJwt, app.requireClient],
+      onRequest: [app.verifyJwt, app.requireClient, app.requireClientWriter],
       schema: {
         params: {
           type: 'object',
@@ -86,16 +86,7 @@ export async function clientTasksRoutes(app) {
       const body = request.body || {};
       const clientResponse = typeof body.clientResponse === 'string' ? body.clientResponse.trim() || null : null;
 
-      const clientUsers = await prisma.clientUser.findMany({
-        where: { userId },
-        select: { clientId: true },
-      });
-
-      if (clientUsers.length === 0) {
-        return reply.status(404).send({ message: 'No client account linked to this user' });
-      }
-
-      const clientIds = clientUsers.map((cu) => cu.clientId);
+      const clientIds = request.clientAccountIds;
 
       const task = await prisma.task.findUnique({
         where: { id },
@@ -158,6 +149,37 @@ export async function clientTasksRoutes(app) {
         }).catch(() => {});
       }
 
+      // Notify other client users on the same account
+      try {
+        const otherClientUsers = await prisma.clientUser.findMany({
+          where: { clientId: task.project.clientId, userId: { not: userId } },
+          select: { userId: true },
+        });
+        if (otherClientUsers.length > 0) {
+          notify({
+            slug: 'client_input_fulfilled_team',
+            recipientIds: otherClientUsers.map((cu) => cu.userId),
+            variables: {
+              responderName: request.user.name || 'A team member',
+              taskTitle: task.title,
+              projectName: task.project.name || '',
+            },
+            actionUrl: '/portal/client',
+            metadata: { taskId: id },
+          }).catch(() => {});
+        }
+        // Log to ClientActivityLog
+        await prisma.clientActivityLog.create({
+          data: {
+            clientId: task.project.clientId,
+            userId,
+            action: 'input_fulfilled',
+            detail: `Provided input for "${task.title}"`,
+            metadata: { taskId: id, projectId: task.project.id },
+          },
+        });
+      } catch (_) {}
+
       return reply.send({
         id: updated.id,
         clientProvidedInput: updated.clientProvidedInput,
@@ -172,17 +194,7 @@ export async function clientTasksRoutes(app) {
     },
     async (request, reply) => {
       const userId = request.user.id;
-
-      const clientUsers = await prisma.clientUser.findMany({
-        where: { userId },
-        select: { clientId: true },
-      });
-
-      if (clientUsers.length === 0) {
-        return reply.status(404).send({ message: 'No client account linked to this user' });
-      }
-
-      const clientIds = clientUsers.map((cu) => cu.clientId);
+      const clientIds = request.clientAccountIds;
 
       const tasks = await prisma.task.findMany({
         where: {

@@ -47,21 +47,33 @@ export async function clientAnalyticsRoutes(app) {
 
       const clientIds = clientUsers.map((cu) => cu.clientId);
 
-      // Check if any client account has analyticsGoogleEmail set
-      const clientAccounts = await prisma.clientAccount.findMany({
-        where: { id: { in: clientIds } },
-        select: { analyticsGoogleEmail: true },
+      // Check if any analytics emails are configured (multi-email table first, legacy fallback)
+      const analyticsEmailEntries = await prisma.clientAnalyticsEmail.findMany({
+        where: { clientId: { in: clientIds } },
+        select: { email: true },
       });
+      let allowedEmails = analyticsEmailEntries.map((e) => e.email);
 
-      const requiredEmail = clientAccounts.find((c) => c.analyticsGoogleEmail)?.analyticsGoogleEmail;
+      // Fall back to legacy single-email field
+      if (allowedEmails.length === 0) {
+        const clientAccounts = await prisma.clientAccount.findMany({
+          where: { id: { in: clientIds } },
+          select: { analyticsGoogleEmail: true },
+        });
+        const legacyEmail = clientAccounts.find((c) => c.analyticsGoogleEmail)?.analyticsGoogleEmail;
+        if (legacyEmail) allowedEmails = [legacyEmail];
+      }
 
-      if (requiredEmail) {
-        // Analytics access requires matching Google email
-        if (!user?.googleEmail || user.googleEmail.toLowerCase() !== requiredEmail.toLowerCase()) {
+      if (allowedEmails.length > 0) {
+        // Analytics access requires matching Google email to ANY allowed email
+        const userEmail = user?.googleEmail?.toLowerCase();
+        const hasAccess = userEmail && allowedEmails.some((e) => e.toLowerCase() === userEmail);
+        if (!hasAccess) {
           return reply.status(403).send({
             message: 'Google authentication required',
             code: 'GOOGLE_AUTH_REQUIRED',
-            requiredEmail,
+            requiredEmail: allowedEmails[0],
+            allowedEmails,
           });
         }
       }

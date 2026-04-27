@@ -483,6 +483,9 @@ export async function projectRoutes(app) {
         body: {
           type: 'object',
           properties: {
+            name: { type: 'string' },
+            projectType: { type: 'string' },
+            status: { type: 'string' },
             wpUrl: { type: 'string', nullable: true },
             wpApiKey: { type: 'string', nullable: true },
           },
@@ -492,6 +495,9 @@ export async function projectRoutes(app) {
             type: 'object',
             properties: {
               id: { type: 'string' },
+              name: { type: 'string' },
+              projectType: { type: 'string' },
+              status: { type: 'string' },
               wpUrl: { type: 'string', nullable: true },
               wpApiKey: { type: 'string', nullable: true },
             },
@@ -503,7 +509,7 @@ export async function projectRoutes(app) {
       const { user } = request;
       const { id } = request.params;
       if (user.role !== 'OWNER' && user.role !== 'PM') {
-        return reply.status(403).send({ message: 'Only Owner or PM can update project WordPress settings' });
+        return reply.status(403).send({ message: 'Only Owner or PM can update project settings' });
       }
 
       const project = await prisma.project.findUnique({
@@ -518,6 +524,23 @@ export async function projectRoutes(app) {
 
       const body = request.body || {};
       const data = {};
+
+      // Name update (Owner only)
+      if (body.name !== undefined && user.role === 'OWNER') {
+        const trimmed = String(body.name).trim().slice(0, 255);
+        if (trimmed.length > 0) data.name = trimmed;
+      }
+      // Project type update (Owner only)
+      const validTypes = ['SEO_CAMPAIGN', 'AEO_GEO_CAMPAIGN', 'WEBSITE_DESIGN', 'WEBSITE_DEVELOPMENT', 'SOCIAL_MEDIA_CAMPAIGN', 'ONE_OFF_PROJECT'];
+      if (body.projectType !== undefined && user.role === 'OWNER') {
+        if (validTypes.includes(body.projectType)) data.projectType = body.projectType;
+      }
+      // Status update (Owner only)
+      const validStatuses = ['SETUP', 'ACTIVE', 'PAUSED', 'COMPLETED', 'ARCHIVED'];
+      if (body.status !== undefined && user.role === 'OWNER') {
+        if (validStatuses.includes(body.status)) data.status = body.status;
+      }
+
       if (body.wpUrl !== undefined) {
         data.wpUrl = body.wpUrl === null || body.wpUrl === '' ? null : String(body.wpUrl).trim().slice(0, 500);
       }
@@ -527,6 +550,9 @@ export async function projectRoutes(app) {
       if (Object.keys(data).length === 0) {
         return reply.send({
           id: project.id,
+          name: project.name,
+          projectType: project.projectType,
+          status: project.status,
           wpUrl: project.wpUrl,
           wpApiKey: project.wpApiKey != null ? '[REDACTED]' : null,
         });
@@ -547,6 +573,9 @@ export async function projectRoutes(app) {
         data.wpApiKey !== undefined && updated.wpApiKey != null ? updated.wpApiKey : undefined;
       return reply.send({
         id: updated.id,
+        name: updated.name,
+        projectType: updated.projectType,
+        status: updated.status,
         wpUrl: updated.wpUrl,
         wpApiKey: sentWpApiKey !== undefined ? sentWpApiKey : (updated.wpApiKey != null ? '[REDACTED]' : null),
       });

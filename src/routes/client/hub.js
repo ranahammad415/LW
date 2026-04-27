@@ -35,10 +35,7 @@ export async function clientHubRoutes(app) {
     '/meetings',
     { onRequest: [app.verifyJwt, app.requireClient] },
     async (request, reply) => {
-      const clientIds = await getClientIdsForUser(request.user.id);
-      if (clientIds.length === 0) {
-        return reply.status(404).send({ message: 'No client account linked to this user' });
-      }
+      const clientIds = request.clientAccountIds;
 
       const meetings = await prisma.meetingRecord.findMany({
         where: { clientId: { in: clientIds } },
@@ -68,10 +65,7 @@ export async function clientHubRoutes(app) {
     '/issues',
     { onRequest: [app.verifyJwt, app.requireClient] },
     async (request, reply) => {
-      const clientIds = await getClientIdsForUser(request.user.id);
-      if (clientIds.length === 0) {
-        return reply.status(404).send({ message: 'No client account linked to this user' });
-      }
+      const clientIds = request.clientAccountIds;
 
       const query = request.query || {};
       const status = query.status; // optional: OPEN, IN_PROGRESS, RESOLVED
@@ -117,7 +111,7 @@ export async function clientHubRoutes(app) {
   app.post(
     '/issues',
     {
-      onRequest: [app.verifyJwt, app.requireClient],
+      onRequest: [app.verifyJwt, app.requireClient, app.requireClientWriter],
       schema: {
         body: {
           type: 'object',
@@ -133,10 +127,7 @@ export async function clientHubRoutes(app) {
     },
     async (request, reply) => {
       try {
-        const clientIds = await getClientIdsForUser(request.user.id);
-        if (clientIds.length === 0) {
-          return reply.status(404).send({ message: 'No client account linked to this user' });
-        }
+        const clientIds = request.clientAccountIds;
 
         const body = request.body ?? {};
         const parsed = createIssueBodySchema.safeParse(body);
@@ -197,6 +188,27 @@ export async function clientHubRoutes(app) {
           }
         } catch (_) { /* don't fail issue creation if notification fails */ }
 
+        // Notify other client users about the issue
+        try {
+          const otherUsers = await prisma.clientUser.findMany({
+            where: { clientId, userId: { not: request.user.id } },
+            select: { userId: true },
+          });
+          if (otherUsers.length > 0) {
+            const clientAccount = await prisma.clientAccount.findUnique({ where: { id: clientId }, select: { agencyName: true } });
+            notify({
+              slug: 'client_issue_created_team',
+              recipientIds: otherUsers.map((cu) => cu.userId),
+              variables: { reporterName: request.user.name || 'A team member', issueTitle: title, clientName: clientAccount?.agencyName || '' },
+              actionUrl: '/portal/client/issues',
+              metadata: { issueId: issue.id },
+            }).catch(() => {});
+          }
+          await prisma.clientActivityLog.create({
+            data: { clientId, userId: request.user.id, action: 'issue_created', detail: `Reported issue: "${title}"`, metadata: { issueId: issue.id } },
+          });
+        } catch (_) {}
+
         return reply.status(201).send(issue);
       } catch (err) {
         request.log.error({ err }, 'Create issue error');
@@ -210,10 +222,10 @@ export async function clientHubRoutes(app) {
   // --- Upload issue attachment (returns URL for use in first comment) ---
   app.post(
     '/issues/attachment',
-    { onRequest: [app.verifyJwt, app.requireClient] },
+    { onRequest: [app.verifyJwt, app.requireClient, app.requireClientWriter] },
     async (request, reply) => {
       try {
-        const clientIds = await getClientIdsForUser(request.user.id);
+        const clientIds = request.clientAccountIds;
         if (clientIds.length === 0) {
           return reply.status(404).send({ message: 'No client account linked to this user' });
         }
@@ -249,10 +261,7 @@ export async function clientHubRoutes(app) {
       },
     },
     async (request, reply) => {
-      const clientIds = await getClientIdsForUser(request.user.id);
-      if (clientIds.length === 0) {
-        return reply.status(404).send({ message: 'No client account linked to this user' });
-      }
+      const clientIds = request.clientAccountIds;
 
       const issue = await prisma.clientIssue.findFirst({
         where: { id: request.params.id, clientId: { in: clientIds } },
@@ -298,7 +307,7 @@ export async function clientHubRoutes(app) {
   app.post(
     '/issues/:id/comments',
     {
-      onRequest: [app.verifyJwt, app.requireClient],
+      onRequest: [app.verifyJwt, app.requireClient, app.requireClientWriter],
       schema: {
         params: {
           type: 'object',
@@ -316,10 +325,7 @@ export async function clientHubRoutes(app) {
       },
     },
     async (request, reply) => {
-      const clientIds = await getClientIdsForUser(request.user.id);
-      if (clientIds.length === 0) {
-        return reply.status(404).send({ message: 'No client account linked to this user' });
-      }
+      const clientIds = request.clientAccountIds;
 
       const parsed = createCommentBodySchema.safeParse(request.body);
       if (!parsed.success) {
@@ -469,6 +475,89 @@ export async function clientHubRoutes(app) {
         ...user,
         jobTitle: clientUser?.jobTitle ?? null,
         client: clientUser?.client ?? null,
+      });
+    }
+  );
+
+  // --- Team members ---
+  app.get(
+    '/team',
+    { onRequest: [app.verifyJwt, app.requireClient] },
+    async (request, reply) => {
+      const clientIds = request.clientAccountIds;
+      const userId = request.user.id;
+
+      // Determine current user's role for visibility
+      const currentUserRole = request.clientUserRoles?.[0]?.role || 'MEMBER';
+
+      const clientUsers = await prisma.clientUser.findMany({
+        where: { clientId: { in: clientIds } },
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              avatarUrl: true,
+              email: true,
+              lastLoginAt: true,
+            },
+          },
+        },
+        orderBy: { addedAt: 'asc' },
+      });
+
+      return reply.send(clientUsers.map((cu) => ({
+        id: cu.id,
+        userId: cu.user.id,
+        name: cu.user.name,
+        avatarUrl: cu.user.avatarUrl,
+        email: currentUserRole === 'ADMIN' ? cu.user.email : undefined,
+        jobTitle: cu.jobTitle,
+        role: cu.role,
+        isPrimaryContact: cu.isPrimaryContact,
+        isYou: cu.user.id === userId,
+        lastLoginAt: cu.user.lastLoginAt,
+      })));
+    }
+  );
+
+  // --- Activity feed ---
+  app.get(
+    '/activity',
+    { onRequest: [app.verifyJwt, app.requireClient] },
+    async (request, reply) => {
+      const clientIds = request.clientAccountIds;
+      const query = request.query || {};
+      const limit = Math.min(Number(query.limit) || 30, 100);
+      const offset = Number(query.offset) || 0;
+      const action = query.action || null;
+
+      const where = { clientId: { in: clientIds } };
+      if (action) where.action = action;
+
+      const [activities, total] = await Promise.all([
+        prisma.clientActivityLog.findMany({
+          where,
+          orderBy: { createdAt: 'desc' },
+          skip: offset,
+          take: limit,
+          include: {
+            user: { select: { id: true, name: true, avatarUrl: true } },
+          },
+        }),
+        prisma.clientActivityLog.count({ where }),
+      ]);
+
+      return reply.send({
+        activities: activities.map((a) => ({
+          id: a.id,
+          action: a.action,
+          detail: a.detail,
+          metadata: a.metadata,
+          user: a.user,
+          createdAt: a.createdAt,
+        })),
+        total,
       });
     }
   );
