@@ -487,9 +487,6 @@ export async function clientHubRoutes(app) {
       const clientIds = request.clientAccountIds;
       const userId = request.user.id;
 
-      // Determine current user's role for visibility
-      const currentUserRole = request.clientUserRoles?.[0]?.role || 'MEMBER';
-
       const clientUsers = await prisma.clientUser.findMany({
         where: { clientId: { in: clientIds } },
         include: {
@@ -511,13 +508,27 @@ export async function clientHubRoutes(app) {
         userId: cu.user.id,
         name: cu.user.name,
         avatarUrl: cu.user.avatarUrl,
-        email: currentUserRole === 'ADMIN' ? cu.user.email : undefined,
+        email: cu.user.email,
         jobTitle: cu.jobTitle,
         role: cu.role,
         isPrimaryContact: cu.isPrimaryContact,
         isYou: cu.user.id === userId,
         lastLoginAt: cu.user.lastLoginAt,
       })));
+    }
+  );
+
+  // --- Current user's client role ---
+  app.get(
+    '/me/role',
+    { onRequest: [app.verifyJwt, app.requireClient] },
+    async (request, reply) => {
+      const primary = request.clientUserRoles?.[0] || null;
+      return reply.send({
+        role: primary?.role || 'VIEWER',
+        isPrimaryContact: !!primary?.isPrimaryContact,
+        clientId: primary?.clientId || request.clientAccountIds?.[0] || null,
+      });
     }
   );
 

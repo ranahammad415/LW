@@ -508,7 +508,7 @@ export async function clientProjectsRoutes(app) {
   app.patch(
     '/projects/:id/keywords/suggest-edit',
     {
-      onRequest: [app.verifyJwt, app.requireClient],
+      onRequest: [app.verifyJwt, app.requireClient, app.requireClientWriter],
     },
     async (request, reply) => {
       const { id } = request.params;
@@ -586,7 +586,7 @@ export async function clientProjectsRoutes(app) {
   app.post(
     '/projects/:id/keywords/:keywordId/comments',
     {
-      onRequest: [app.verifyJwt, app.requireClient],
+      onRequest: [app.verifyJwt, app.requireClient, app.requireClientWriter],
     },
     async (request, reply) => {
       const { id, keywordId } = request.params;

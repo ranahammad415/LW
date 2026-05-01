@@ -31,11 +31,18 @@ export async function verifyJwt(request, reply) {
         phone: true,
         timezone: true,
         isActive: true,
+        tokenVersion: true,
       },
     });
 
     if (!user || !user.isActive) {
       return reply.status(401).send({ message: 'User not found or inactive' });
+    }
+
+    // Invalidate access tokens issued before the user's most recent
+    // password reset (or any other tokenVersion bump).
+    if (typeof payload.tv === 'number' && payload.tv !== user.tokenVersion) {
+      return reply.status(401).send({ message: 'Session invalidated. Please sign in again.' });
     }
 
     request.user = user;

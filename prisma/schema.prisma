@@ -46,6 +46,7 @@ model User {
   lastLoginAt      DateTime?
   lastLoginIp      String?   @db.VarChar(45)
   isActive         Boolean   @default(true)
+  tokenVersion     Int       @default(0)
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @default(now()) @updatedAt
 
@@ -76,8 +77,25 @@ model User {
   notificationLogs            NotificationLog[]
   notificationPreferences     NotificationPreference[]
   pmUpdatesAuthored           ClientPMUpdate[]      @relation("PMUpdateAuthor")
+  passwordResetTokens         PasswordResetToken[]
 
   @@map("user")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  userId    String
+  tokenHash String    @unique @db.VarChar(64)
+  expiresAt DateTime
+  usedAt    DateTime?
+  ipAddress String?   @db.VarChar(45)
+  userAgent String?   @db.VarChar(500)
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("password_reset_token")
 }
 
 model SystemAlert {
@@ -281,7 +299,7 @@ model ClientUser {
   clientId               String
   userId                 String
   jobTitle               String?  @db.VarChar(255)
-  role                   String   @default("MEMBER") @db.VarChar(50)
+  role                   String   @default("MANAGER") @db.VarChar(50)
   isPrimaryContact       Boolean  @default(false)
   canApproveDeliverables Boolean  @default(true)
   canSignContracts       Boolean  @default(false)
@@ -999,3 +1017,375 @@ model AgencySetting {
   @@map("agency_setting")
 }
 
+// ============================================
+// OmniSearch Tool Models
+// ============================================
+
+model OmniSearchProject {
+  id          Int      @id @default(autoincrement())
+  name        String   @db.VarChar(255)
+  domain      String   @db.VarChar(500)
+  description String?  @db.Text
+  settings    String?  @db.LongText  // JSON config
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  keywords        OmniSearchKeyword[]
+  contentSessions OmniSearchContentSession[]
+  audits          OmniSearchAudit[]
+  backlinks       OmniSearchBacklink[]
+  geoPrompts      OmniSearchGeoPrompt[]
+  localCitations  OmniSearchLocalCitation[]
+  reports         OmniSearchReport[]
+  automationTasks OmniSearchAutomationTask[]
+  outreaches      OmniSearchOutreach[]
+
+  @@index([domain])
+  @@index([createdAt])
+}
+
+model OmniSearchKeyword {
+  id            Int      @id @default(autoincrement())
+  projectId     Int
+  keyword       String   @db.VarChar(500)
+  volume        Int?     // monthly search volume
+  difficulty    Float?   // keyword difficulty 0-100
+  cpc           Float?   // cost per click
+  serpFeatures  String?  @db.Text  // JSON array of SERP features
+  country       String   @db.VarChar(10) @default("US")
+  intent        String?  @db.VarChar(50) // informational, transactional, navigational, commercial
+  isTracked     Boolean  @default(false)
+  clusterId     Int?
+  dataSource    String   @db.VarChar(50) @default("claude_estimated") // dataforseo | serpapi | gsc | claude_estimated
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  project   OmniSearchProject         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  cluster   OmniSearchKeywordCluster?  @relation(fields: [clusterId], references: [id], onDelete: SetNull)
+  rankHistory OmniSearchRankHistory[]
+
+  @@index([projectId])
+  @@index([keyword])
+  @@index([clusterId])
+  @@index([createdAt])
+}
+
+model OmniSearchKeywordCluster {
+  id        Int      @id @default(autoincrement())
+  name      String   @db.VarChar(255)
+  theme     String?  @db.VarChar(500) // cluster topic/theme
+  projectId Int
+  createdAt DateTime @default(now())
+
+  keywords OmniSearchKeyword[]
+
+  @@index([projectId])
+}
+
+model OmniSearchRankHistory {
+  id         Int      @id @default(autoincrement())
+  keywordId  Int
+  position   Int?     // null = not ranking
+  url        String?  @db.VarChar(500)  // ranking URL
+  engine     String   @db.VarChar(50) @default("google")  // google, bing, yahoo, etc.
+  device     String   @db.VarChar(20) @default("desktop")
+  location   String?  @db.VarChar(100)
+  serpFeatures String? @db.Text  // JSON: which SERP features appear
+  dataSource String   @db.VarChar(50) @default("claude_estimated") // serpapi | dataforseo | gsc | claude_estimated
+  checkedAt  DateTime @default(now())
+
+  keyword OmniSearchKeyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+
+  @@index([keywordId])
+  @@index([checkedAt])
+  @@index([keywordId, checkedAt])
+}
+
+model OmniSearchContentSession {
+  id             Int      @id @default(autoincrement())
+  projectId      Int
+  targetKeyword  String   @db.VarChar(500)
+  title          String?  @db.VarChar(500)
+  content        String?  @db.LongText
+  htmlContent    String?  @db.LongText
+  nlpScore       Float?   // overall content score 0-100
+  wordCount      Int?
+  readabilityScore Float? // Flesch-Kincaid or similar
+  termData       String?  @db.LongText  // JSON: recommended terms + usage counts
+  serpData       String?  @db.LongText  // JSON: top SERP competitors analysis
+  status         String   @db.VarChar(50) @default("draft") // draft, optimizing, published
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  project  OmniSearchProject          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  articles OmniSearchArticle[]
+  versions OmniSearchContentVersion[]
+
+  @@index([projectId])
+  @@index([createdAt])
+}
+
+model OmniSearchArticle {
+  id              Int      @id @default(autoincrement())
+  sessionId       Int?
+  projectId       Int?
+  topic           String   @db.VarChar(500)
+  title           String?  @db.VarChar(500)
+  content         String   @db.LongText
+  outline         String?  @db.LongText  // JSON: article outline/structure
+  metaDescription String?  @db.VarChar(500)
+  model           String?  @db.VarChar(100) // which AI model generated
+  wordCount       Int?
+  type            String   @db.VarChar(50) @default("article") // article, outline, rewrite, humanized
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  session OmniSearchContentSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  @@index([sessionId])
+  @@index([createdAt])
+}
+
+model OmniSearchAudit {
+  id           Int      @id @default(autoincrement())
+  projectId    Int
+  url          String   @db.VarChar(500)  // root URL audited
+  status       String   @db.VarChar(50) @default("pending") // pending, crawling, analyzing, completed, failed
+  pagesScanned Int      @default(0)
+  issueCount   Int      @default(0)
+  healthScore  Float?   // 0-100 site health
+  summary      String?  @db.LongText  // JSON: audit summary
+  settings     String?  @db.Text  // JSON: audit configuration
+  completedAt  DateTime?
+  createdAt    DateTime @default(now())
+
+  project OmniSearchProject     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  issues  OmniSearchAuditIssue[]
+  pages   OmniSearchCrawledPage[]
+
+  @@index([projectId])
+  @@index([createdAt])
+}
+
+model OmniSearchAuditIssue {
+  id          Int      @id @default(autoincrement())
+  auditId     Int
+  type        String   @db.VarChar(100)  // missing_title, duplicate_meta, broken_link, etc.
+  severity    String   @db.VarChar(20)   // critical, warning, info
+  url         String   @db.VarChar(500)
+  description String   @db.Text
+  suggestion  String?  @db.Text
+  createdAt   DateTime @default(now())
+
+  audit OmniSearchAudit @relation(fields: [auditId], references: [id], onDelete: Cascade)
+
+  @@index([auditId])
+  @@index([severity])
+  @@index([type])
+}
+
+model OmniSearchCrawledPage {
+  id          Int      @id @default(autoincrement())
+  auditId     Int
+  url         String   @db.VarChar(500)
+  statusCode  Int?
+  title       String?  @db.VarChar(500)
+  metaDesc    String?  @db.VarChar(500)
+  h1          String?  @db.VarChar(500)
+  canonical   String?  @db.VarChar(500)
+  wordCount   Int?
+  loadTime    Float?   // seconds
+  contentType String?  @db.VarChar(100)
+  internalLinks Int?
+  externalLinks Int?
+  images      Int?
+  indexable   Boolean  @default(true)
+  crawledAt   DateTime @default(now())
+
+  audit OmniSearchAudit @relation(fields: [auditId], references: [id], onDelete: Cascade)
+
+  @@index([auditId])
+  @@index([url])
+}
+
+model OmniSearchBacklink {
+  id            Int      @id @default(autoincrement())
+  projectId     Int
+  sourceUrl     String   @db.VarChar(500)
+  sourceDomain  String   @db.VarChar(255)
+  targetUrl     String   @db.VarChar(500)
+  anchorText    String?  @db.VarChar(500)
+  domainRating  Float?   // 0-100
+  trustFlow     Float?   // 0-100
+  citationFlow  Float?   // 0-100
+  spamScore     Float?   // 0-100 higher = more toxic (for disavow auto-detect)
+  isDoFollow    Boolean  @default(true)
+  isActive      Boolean  @default(true)
+  dataSource    String   @db.VarChar(50) @default("claude_estimated") // dataforseo | majestic | ahrefs | claude_estimated
+  firstSeen     DateTime @default(now())
+  lastSeen      DateTime @default(now())
+
+  project  OmniSearchProject       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  disavow  OmniSearchDisavowEntry?
+
+  @@index([projectId])
+  @@index([sourceDomain])
+  @@index([firstSeen])
+}
+
+model OmniSearchDisavowEntry {
+  id          Int      @id @default(autoincrement())
+  backlinkId  Int      @unique
+  reason      String   @db.VarChar(500)
+  status      String   @db.VarChar(50) @default("flagged") // flagged, exported, submitted
+  scope       String   @db.VarChar(10) @default("domain") // domain | url
+  createdAt   DateTime @default(now())
+
+  backlink OmniSearchBacklink @relation(fields: [backlinkId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+}
+
+model OmniSearchGeoPrompt {
+  id          Int      @id @default(autoincrement())
+  projectId   Int
+  prompt      String   @db.Text
+  platform    String   @db.VarChar(50)  // chatgpt, perplexity, gemini, claude, copilot, grok, meta_ai, deepseek
+  frequency   String   @db.VarChar(20) @default("daily") // hourly, daily, weekly
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project   OmniSearchProject       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  responses OmniSearchGeoResponse[]
+
+  @@index([projectId])
+  @@index([platform])
+}
+
+model OmniSearchGeoResponse {
+  id             Int      @id @default(autoincrement())
+  promptId       Int
+  platform       String   @db.VarChar(50)
+  response       String   @db.LongText
+  brandMentioned Boolean  @default(false)
+  sentiment      String?  @db.VarChar(20)  // positive, neutral, negative
+  citationUrl    String?  @db.VarChar(500)
+  citationRank   Int?     // position in citation list
+  competitorsMentioned String? @db.Text  // JSON array
+  entityAccuracy Float?   // 0-100 how accurately the AI describes the brand
+  country        String?  @db.VarChar(10) // ISO-2 country code for regional GEO breakdown
+  responseSource String   @db.VarChar(50) @default("simulated") // simulated | real_chatgpt | real_perplexity | real_gemini | real_claude | real_openai
+  checkedAt      DateTime @default(now())
+
+  prompt OmniSearchGeoPrompt @relation(fields: [promptId], references: [id], onDelete: Cascade)
+
+  @@index([promptId])
+  @@index([platform])
+  @@index([checkedAt])
+}
+
+model OmniSearchLocalCitation {
+  id              Int      @id @default(autoincrement())
+  projectId       Int
+  platform        String   @db.VarChar(100) // google_business, yelp, facebook, apple_maps, etc.
+  listingUrl      String?  @db.VarChar(500)
+  businessName    String?  @db.VarChar(255)
+  address         String?  @db.Text
+  phone           String?  @db.VarChar(50)
+  napConsistency  Boolean  @default(true)  // Name-Address-Phone consistent
+  rating          Float?
+  reviewCount     Int?
+  isVerified      Boolean  @default(false)
+  lastChecked     DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  project OmniSearchProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([platform])
+}
+
+model OmniSearchReport {
+  id         Int      @id @default(autoincrement())
+  projectId  Int
+  type       String   @db.VarChar(50) // seo_overview, rank_report, content_report, geo_report, backlink_report, full_report
+  title      String   @db.VarChar(255)
+  data       String   @db.LongText  // JSON report data
+  period     String   @db.VarChar(50) // weekly, monthly, quarterly, custom
+  startDate  DateTime?
+  endDate    DateTime?
+  format     String   @db.VarChar(20) @default("json") // json, pdf, csv
+  createdAt  DateTime @default(now())
+
+  project OmniSearchProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+model OmniSearchAutomationTask {
+  id          Int      @id @default(autoincrement())
+  projectId   Int
+  type        String   @db.VarChar(100) // content_refresh, rank_check, geo_monitor, audit_schedule, link_prospect, content_publish
+  name        String   @db.VarChar(255)
+  config      String   @db.LongText  // JSON task configuration
+  status      String   @db.VarChar(50) @default("active") // active, paused, completed, failed
+  schedule    String?  @db.VarChar(100) // cron expression or interval
+  lastRun     DateTime?
+  nextRun     DateTime?
+  runCount    Int      @default(0)
+  lastResult  String?  @db.Text  // JSON: last execution result
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project OmniSearchProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([status])
+  @@index([nextRun])
+}
+
+model OmniSearchOutreach {
+  id            Int      @id @default(autoincrement())
+  projectId     Int
+  targetDomain  String   @db.VarChar(255)
+  targetUrl     String?  @db.VarChar(500)
+  contactName   String?  @db.VarChar(255)
+  contactEmail  String?  @db.VarChar(255)
+  status        String   @db.VarChar(50) @default("prospect") // prospect, contacted, replied, negotiating, secured, rejected
+  domainRating  Float?
+  emailSubject  String?  @db.VarChar(500)
+  emailBody     String?  @db.LongText
+  notes         String?  @db.Text
+  sentAt        DateTime?
+  repliedAt     DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  project OmniSearchProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([status])
+  @@index([targetDomain])
+}
+
+model OmniSearchContentVersion {
+  id             Int      @id @default(autoincrement())
+  sessionId      Int
+  versionNumber  Int      @default(1)
+  content        String   @db.LongText
+  score          Float?
+  wordCount      Int?
+  semanticGrade  String?  @db.VarChar(5) // A+, A, B, C, D, F
+  savedBy        String?  @db.VarChar(255) // user identifier
+  changeNote     String?  @db.VarChar(500) // description of changes
+  savedAt        DateTime @default(now())
+
+  session OmniSearchContentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@index([savedAt])
+  @@index([sessionId, versionNumber])
+}

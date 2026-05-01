@@ -45,6 +45,7 @@ import { pmDigestRoutes } from './routes/pm/digest.js';
 import { pmClientDashboardRoutes } from './routes/pm/clientDashboard.js';
 import { wpWebhookRoutes } from './routes/webhooks.js';
 import { toolRoutes } from './routes/tool.js';
+import omniSearchRoutes from './routes/omniSearch/index.js';
 import cron from 'node-cron';
 import { syncAllProjects } from './lib/wpSync.js';
 import { runScheduledAeoSweep } from './lib/aeoRunner.js';
@@ -53,6 +54,7 @@ import { prisma } from './lib/prisma.js';
 import { sendEmail, smtpConfigured } from './lib/mailer.js';
 import { initGscClient } from './lib/gscClient.js';
 import { runGscSync } from './lib/gscSync.js';
+import { initSentry } from './lib/sentry.js';
 
 const app = Fastify({ logger: true });
 
@@ -126,6 +128,7 @@ app.register(pmDigestRoutes, { prefix: '/api/pm' });
 app.register(pmClientDashboardRoutes, { prefix: '/api/pm' });
 app.register(wpWebhookRoutes, { prefix: '/api/webhooks' });
 app.register(toolRoutes, { prefix: '/api/tool' });
+app.register(omniSearchRoutes, { prefix: '/api/omni-search' });
 
 app.get('/health', async (req) => {
   req.log.info('Health check hit');
@@ -134,6 +137,9 @@ app.get('/health', async (req) => {
 
 const port = Number(process.env.PORT) || 3000;
 try {
+  // Initialize Sentry (no-op if SENTRY_DSN not set)
+  await initSentry(app.log);
+
   // Initialize GSC client (no-op if env var not set)
   const gscOk = await initGscClient();
   if (gscOk) app.log.info('Google Search Console integration enabled');

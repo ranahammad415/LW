@@ -3,6 +3,7 @@ import bcrypt from 'bcrypt';
 import { prisma } from '../../lib/prisma.js';
 import { createClientBodySchema, updatePackageBodySchema } from '../../schemas/admin.js';
 import { notify } from '../../lib/notificationService.js';
+import { excludeActor } from '../../lib/notifyRecipients.js';
 
 const accessSecret = process.env.JWT_ACCESS_SECRET;
 const accessExpiresIn = process.env.JWT_ACCESS_EXPIRES_IN || '15m';
@@ -1120,7 +1121,7 @@ export async function adminClientRoutes(app) {
 
       const contactEmail = body.email.trim().toLowerCase();
       const contactName = body.name.trim();
-      const role = ['ADMIN', 'MEMBER', 'VIEWER'].includes(body.role) ? body.role : 'MEMBER';
+      const role = ['MANAGER', 'VIEWER'].includes(body.role) ? body.role : 'MANAGER';
 
       // Check if user already linked
       const existingLink = await prisma.clientUser.findFirst({
@@ -1133,6 +1134,8 @@ export async function adminClientRoutes(app) {
       const result = await prisma.$transaction(async (tx) => {
         let user = await tx.user.findUnique({ where: { email: contactEmail } });
         let plainPassword = null;
+        const preExisting = !!user;
+        const wasNonClient = preExisting && user.role !== 'CLIENT';
 
         if (!user) {
           plainPassword = body.password && body.password.trim().length >= 8 ? body.password.trim() : generateTemporaryPassword();
@@ -1147,6 +1150,14 @@ export async function adminClientRoutes(app) {
             },
           });
         }
+        // NOTE: we intentionally do NOT mutate user.role here. Linking an
+        // existing OWNER/PM as a client manager must preserve their primary
+        // role; access is granted purely through the ClientUser row.
+
+        // For non-CLIENT links, force safe defaults regardless of body input
+        // (OWNER should not auto-become a contract signatory).
+        const canSignContracts = wasNonClient ? false : (body.canSignContracts ?? false);
+        const canApproveDeliverables = body.canApproveDeliverables ?? true;
 
         const clientUser = await tx.clientUser.create({
           data: {
@@ -1155,49 +1166,61 @@ export async function adminClientRoutes(app) {
             jobTitle: body.jobTitle?.trim() || null,
             role,
             isPrimaryContact: false,
-            canApproveDeliverables: body.canApproveDeliverables ?? true,
-            canSignContracts: body.canSignContracts ?? false,
+            canApproveDeliverables,
+            canSignContracts,
             addedById: ownerId,
           },
         });
 
         // Log activity
+        const detail = wasNonClient
+          ? `${user.name} (${user.email}, ${user.role}) linked as ${role} of account`
+          : `${contactName} (${contactEmail}) added to account`;
         await tx.clientActivityLog.create({
           data: {
             clientId: id,
             userId: ownerId,
-            action: 'user_added',
-            detail: `${contactName} (${contactEmail}) added to account`,
-            metadata: { addedUserId: user.id, role },
+            action: wasNonClient ? 'user_linked_from_staff' : 'user_added',
+            detail,
+            metadata: { addedUserId: user.id, role, linkedFromRole: wasNonClient ? user.role : null },
           },
         });
 
-        return { clientUser, user, plainPassword };
+        return { clientUser, user, plainPassword, wasNonClient };
       });
 
-      // Notify the new user with welcome email
-      notify({
-        slug: 'welcome_email',
-        recipientIds: [result.user.id],
-        variables: {
-          contactName: result.user.name,
-          clientName: client.agencyName,
-          loginUrl: process.env.FRONTEND_URL || 'https://app.yourdomain.com',
-          tempPassword: result.plainPassword || '(existing password)',
-        },
-        actionUrl: '/portal/client',
-        metadata: { clientId: id },
-      }).catch(() => {});
+      // Welcome email is only relevant for brand-new CLIENT users. Skip when
+      // linking an existing staff member (OWNER/PM) — they already have creds.
+      if (!result.wasNonClient) {
+        notify({
+          slug: 'welcome_email',
+          recipientIds: [result.user.id],
+          variables: {
+            contactName: result.user.name,
+            clientName: client.agencyName,
+            loginUrl: process.env.FRONTEND_URL || 'https://app.yourdomain.com',
+            tempPassword: result.plainPassword || '(existing password)',
+          },
+          actionUrl: '/portal/client',
+          metadata: { clientId: id },
+        }).catch(() => {});
+      }
 
-      // Notify existing client users about the new member
+      // Notify existing client users about the new member (exclude the actor
+      // so an OWNER linked to this client doesn't get notified of their own
+      // action).
       const existingUsers = await prisma.clientUser.findMany({
         where: { clientId: id, userId: { not: result.user.id } },
         select: { userId: true },
       });
-      if (existingUsers.length > 0) {
+      const existingRecipientIds = excludeActor(
+        existingUsers.map((cu) => cu.userId),
+        ownerId,
+      );
+      if (existingRecipientIds.length > 0) {
         notify({
           slug: 'client_user_added',
-          recipientIds: existingUsers.map((cu) => cu.userId),
+          recipientIds: existingRecipientIds,
           variables: { addedName: result.user.name, clientName: client.agencyName },
           actionUrl: '/portal/client',
           metadata: { clientId: id },
@@ -1265,19 +1288,19 @@ export async function adminClientRoutes(app) {
         return reply.status(404).send({ message: 'Client user not found' });
       }
 
-      // Prevent demoting last ADMIN
-      if (body.role && body.role !== 'ADMIN' && clientUser.role === 'ADMIN') {
-        const adminCount = await prisma.clientUser.count({
-          where: { clientId: id, role: 'ADMIN' },
+      // Prevent demoting last MANAGER
+      if (body.role && body.role !== 'MANAGER' && clientUser.role === 'MANAGER') {
+        const managerCount = await prisma.clientUser.count({
+          where: { clientId: id, role: 'MANAGER' },
         });
-        if (adminCount <= 1) {
-          return reply.status(400).send({ message: 'Cannot demote the last admin user' });
+        if (managerCount <= 1) {
+          return reply.status(400).send({ message: 'Cannot demote the last manager' });
         }
       }
 
       const cuData = {};
       if (body.jobTitle !== undefined) cuData.jobTitle = body.jobTitle?.trim() || null;
-      if (body.role && ['ADMIN', 'MEMBER', 'VIEWER'].includes(body.role)) cuData.role = body.role;
+      if (body.role && ['MANAGER', 'VIEWER'].includes(body.role)) cuData.role = body.role;
       if (body.canApproveDeliverables !== undefined) cuData.canApproveDeliverables = body.canApproveDeliverables;
       if (body.canSignContracts !== undefined) cuData.canSignContracts = body.canSignContracts;
 
@@ -1366,15 +1389,19 @@ export async function adminClientRoutes(app) {
         });
       });
 
-      // Notify remaining client users
+      // Notify remaining client users (exclude the actor to avoid self-notify).
       const remainingUsers = await prisma.clientUser.findMany({
         where: { clientId: id },
         select: { userId: true },
       });
-      if (remainingUsers.length > 0) {
+      const remainingRecipientIds = excludeActor(
+        remainingUsers.map((cu) => cu.userId),
+        request.user.id,
+      );
+      if (remainingRecipientIds.length > 0) {
         notify({
           slug: 'client_user_removed',
-          recipientIds: remainingUsers.map((cu) => cu.userId),
+          recipientIds: remainingRecipientIds,
           variables: { removedName: clientUser.user.name, clientName: client?.agencyName || '' },
           actionUrl: '/portal/client',
           metadata: { clientId: id },

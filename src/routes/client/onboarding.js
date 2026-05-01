@@ -41,7 +41,7 @@ export async function clientOnboardingRoutes(app) {
   app.post(
     '/onboarding/intake',
     {
-      onRequest: [app.verifyJwt, app.requireClient],
+      onRequest: [app.verifyJwt, app.requireClient, app.requireClientWriter],
       schema: {
         body: {
           type: 'object',
@@ -84,7 +84,7 @@ export async function clientOnboardingRoutes(app) {
   app.post(
     '/onboarding/contract',
     {
-      onRequest: [app.verifyJwt, app.requireClient],
+      onRequest: [app.verifyJwt, app.requireClient, app.requireClientWriter],
       schema: {
         body: {
           type: 'object',

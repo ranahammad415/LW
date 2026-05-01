@@ -4,6 +4,15 @@ import crypto from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
 import { prisma } from '../lib/prisma.js';
 import { loginBodySchema } from '../schemas/auth.js';
+import { sendPasswordResetEmail } from '../lib/passwordResetEmail.js';
+import { checkPasswordResetRateLimit } from '../lib/passwordResetRateLimit.js';
+
+const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
+const PASSWORD_MIN_LENGTH = 8;
+
+function hashResetToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
 
 const accessSecret = process.env.JWT_ACCESS_SECRET;
 const refreshSecret = process.env.JWT_REFRESH_SECRET;
@@ -65,12 +74,12 @@ export async function authRoutes(app) {
 
         const sess = SESSION_CONFIG[user.role] || DEFAULT_SESSION;
         const accessToken = jwt.sign(
-          { sub: user.id, role: user.role },
+          { sub: user.id, role: user.role, tv: user.tokenVersion ?? 0 },
           accessSecret,
           { expiresIn: sess.accessExpiresIn }
         );
         const refreshToken = jwt.sign(
-          { sub: user.id, type: 'refresh' },
+          { sub: user.id, type: 'refresh', tv: user.tokenVersion ?? 0 },
           refreshSecret,
           { expiresIn: sess.refreshExpiresIn }
         );
@@ -133,16 +142,21 @@ export async function authRoutes(app) {
 
       const user = await prisma.user.findUnique({
         where: { id: payload.sub },
-        select: { id: true, role: true, isActive: true },
+        select: { id: true, role: true, isActive: true, tokenVersion: true },
       });
       if (!user || !user.isActive) {
         reply.clearCookie('refreshToken', { path: '/api/auth' });
         return reply.status(401).send({ message: 'User not found or inactive' });
       }
+      // Reject refresh tokens that predate a password reset (tokenVersion bump).
+      if (typeof payload.tv === 'number' && payload.tv !== user.tokenVersion) {
+        reply.clearCookie('refreshToken', { path: '/api/auth' });
+        return reply.status(401).send({ message: 'Session invalidated. Please sign in again.' });
+      }
 
       const sess = SESSION_CONFIG[user.role] || DEFAULT_SESSION;
       const accessToken = jwt.sign(
-        { sub: user.id, role: user.role },
+        { sub: user.id, role: user.role, tv: user.tokenVersion ?? 0 },
         accessSecret,
         { expiresIn: sess.accessExpiresIn }
       );
@@ -346,12 +360,12 @@ export async function authRoutes(app) {
       // Generate tokens
       const sess = SESSION_CONFIG[user.role] || DEFAULT_SESSION;
       const accessTokenVal = jwt.sign(
-        { sub: user.id, role: user.role },
+        { sub: user.id, role: user.role, tv: user.tokenVersion ?? 0 },
         accessSecret,
         { expiresIn: sess.accessExpiresIn }
       );
       const refreshTokenVal = jwt.sign(
-        { sub: user.id, type: 'refresh' },
+        { sub: user.id, type: 'refresh', tv: user.tokenVersion ?? 0 },
         refreshSecret,
         { expiresIn: sess.refreshExpiresIn }
       );
@@ -410,6 +424,14 @@ export async function authRoutes(app) {
       onRequest: [app.verifyJwt, app.requireClient],
     },
     async (request, reply) => {
+      // Task 1.5: OWNER is now allowed past requireClient when linked as a
+      // client manager, but this endpoint reports the CURRENT user's personal
+      // Google-analytics binding for a client — only native CLIENT users
+      // should use it. Prevents an OWNER's personal Google from being
+      // implicitly treated as a client's analytics identity.
+      if (request.user.role !== 'CLIENT') {
+        return reply.status(403).send({ message: 'Only native client accounts can use Google analytics linking' });
+      }
       const userId = request.user.id;
 
       const user = await prisma.user.findUnique({
@@ -469,4 +491,157 @@ export async function authRoutes(app) {
     }
   );
 
+  // ── Public: Request a password reset link ──
+  // Always returns 200 to prevent email enumeration. Rate-limited to
+  // 3/hour/email + 10/hour/ip. Generates a hashed single-use token,
+  // invalidates prior pending tokens for the user, and emails the link.
+  app.post(
+    '/forgot-password',
+    {},
+    async (request, reply) => {
+      const body = request.body || {};
+      const rawEmail = typeof body.email === 'string' ? body.email.trim() : '';
+      if (!rawEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail)) {
+        return reply.status(400).send({ message: 'A valid email is required' });
+      }
+      const email = rawEmail.toLowerCase();
+      const ip = request.ip;
+
+      const limit = checkPasswordResetRateLimit({ email, ip });
+      if (!limit.allowed) {
+        return reply.status(429).send({
+          message: 'Too many password reset requests. Please try again later.',
+          retryAfterSeconds: Math.ceil((limit.retryAfterMs || 0) / 1000),
+        });
+      }
+
+      // Constant-ish response message regardless of whether the user exists.
+      const responseMessage = 'If an account exists for that email, a reset link has been sent.';
+
+      const user = await prisma.user.findUnique({ where: { email } });
+      if (!user || !user.isActive) {
+        return reply.send({ message: responseMessage });
+      }
+
+      // Invalidate any prior pending tokens for this user.
+      await prisma.passwordResetToken.updateMany({
+        where: { userId: user.id, usedAt: null },
+        data: { usedAt: new Date() },
+      });
+
+      // Generate fresh token and store only the hash.
+      const token = crypto.randomBytes(32).toString('base64url');
+      const tokenHash = hashResetToken(token);
+      const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MS);
+      const userAgent = request.headers['user-agent']
+        ? String(request.headers['user-agent']).slice(0, 500)
+        : null;
+
+      await prisma.passwordResetToken.create({
+        data: {
+          userId: user.id,
+          tokenHash,
+          expiresAt,
+          ipAddress: ip ? String(ip).slice(0, 45) : null,
+          userAgent,
+        },
+      });
+
+      // Fire-and-forget email — never expose delivery result to the client.
+      sendPasswordResetEmail({ to: user.email, name: user.name, token })
+        .catch((err) => request.log?.error?.({ err }, '[forgot-password] email send failed'));
+
+      return reply.send({ message: responseMessage });
+    }
+  );
+
+  // ── Public: Validate a reset token (UX pre-check, does not consume) ──
+  app.post(
+    '/validate-reset-token',
+    {},
+    async (request, reply) => {
+      const body = request.body || {};
+      const token = typeof body.token === 'string' ? body.token : '';
+      if (!token) {
+        return reply.send({ valid: false });
+      }
+      const tokenHash = hashResetToken(token);
+      const row = await prisma.passwordResetToken.findUnique({
+        where: { tokenHash },
+        include: { user: { select: { email: true, isActive: true } } },
+      });
+      if (!row || row.usedAt || row.expiresAt < new Date() || !row.user?.isActive) {
+        return reply.send({ valid: false });
+      }
+      // Return the email so the UI can confirm which account is being reset,
+      // partially masked to avoid leaking PII if the link is shared.
+      const masked = maskEmail(row.user.email);
+      return reply.send({ valid: true, email: masked });
+    }
+  );
+
+  // ── Public: Consume reset token + set new password ──
+  app.post(
+    '/reset-password',
+    {},
+    async (request, reply) => {
+      const body = request.body || {};
+      const token = typeof body.token === 'string' ? body.token : '';
+      const newPassword = typeof body.newPassword === 'string' ? body.newPassword : '';
+
+      if (!token) {
+        return reply.status(400).send({ message: 'Reset token is required' });
+      }
+      if (!newPassword || newPassword.length < PASSWORD_MIN_LENGTH) {
+        return reply.status(400).send({
+          message: `Password must be at least ${PASSWORD_MIN_LENGTH} characters`,
+        });
+      }
+      if (newPassword.length > 200) {
+        return reply.status(400).send({ message: 'Password is too long' });
+      }
+
+      const tokenHash = hashResetToken(token);
+      const row = await prisma.passwordResetToken.findUnique({
+        where: { tokenHash },
+        include: { user: { select: { id: true, isActive: true, tokenVersion: true } } },
+      });
+      if (!row || row.usedAt || row.expiresAt < new Date() || !row.user?.isActive) {
+        return reply.status(400).send({ message: 'Reset link is invalid or has expired' });
+      }
+
+      const passwordHash = await bcrypt.hash(newPassword, 12);
+
+      // Atomically: update password + bump tokenVersion + mark token used.
+      await prisma.$transaction([
+        prisma.user.update({
+          where: { id: row.user.id },
+          data: {
+            passwordHash,
+            tokenVersion: { increment: 1 },
+          },
+        }),
+        prisma.passwordResetToken.update({
+          where: { id: row.id },
+          data: { usedAt: new Date() },
+        }),
+        // Cleanup: mark any other pending tokens for this user as used too.
+        prisma.passwordResetToken.updateMany({
+          where: { userId: row.user.id, usedAt: null, id: { not: row.id } },
+          data: { usedAt: new Date() },
+        }),
+      ]);
+
+      return reply.send({ message: 'Password updated. Please sign in with your new password.' });
+    }
+  );
+
+}
+
+function maskEmail(email) {
+  if (!email || typeof email !== 'string') return '';
+  const [local, domain] = email.split('@');
+  if (!domain) return email;
+  const visible = local.slice(0, Math.min(2, local.length));
+  return `${visible}${'*'.repeat(Math.max(1, local.length - visible.length))}@${domain}`;
 }
