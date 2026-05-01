@@ -820,13 +820,25 @@ export async function clientProjectsRoutes(app) {
           profilePhotoAdded: Boolean(checklist.profilePhotoAdded),
           ...(checklist.profilePhotoUrl !== undefined ? { profilePhotoUrl: checklist.profilePhotoUrl ? String(checklist.profilePhotoUrl).slice(0, 500) : null } : {}),
         };
-        ops.push(
-          prisma.onboardingChecklist.upsert({
-            where: { clientId },
-            create: { clientId, ...checklistData },
-            update: checklistData,
-          })
-        );
+        // clientId is NOT @unique in the Prisma schema, so we cannot use upsert({ where: { clientId } }).
+        // Match the GET handler's selector (client-level checklist where projectId is null).
+        const existingChecklist = await prisma.onboardingChecklist.findFirst({
+          where: { clientId, projectId: null },
+        });
+        if (existingChecklist) {
+          ops.push(
+            prisma.onboardingChecklist.update({
+              where: { id: existingChecklist.id },
+              data: checklistData,
+            })
+          );
+        } else {
+          ops.push(
+            prisma.onboardingChecklist.create({
+              data: { clientId, ...checklistData },
+            })
+          );
+        }
       }
 
       if (ops.length > 0) {
