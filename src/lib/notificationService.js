@@ -15,6 +15,104 @@ function renderTemplate(template, variables = {}) {
   });
 }
 
+/**
+ * Decide whether a given NotificationTemplate allows emailing a given user,
+ * based on the template's per-role email flags and the user's role.
+ *
+ * Rules:
+ *   - OWNER                              -> emailAgencyOwner
+ *   - PM / TEAM_MEMBER / CONTRACTOR      -> emailPm
+ *   - CLIENT with ClientUser.role VIEWER -> emailClientViewer
+ *   - CLIENT otherwise (default MANAGER) -> emailClientManager
+ *   - Unknown role                       -> allowed (fail-open)
+ *
+ * Each flag is compared with `!== false`, so missing/undefined flags
+ * (e.g., when the Prisma client has not yet been regenerated) default to allowed.
+ *
+ * Exported so it can be unit-tested and reused.
+ */
+export function templateAllowsEmailForUser(template, user) {
+  if (!template || !user) return true;
+  switch (user.role) {
+    case 'OWNER':
+      return template.emailAgencyOwner !== false;
+    case 'PM':
+    case 'TEAM_MEMBER':
+    case 'CONTRACTOR':
+      return template.emailPm !== false;
+    case 'CLIENT': {
+      const access = Array.isArray(user.clientAccess) ? user.clientAccess[0] : null;
+      const isViewer = access && String(access.role).toUpperCase() === 'VIEWER';
+      return isViewer
+        ? template.emailClientViewer !== false
+        : template.emailClientManager !== false;
+    }
+    default:
+      return true;
+  }
+}
+
+/**
+ * Resolve the notification audience for a given user.
+ *
+ *   OWNER                               -> AGENCY_OWNER
+ *   PM / TEAM_MEMBER / CONTRACTOR       -> AGENCY_TEAM
+ *   CLIENT with ClientUser.role VIEWER  -> CLIENT_VIEWER
+ *   CLIENT otherwise (default MANAGER)  -> CLIENT_MANAGER
+ *   Unknown / null                      -> AGENCY_TEAM (safe default)
+ *
+ * Exported for unit testing and reuse in the admin API (test-send).
+ */
+export function audienceForUser(user) {
+  if (!user) return 'AGENCY_TEAM';
+  switch (user.role) {
+    case 'OWNER':
+      return 'AGENCY_OWNER';
+    case 'PM':
+    case 'TEAM_MEMBER':
+    case 'CONTRACTOR':
+      return 'AGENCY_TEAM';
+    case 'CLIENT': {
+      const access = Array.isArray(user.clientAccess) ? user.clientAccess[0] : null;
+      const isViewer = access && String(access.role).toUpperCase() === 'VIEWER';
+      return isViewer ? 'CLIENT_VIEWER' : 'CLIENT_MANAGER';
+    }
+    default:
+      return 'AGENCY_TEAM';
+  }
+}
+
+/**
+ * Pick a per-audience variant, or fall back to the base template's copy.
+ * Returns an object exposing the exact fields a renderer needs:
+ *   { subject, bodyHtml, bodyText, inAppMessage, ctaLabel }
+ *
+ * Exported for unit testing.
+ */
+export function resolveVariantForAudience(variantsByAudience, audience, baseTemplate) {
+  const variant = variantsByAudience && variantsByAudience[audience];
+  if (variant) {
+    return {
+      subject: variant.subject || baseTemplate.subject,
+      bodyHtml: variant.bodyHtml || baseTemplate.bodyHtml,
+      bodyText: variant.bodyText != null ? variant.bodyText : baseTemplate.bodyText,
+      inAppMessage: variant.inAppMessage || baseTemplate.inAppMessage,
+      ctaLabel: variant.ctaLabel || null,
+      source: 'variant',
+      audience,
+    };
+  }
+  return {
+    subject: baseTemplate.subject,
+    bodyHtml: baseTemplate.bodyHtml,
+    bodyText: baseTemplate.bodyText,
+    inAppMessage: baseTemplate.inAppMessage,
+    ctaLabel: null,
+    source: 'base',
+    audience,
+  };
+}
+
 // ── Slug-to-action-text mapping for the action header ──────────────────────
 const ACTION_TEXT_MAP = {
   task_created:              'created a task',
@@ -87,82 +185,92 @@ const ISSUE_COMMENT_SLUGS = new Set([
 ]);
 
 /**
- * Build rich email HTML using components + enriched data.
- * Falls back to simple bodyHtml if enrichment fails.
+ * Pre-enrich shared context for a notification send.
+ *
+ * The detail card and comment thread do NOT depend on the recipient's
+ * audience, so we compute them once and reuse for every recipient to
+ * avoid re-querying the database per user.
+ *
+ * Returns `{ detailCardHtml, commentThreadHtml, commentPreview, actorName,
+ *            actionText, projectName }`.
  */
-async function buildRichEmailHtml(slug, template, variables, actionUrl, metadata) {
+async function buildSharedEmailContext(slug, variables, metadata) {
   const actorName = variables.authorName || variables.assignedBy || variables.changedBy ||
                     variables.completedBy || variables.uploadedBy || variables.submittedBy ||
                     variables.senderName || variables.memberName || 'Localwaves';
   const actionText = ACTION_TEXT_MAP[slug] || '';
   const projectName = variables.projectName || '';
-  const ctaLabel = CTA_LABEL_MAP[template.category] || 'View in Portal';
+  const commentPreview = variables.commentPreview || variables.requestNote || variables.messagePreview || '';
 
-  // Rendered simple body from template (fallback content)
-  const renderedBodyHtml = renderTemplate(template.bodyHtml, variables);
+  let detailCardHtml = '';
+  let commentThreadHtml = '';
+
+  const taskId = metadata?.taskId;
+  const issueId = metadata?.issueId;
+
+  try {
+    if (taskId && TASK_CARD_SLUGS.has(slug)) {
+      const taskData = await enrichTaskData(taskId);
+      if (taskData) detailCardHtml = taskDetailCard(taskData);
+    } else if (issueId && ISSUE_CARD_SLUGS.has(slug)) {
+      const issueData = await enrichIssueData(issueId);
+      if (issueData) detailCardHtml = issueDetailCard(issueData);
+    }
+
+    if (taskId && COMMENT_THREAD_SLUGS.has(slug)) {
+      const comments = await enrichRecentComments(taskId, 4);
+      if (comments.length > 0) commentThreadHtml = commentThread(comments);
+    } else if (issueId && ISSUE_COMMENT_SLUGS.has(slug)) {
+      const comments = await enrichIssueComments(issueId, 4);
+      if (comments.length > 0) commentThreadHtml = commentThread(comments);
+    }
+  } catch (err) {
+    console.error(`[notify] Enrichment failed for "${slug}":`, err.message);
+  }
+
+  return { detailCardHtml, commentThreadHtml, commentPreview, actorName, actionText, projectName };
+}
+
+/**
+ * Build rich email HTML for a single recipient using a resolved source
+ * (base template or audience variant) and pre-enriched shared context.
+ */
+function buildRichEmailHtml(slug, category, source, variables, actionUrl, sharedContext) {
+  const { actorName, actionText, projectName, commentPreview, detailCardHtml, commentThreadHtml } = sharedContext;
+  const ctaLabel = source.ctaLabel || CTA_LABEL_MAP[category] || 'View in Portal';
+
+  // Rendered simple body from the resolved source (fallback content)
+  const renderedBodyHtml = renderTemplate(source.bodyHtml, variables);
+  const preheader = renderTemplate(source.subject, variables);
 
   // If no actorName available (system notifications), use simple layout
   if (!actionText) {
     return wrapInBrandedLayout({
       bodyHtml: renderedBodyHtml,
-      preheader: renderTemplate(template.subject, variables),
+      preheader,
       actionUrl,
       actionLabel: ctaLabel,
-      category: template.category,
+      category,
     });
   }
 
-  // Build the action header component
   const actionHeaderHtml = actionHeader({
     actorName,
     actionText,
     contextLine: projectName ? `Localwaves \u2013 ${projectName}` : 'Localwaves',
   });
 
-  // Build comment block (for comment/mention notifications)
   let commentBlockHtml = '';
-  const commentPreview = variables.commentPreview || variables.requestNote || variables.messagePreview || '';
   if (commentPreview && (slug.includes('comment') || slug.includes('mention'))) {
     commentBlockHtml = commentBlock(actorName, commentPreview);
   }
 
-  // Enrich and build task detail card
-  let detailCardHtml = '';
-  const taskId = metadata?.taskId;
-  const issueId = metadata?.issueId;
-
-  if (taskId && TASK_CARD_SLUGS.has(slug)) {
-    const taskData = await enrichTaskData(taskId);
-    if (taskData) {
-      detailCardHtml = taskDetailCard(taskData);
-    }
-  } else if (issueId && ISSUE_CARD_SLUGS.has(slug)) {
-    const issueData = await enrichIssueData(issueId);
-    if (issueData) {
-      detailCardHtml = issueDetailCard(issueData);
-    }
-  }
-
-  // Enrich and build comment thread
-  let commentThreadHtml = '';
-  if (taskId && COMMENT_THREAD_SLUGS.has(slug)) {
-    const comments = await enrichRecentComments(taskId, 4);
-    if (comments.length > 0) {
-      commentThreadHtml = commentThread(comments);
-    }
-  } else if (issueId && ISSUE_COMMENT_SLUGS.has(slug)) {
-    const comments = await enrichIssueComments(issueId, 4);
-    if (comments.length > 0) {
-      commentThreadHtml = commentThread(comments);
-    }
-  }
-
   return wrapInBrandedLayout({
     bodyHtml: (!commentBlockHtml && !detailCardHtml) ? renderedBodyHtml : '',
-    preheader: renderTemplate(template.subject, variables),
+    preheader,
     actionUrl,
     actionLabel: ctaLabel,
-    category: template.category,
+    category,
     actionHeaderHtml,
     commentBlockHtml,
     detailCardHtml,
@@ -203,6 +311,19 @@ export async function notify({ slug, recipientIds, variables = {}, actionUrl = n
   }
   if (!template || !template.isActive) return;
 
+  // 1b. Fetch per-audience variants for this template (if the new table exists)
+  const variantsByAudience = {};
+  try {
+    const variants = await prisma.notificationTemplateVariant.findMany({
+      where: { templateSlug: slug },
+    });
+    for (const v of variants) variantsByAudience[v.audience] = v;
+  } catch (err) {
+    // Table may not exist yet if the Prisma client hasn't been regenerated.
+    // Fail-open: everyone gets the base template copy.
+    console.warn(`[notify] Variant fetch skipped for "${slug}":`, err.message);
+  }
+
   // 2. Fetch recipients + preferences
   const recipients = await prisma.user.findMany({
     where: { id: { in: uniqueIds }, isActive: true },
@@ -210,6 +331,11 @@ export async function notify({ slug, recipientIds, variables = {}, actionUrl = n
       id: true,
       email: true,
       name: true,
+      role: true,
+      clientAccess: {
+        select: { role: true },
+        take: 1,
+      },
       notificationPreferences: {
         where: { templateSlug: slug },
         select: { emailEnabled: true, inAppEnabled: true },
@@ -217,37 +343,23 @@ export async function notify({ slug, recipientIds, variables = {}, actionUrl = n
     },
   });
 
-  // 3. Render simple template content (for in-app + subject + plaintext)
-  const renderedSubject = renderTemplate(template.subject, variables);
-  const renderedText = template.bodyText ? renderTemplate(template.bodyText, variables) : null;
-  const renderedInApp = renderTemplate(template.inAppMessage, variables);
+  const roleAllowsEmail = (user) => templateAllowsEmailForUser(template, user);
 
-  // 4. Build rich email HTML (with enriched task cards, comment threads, etc.)
-  //    Resolve actionUrl to full URL if it's a relative path
+  // 3. Resolve actionUrl to full URL if it's a relative path
   const fullActionUrl = actionUrl
     ? (actionUrl.startsWith('http') ? actionUrl : `${process.env.FRONTEND_URL || 'https://app.localwaves.ai'}${actionUrl}`)
     : null;
 
-  let brandedHtml;
-  try {
-    brandedHtml = await buildRichEmailHtml(slug, template, variables, fullActionUrl, metadata);
-  } catch (err) {
-    console.error(`[notify] Rich email build failed for "${slug}", falling back:`, err.message);
-    // Fallback to simple layout
-    brandedHtml = await wrapInBrandedLayout({
-      bodyHtml: renderTemplate(template.bodyHtml, variables),
-      preheader: renderedSubject,
-      actionUrl: fullActionUrl,
-      actionLabel: 'View in Portal',
-      category: template.category,
-    });
-  }
+  // 4. Pre-enrich shared context (detail card + comment thread) once
+  const sharedContext = await buildSharedEmailContext(slug, variables, metadata);
 
-  // 5. Process each recipient
+  // 5. Process each recipient with their audience-specific copy
   for (const user of recipients) {
     const pref = user.notificationPreferences[0];
-    const emailEnabled = pref ? pref.emailEnabled : true;
+    const userEmailEnabled = pref ? pref.emailEnabled : true;
     const inAppEnabled = pref ? pref.inAppEnabled : true;
+
+    const emailEnabled = userEmailEnabled && roleAllowsEmail(user);
 
     let emailSentAt = null;
     let emailError = null;
@@ -255,7 +367,29 @@ export async function notify({ slug, recipientIds, variables = {}, actionUrl = n
 
     if (channel === 'none') continue;
 
-    // In-app: create SystemAlert
+    // Resolve per-audience copy (variant if present, otherwise base template)
+    const audience = audienceForUser(user);
+    const source = resolveVariantForAudience(variantsByAudience, audience, template);
+    const renderedSubject = renderTemplate(source.subject, variables);
+    const renderedText = source.bodyText ? renderTemplate(source.bodyText, variables) : null;
+    const renderedInApp = renderTemplate(source.inAppMessage, variables);
+
+    // Build branded HTML for this recipient (reuses shared enrichment)
+    let brandedHtml;
+    try {
+      brandedHtml = buildRichEmailHtml(slug, template.category, source, variables, fullActionUrl, sharedContext);
+    } catch (err) {
+      console.error(`[notify] Rich email build failed for "${slug}"/${audience}, falling back:`, err.message);
+      brandedHtml = wrapInBrandedLayout({
+        bodyHtml: renderTemplate(source.bodyHtml, variables),
+        preheader: renderedSubject,
+        actionUrl: fullActionUrl,
+        actionLabel: source.ctaLabel || CTA_LABEL_MAP[template.category] || 'View in Portal',
+        category: template.category,
+      });
+    }
+
+    // In-app: create SystemAlert (uses this recipient's inAppMessage)
     let alertId = null;
     if (inAppEnabled) {
       try {

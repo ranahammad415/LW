@@ -230,6 +230,27 @@ async function main() {
   }
   console.log(`Auto-assigned WP presets to ${assigned} / ${allTasks.length} tasks`);
 
+  // ─── Apply role-based email flags to existing NotificationTemplate rows ───
+  // Only runs if notification templates have already been seeded (seed-notifications.js).
+  try {
+    const { execSync } = require('child_process');
+    const path = require('path');
+    const script = path.join(__dirname, 'seed-notification-roles.cjs');
+    execSync(`node "${script}"`, { stdio: 'inherit' });
+  } catch (err) {
+    console.warn('Notification role seed skipped/failed (non-fatal):', err.message);
+  }
+
+  // ─── Author per-audience variant copy (Owner / Team / Client Manager / Viewer) ───
+  try {
+    const { execSync } = require('child_process');
+    const path = require('path');
+    const script = path.join(__dirname, 'seed-notification-variants.cjs');
+    execSync(`node "${script}"`, { stdio: 'inherit' });
+  } catch (err) {
+    console.warn('Notification variant seed skipped/failed (non-fatal):', err.message);
+  }
+
   console.log('\nSeed complete. All users have password:', DEFAULT_PASSWORD);
 }
 

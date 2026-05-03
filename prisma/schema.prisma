@@ -113,21 +113,45 @@ model SystemAlert {
 }
 
 model NotificationTemplate {
+  id                 String   @id @default(uuid())
+  slug               String   @unique @db.VarChar(100)
+  name               String   @db.VarChar(255)
+  description        String?  @db.VarChar(500)
+  category           String   @db.VarChar(50)
+  subject            String   @db.VarChar(500)
+  bodyHtml           String   @db.LongText
+  bodyText           String?  @db.LongText
+  inAppMessage       String   @db.VarChar(500)
+  variables          Json?
+  isActive           Boolean  @default(true)
+  emailAgencyOwner   Boolean  @default(true)
+  emailPm            Boolean  @default(true)
+  emailClientManager Boolean  @default(true)
+  emailClientViewer  Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @default(now()) @updatedAt
+
+  variants           NotificationTemplateVariant[]
+
+  @@map("notificationtemplate")
+}
+
+model NotificationTemplateVariant {
   id           String   @id @default(uuid())
-  slug         String   @unique @db.VarChar(100)
-  name         String   @db.VarChar(255)
-  description  String?  @db.VarChar(500)
-  category     String   @db.VarChar(50)
+  templateSlug String   @db.VarChar(100)
+  audience     String   @db.VarChar(30) // AGENCY_OWNER | AGENCY_TEAM | CLIENT_MANAGER | CLIENT_VIEWER
   subject      String   @db.VarChar(500)
   bodyHtml     String   @db.LongText
   bodyText     String?  @db.LongText
   inAppMessage String   @db.VarChar(500)
-  variables    Json?
-  isActive     Boolean  @default(true)
+  ctaLabel     String?  @db.VarChar(60)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @default(now()) @updatedAt
 
-  @@map("notificationtemplate")
+  template     NotificationTemplate @relation(fields: [templateSlug], references: [slug], onDelete: Cascade)
+
+  @@unique([templateSlug, audience])
+  @@map("notificationtemplatevariant")
 }
 
 model NotificationLog {

@@ -29,6 +29,67 @@ const patchProfileBodySchema = z.object({
   jobTitle: z.string().max(255).optional().nullable(),
 });
 
+// Display metadata for notification categories (ordered). Only categories in
+// this map are exposed to clients; any template belonging to an unknown
+// category is ignored by the client-facing preferences API.
+const CATEGORY_LABELS = {
+  task:         { label: 'Task updates',            description: 'Assignments, status changes, comments, deliverables' },
+  pipeline:     { label: 'Content approvals',       description: 'Content submitted, approved, changes requested, published' },
+  client_input: { label: 'Requests for your input', description: 'PM requests, asset uploads, keyword suggestions from your team' },
+  issue:        { label: 'Support issues',          description: 'Issue updates, comments, resolutions' },
+  keyword:      { label: 'Keyword research',        description: 'Approvals, rejections, suggested edits' },
+  project:      { label: 'Project announcements',   description: 'New projects created for your account' },
+  meeting:      { label: 'Meetings',                description: 'Meeting invitations and scheduling' },
+  report:       { label: 'Reports',                 description: 'Monthly reports published to your portal' },
+  client:       { label: 'Account activity',        description: 'Welcome emails, password resets, team member changes' },
+  standup:      { label: 'Team standups',           description: 'Daily standup updates' },
+};
+
+const patchNotificationPreferencesBodySchema = z.object({
+  categories: z.record(z.string(), z.boolean()),
+});
+
+async function buildClientNotificationPreferences(userId) {
+  const [templates, prefs] = await Promise.all([
+    prisma.notificationTemplate.findMany({
+      where: { isActive: true },
+      select: { slug: true, category: true },
+    }),
+    prisma.notificationPreference.findMany({
+      where: { userId },
+      select: { templateSlug: true, emailEnabled: true },
+    }),
+  ]);
+
+  const prefBySlug = new Map(prefs.map((p) => [p.templateSlug, p.emailEnabled]));
+
+  // Bucket templates by category (only known categories).
+  const byCategory = new Map();
+  for (const t of templates) {
+    if (!CATEGORY_LABELS[t.category]) continue;
+    if (!byCategory.has(t.category)) byCategory.set(t.category, []);
+    byCategory.get(t.category).push(t.slug);
+  }
+
+  const categories = [];
+  for (const [key, meta] of Object.entries(CATEGORY_LABELS)) {
+    const slugs = byCategory.get(key) || [];
+    if (slugs.length === 0) continue;
+    // Category enabled only when every template in it has email !== false
+    // (missing preference row defaults to true).
+    const emailEnabled = slugs.every((slug) => prefBySlug.get(slug) !== false);
+    categories.push({
+      category: key,
+      label: meta.label,
+      description: meta.description,
+      emailEnabled,
+      templateCount: slugs.length,
+    });
+  }
+
+  return { categories };
+}
+
 export async function clientHubRoutes(app) {
   // --- Meetings ---
   app.get(
@@ -476,6 +537,89 @@ export async function clientHubRoutes(app) {
         jobTitle: clientUser?.jobTitle ?? null,
         client: clientUser?.client ?? null,
       });
+    }
+  );
+
+  // --- Notification preferences GET ---
+  app.get(
+    '/notification-preferences',
+    { onRequest: [app.verifyJwt, app.requireClient] },
+    async (request, reply) => {
+      const payload = await buildClientNotificationPreferences(request.user.id);
+      return reply.send(payload);
+    }
+  );
+
+  // --- Notification preferences PATCH ---
+  app.patch(
+    '/notification-preferences',
+    {
+      onRequest: [app.verifyJwt, app.requireClient],
+      schema: {
+        body: {
+          type: 'object',
+          required: ['categories'],
+          properties: {
+            categories: {
+              type: 'object',
+              additionalProperties: { type: 'boolean' },
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const parsed = patchNotificationPreferencesBodySchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          message: 'Validation failed',
+          errors: parsed.error.flatten().fieldErrors,
+        });
+      }
+
+      const { categories } = parsed.data;
+      const categoryKeys = Object.keys(categories);
+
+      // Reject unknown category keys.
+      const unknown = categoryKeys.filter((k) => !CATEGORY_LABELS[k]);
+      if (unknown.length > 0) {
+        return reply.status(400).send({
+          message: `Unknown notification categories: ${unknown.join(', ')}`,
+        });
+      }
+
+      if (categoryKeys.length === 0) {
+        const payload = await buildClientNotificationPreferences(request.user.id);
+        return reply.send(payload);
+      }
+
+      // Fetch all active templates in the affected categories.
+      const templates = await prisma.notificationTemplate.findMany({
+        where: { isActive: true, category: { in: categoryKeys } },
+        select: { slug: true, category: true },
+      });
+
+      const userId = request.user.id;
+      const ops = templates.map((t) =>
+        prisma.notificationPreference.upsert({
+          where: { userId_templateSlug: { userId, templateSlug: t.slug } },
+          create: {
+            userId,
+            templateSlug: t.slug,
+            emailEnabled: categories[t.category],
+            inAppEnabled: true,
+          },
+          // Only touch emailEnabled on update; preserve existing inAppEnabled.
+          update: { emailEnabled: categories[t.category] },
+        })
+      );
+
+      if (ops.length > 0) {
+        await prisma.$transaction(ops);
+      }
+
+      const payload = await buildClientNotificationPreferences(userId);
+      return reply.send(payload);
     }
   );
 
