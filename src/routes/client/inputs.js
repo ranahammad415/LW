@@ -4,18 +4,11 @@ import { dirname, join } from 'path';
 import { mkdirSync, writeFileSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { notify } from '../../lib/notificationService.js';
+import { resolveUploadBaseUrl, validateUpload, sanitizeUploadFilename, MAX_UPLOAD_SIZE_BYTES } from '../../lib/uploadUrl.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const UPLOADS_ROOT = join(__dirname, '..', '..', '..', 'uploads');
-
-async function getClientIdsForUser(userId) {
-  const clientUsers = await prisma.clientUser.findMany({
-    where: { userId },
-    select: { clientId: true },
-  });
-  return clientUsers.map((cu) => cu.clientId);
-}
 
 export async function clientInputRoutes(app) {
   app.get(
@@ -51,6 +44,13 @@ export async function clientInputRoutes(app) {
 
       const buffer = await data.toBuffer();
       const fileName = data.filename || 'attachment';
+      const validation = validateUpload({ mimetype: data.mimetype, filename: fileName, size: buffer.length });
+      if (!validation.ok) {
+        return reply.status(400).send({ message: validation.message });
+      }
+      if (buffer.length > MAX_UPLOAD_SIZE_BYTES) {
+        return reply.status(413).send({ message: 'File too large' });
+      }
 
       // Extract multipart form fields
       const folder = data.fields.folder?.value || 'general';
@@ -71,13 +71,14 @@ export async function clientInputRoutes(app) {
       mkdirSync(dir, { recursive: true });
 
       // Save file with UUID prefix
-      const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const safeName = sanitizeUploadFilename(fileName);
       const storedName = `${randomUUID()}-${safeName}`;
       writeFileSync(join(dir, storedName), buffer);
 
-      // Construct the accessible URL
-      const baseUrl = `${request.protocol}://${request.host}`;
-      const fileUrl = `${baseUrl}/uploads/${year}/${monthDay}/${storedName}`;
+      // Construct the accessible URL (or relative path if we can't trust the host).
+      const baseUrl = resolveUploadBaseUrl(request);
+      const relPath = `/uploads/${year}/${monthDay}/${storedName}`;
+      const fileUrl = baseUrl ? `${baseUrl}${relPath}` : relPath;
 
       const asset = await prisma.clientAsset.create({
         data: {

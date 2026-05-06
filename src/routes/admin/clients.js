@@ -4,12 +4,12 @@ import { prisma } from '../../lib/prisma.js';
 import { createClientBodySchema, updatePackageBodySchema } from '../../schemas/admin.js';
 import { notify } from '../../lib/notificationService.js';
 import { excludeActor } from '../../lib/notifyRecipients.js';
+import { BCRYPT_ROUNDS } from '../../lib/passwordPolicy.js';
 
 const accessSecret = process.env.JWT_ACCESS_SECRET;
 const accessExpiresIn = process.env.JWT_ACCESS_EXPIRES_IN || '15m';
 
 const TEMP_PASSWORD_LENGTH = 16;
-const BCRYPT_ROUNDS = 10;
 
 function generateTemporaryPassword() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
@@ -214,6 +214,7 @@ export async function adminClientRoutes(app) {
                   email: true,
                   name: true,
                   phone: true,
+                  role: true,
                 },
               },
             },
@@ -283,6 +284,7 @@ export async function adminClientRoutes(app) {
                   email: true,
                   name: true,
                   phone: true,
+                  role: true,
                 },
               },
             },

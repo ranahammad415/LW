@@ -6,9 +6,23 @@ import { prisma } from '../lib/prisma.js';
 import { loginBodySchema } from '../schemas/auth.js';
 import { sendPasswordResetEmail } from '../lib/passwordResetEmail.js';
 import { checkPasswordResetRateLimit } from '../lib/passwordResetRateLimit.js';
+import { hashPassword, validatePasswordStrength } from '../lib/passwordPolicy.js';
 
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
-const PASSWORD_MIN_LENGTH = 8;
+
+// Stricter per-route rate-limit configs (enforced via @fastify/rate-limit).
+const LOGIN_RATE_LIMIT = {
+  max: Number(process.env.RATE_LIMIT_LOGIN_MAX || 10),
+  timeWindow: process.env.RATE_LIMIT_LOGIN_WINDOW || '15 minutes',
+};
+const REFRESH_RATE_LIMIT = {
+  max: Number(process.env.RATE_LIMIT_REFRESH_MAX || 60),
+  timeWindow: process.env.RATE_LIMIT_REFRESH_WINDOW || '15 minutes',
+};
+const RESET_RATE_LIMIT = {
+  max: Number(process.env.RATE_LIMIT_RESET_MAX || 10),
+  timeWindow: process.env.RATE_LIMIT_RESET_WINDOW || '1 hour',
+};
 
 function hashResetToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
@@ -48,7 +62,7 @@ if (googleEnabled) {
 export async function authRoutes(app) {
   app.post(
     '/login',
-    {},
+    { config: { rateLimit: LOGIN_RATE_LIMIT } },
     async (request, reply) => {
       try {
         const parsed = loginBodySchema.safeParse(request.body);
@@ -121,7 +135,7 @@ export async function authRoutes(app) {
 
   app.post(
     '/refresh',
-    {},
+    { config: { rateLimit: REFRESH_RATE_LIMIT } },
     async (request, reply) => {
       const refreshToken = request.cookies?.refreshToken;
       if (!refreshToken) {
@@ -161,6 +175,23 @@ export async function authRoutes(app) {
         { expiresIn: sess.accessExpiresIn }
       );
 
+      // Refresh-token rotation: issue a new refresh token on every successful /refresh
+      // and overwrite the cookie. This limits the blast radius of a leaked refresh
+      // token (old one keeps its original TTL but any future /refresh will
+      // supersede it for legitimate clients).
+      const newRefreshToken = jwt.sign(
+        { sub: user.id, type: 'refresh', tv: user.tokenVersion ?? 0 },
+        refreshSecret,
+        { expiresIn: sess.refreshExpiresIn }
+      );
+      reply.setCookie('refreshToken', newRefreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+        maxAge: sess.refreshMaxAge,
+        path: '/api/auth',
+      });
+
       return reply.send({ accessToken });
     }
   );
@@ -178,7 +209,8 @@ export async function authRoutes(app) {
       const linkToken = request.query.token || null;
       const isLink = request.query.link === 'true';
 
-      // Store state + optional link token in a cookie
+      // Store state + optional link token in a SIGNED cookie so it can't be
+      // tampered with to flip `link`/`token` values.
       const statePayload = JSON.stringify({ state, link: isLink, token: linkToken });
       reply.setCookie('google_oauth_state', statePayload, {
         httpOnly: true,
@@ -186,6 +218,7 @@ export async function authRoutes(app) {
         sameSite: 'lax',
         maxAge: 600, // 10 minutes
         path: '/api/auth',
+        signed: true,
       });
 
       const authUrl = googleOAuth2Client.generateAuthUrl({
@@ -213,12 +246,14 @@ export async function authRoutes(app) {
         return reply.redirect(`${frontendUrl}/auth/google/callback?error=Missing+authorization+code`);
       }
 
-      // Verify state from cookie
+      // Verify signed state cookie.
       let stateData;
       try {
         const raw = request.cookies?.google_oauth_state;
         if (!raw) throw new Error('Missing state cookie');
-        stateData = JSON.parse(raw);
+        const unsigned = request.unsignCookie(raw);
+        if (!unsigned.valid) throw new Error('State cookie signature invalid');
+        stateData = JSON.parse(unsigned.value);
         if (stateData.state !== returnedState) throw new Error('State mismatch');
       } catch {
         reply.clearCookie('google_oauth_state', { path: '/api/auth' });
@@ -261,10 +296,36 @@ export async function authRoutes(app) {
           const jwtPayload = jwt.verify(stateData.token, accessSecret);
           const userId = jwtPayload.sub;
 
+          // Re-load the user so we can verify tokenVersion (defends against a
+          // replayed access token after password reset) and isActive state.
+          const sessionUser = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { id: true, isActive: true, tokenVersion: true },
+          });
+          if (!sessionUser || !sessionUser.isActive) {
+            return reply.redirect(`${frontendUrl}/auth/google/callback?error=Session+invalid&mode=link`);
+          }
+          if (typeof jwtPayload.tv === 'number' && jwtPayload.tv !== sessionUser.tokenVersion) {
+            return reply.redirect(`${frontendUrl}/auth/google/callback?error=Session+expired&mode=link`);
+          }
+
           // Check if this googleId is already used by another user
           const existingGoogle = await prisma.user.findUnique({ where: { googleId } });
           if (existingGoogle && existingGoogle.id !== userId) {
             return reply.redirect(`${frontendUrl}/auth/google/callback?error=Google+account+already+linked+to+another+user&mode=link`);
+          }
+
+          // Also refuse if the googleEmail is the login email of another account,
+          // which would later collide at login-by-email lookups.
+          const emailCollision = await prisma.user.findFirst({
+            where: {
+              email: googleEmail.toLowerCase(),
+              id: { not: userId },
+            },
+            select: { id: true },
+          });
+          if (emailCollision) {
+            return reply.redirect(`${frontendUrl}/auth/google/callback?error=Google+email+already+used+by+another+account&mode=link`);
           }
 
           await prisma.user.update({
@@ -497,7 +558,7 @@ export async function authRoutes(app) {
   // invalidates prior pending tokens for the user, and emails the link.
   app.post(
     '/forgot-password',
-    {},
+    { config: { rateLimit: RESET_RATE_LIMIT } },
     async (request, reply) => {
       const body = request.body || {};
       const rawEmail = typeof body.email === 'string' ? body.email.trim() : '';
@@ -583,7 +644,7 @@ export async function authRoutes(app) {
   // ── Public: Consume reset token + set new password ──
   app.post(
     '/reset-password',
-    {},
+    { config: { rateLimit: RESET_RATE_LIMIT } },
     async (request, reply) => {
       const body = request.body || {};
       const token = typeof body.token === 'string' ? body.token : '';
@@ -592,13 +653,9 @@ export async function authRoutes(app) {
       if (!token) {
         return reply.status(400).send({ message: 'Reset token is required' });
       }
-      if (!newPassword || newPassword.length < PASSWORD_MIN_LENGTH) {
-        return reply.status(400).send({
-          message: `Password must be at least ${PASSWORD_MIN_LENGTH} characters`,
-        });
-      }
-      if (newPassword.length > 200) {
-        return reply.status(400).send({ message: 'Password is too long' });
+      const strength = validatePasswordStrength(newPassword);
+      if (!strength.ok) {
+        return reply.status(400).send({ message: strength.message });
       }
 
       const tokenHash = hashResetToken(token);
@@ -610,7 +667,7 @@ export async function authRoutes(app) {
         return reply.status(400).send({ message: 'Reset link is invalid or has expired' });
       }
 
-      const passwordHash = await bcrypt.hash(newPassword, 12);
+      const passwordHash = await hashPassword(newPassword);
 
       // Atomically: update password + bump tokenVersion + mark token used.
       await prisma.$transaction([

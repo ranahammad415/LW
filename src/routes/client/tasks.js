@@ -8,18 +8,11 @@ export async function clientTasksRoutes(app) {
       onRequest: [app.verifyJwt, app.requireClient],
     },
     async (request, reply) => {
-      const userId = request.user.id;
+      const clientIds = request.clientAccountIds;
 
-      const clientUsers = await prisma.clientUser.findMany({
-        where: { userId },
-        select: { clientId: true },
-      });
-
-      if (clientUsers.length === 0) {
+      if (!clientIds?.length) {
         return reply.status(404).send({ message: 'No client account linked to this user' });
       }
-
-      const clientIds = clientUsers.map((cu) => cu.clientId);
 
       const tasks = await prisma.task.findMany({
         where: {

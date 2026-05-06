@@ -1,14 +1,14 @@
 import { prisma } from '../../lib/prisma.js';
 import { notify } from '../../lib/notificationService.js';
 
-async function getPrimaryClient(userId) {
-  const clientUsers = await prisma.clientUser.findMany({
-    where: { userId },
-    include: { client: true },
-  });
-  if (clientUsers.length === 0) return null;
-  const primary = clientUsers.find((cu) => cu.isPrimaryContact)?.client ?? clientUsers[0].client;
-  return primary;
+async function getPrimaryClient(request) {
+  const clientIds = request.clientAccountIds || [];
+  if (clientIds.length === 0) return null;
+  const primaryLink = (request.clientUserRoles || []).find((cu) => cu.isPrimaryContact);
+  const targetId = primaryLink && clientIds.includes(primaryLink.clientId)
+    ? primaryLink.clientId
+    : clientIds[0];
+  return prisma.clientAccount.findUnique({ where: { id: targetId } });
 }
 
 export async function clientOnboardingRoutes(app) {
@@ -29,7 +29,7 @@ export async function clientOnboardingRoutes(app) {
       },
     },
     async (request, reply) => {
-      const client = await getPrimaryClient(request.user.id);
+      const client = await getPrimaryClient(request);
       if (!client) return reply.status(404).send({ message: 'No client account linked' });
       return reply.send({
         onboardingStatus: client.onboardingStatus,
@@ -58,7 +58,7 @@ export async function clientOnboardingRoutes(app) {
       },
     },
     async (request, reply) => {
-      const client = await getPrimaryClient(request.user.id);
+      const client = await getPrimaryClient(request);
       if (!client) return reply.status(404).send({ message: 'No client account linked' });
       const data = request.body || {};
       await prisma.$transaction([
@@ -104,7 +104,7 @@ export async function clientOnboardingRoutes(app) {
       },
     },
     async (request, reply) => {
-      const client = await getPrimaryClient(request.user.id);
+      const client = await getPrimaryClient(request);
       if (!client) return reply.status(404).send({ message: 'No client account linked' });
       const { signerName } = request.body;
       const ip = request.ip || request.headers['x-forwarded-for'] || request.headers['x-real-ip'];
@@ -161,7 +161,7 @@ export async function clientOnboardingRoutes(app) {
       },
     },
     async (request, reply) => {
-      const client = await getPrimaryClient(request.user.id);
+      const client = await getPrimaryClient(request);
       if (!client) return reply.status(404).send({ message: 'No client account linked' });
       const body = request.body || {};
       const checklist = {
@@ -268,13 +268,9 @@ export async function clientOnboardingRoutes(app) {
   // PROJECT-SCOPED ONBOARDING ENDPOINTS
   // ═══════════════════════════════════════════════════════════
 
-  async function verifyClientProjectAccess(userId, projectId) {
-    const clientUsers = await prisma.clientUser.findMany({
-      where: { userId },
-      select: { clientId: true },
-    });
-    if (clientUsers.length === 0) return null;
-    const clientIds = clientUsers.map((cu) => cu.clientId);
+  async function verifyClientProjectAccess(request, projectId) {
+    const clientIds = request.clientAccountIds || [];
+    if (clientIds.length === 0) return null;
     const project = await prisma.project.findUnique({
       where: { id: projectId },
       include: { client: true },
@@ -307,7 +303,7 @@ export async function clientOnboardingRoutes(app) {
       },
     },
     async (request, reply) => {
-      const project = await verifyClientProjectAccess(request.user.id, request.params.projectId);
+      const project = await verifyClientProjectAccess(request, request.params.projectId);
       if (!project) return reply.status(404).send({ message: 'Project not found' });
       return reply.send({
         projectId: project.id,
@@ -343,7 +339,7 @@ export async function clientOnboardingRoutes(app) {
       },
     },
     async (request, reply) => {
-      const project = await verifyClientProjectAccess(request.user.id, request.params.projectId);
+      const project = await verifyClientProjectAccess(request, request.params.projectId);
       if (!project) return reply.status(404).send({ message: 'Project not found' });
       const data = request.body || {};
       await prisma.$transaction([
@@ -393,7 +389,7 @@ export async function clientOnboardingRoutes(app) {
       },
     },
     async (request, reply) => {
-      const project = await verifyClientProjectAccess(request.user.id, request.params.projectId);
+      const project = await verifyClientProjectAccess(request, request.params.projectId);
       if (!project) return reply.status(404).send({ message: 'Project not found' });
       const { signerName } = request.body;
       const ip = request.ip || request.headers['x-forwarded-for'] || request.headers['x-real-ip'];
@@ -457,7 +453,7 @@ export async function clientOnboardingRoutes(app) {
       },
     },
     async (request, reply) => {
-      const project = await verifyClientProjectAccess(request.user.id, request.params.projectId);
+      const project = await verifyClientProjectAccess(request, request.params.projectId);
       if (!project) return reply.status(404).send({ message: 'Project not found' });
       const body = request.body || {};
       const checklist = {

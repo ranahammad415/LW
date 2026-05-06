@@ -36,16 +36,11 @@ export async function clientAnalyticsRoutes(app) {
         select: { googleEmail: true },
       });
 
-      const clientUsers = await prisma.clientUser.findMany({
-        where: { userId },
-        select: { clientId: true },
-      });
+      const clientIds = request.clientAccountIds;
 
-      if (clientUsers.length === 0) {
+      if (!clientIds?.length) {
         return reply.send([]);
       }
-
-      const clientIds = clientUsers.map((cu) => cu.clientId);
 
       // Check if any analytics emails are configured (multi-email table first, legacy fallback)
       const analyticsEmailEntries = await prisma.clientAnalyticsEmail.findMany({

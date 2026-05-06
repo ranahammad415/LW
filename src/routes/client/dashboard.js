@@ -72,19 +72,29 @@ export async function clientDashboardRoutes(app) {
       },
     },
     async (request, reply) => {
-      const userId = request.user.id;
-
-      const clientUsers = await prisma.clientUser.findMany({
-        where: { userId },
-        include: { client: true },
-      });
-
-      if (clientUsers.length === 0) {
+      const clientIds = request.clientAccountIds;
+      if (!clientIds?.length) {
         return reply.status(404).send({ message: 'No client account linked to this user' });
       }
 
-      const clientIds = clientUsers.map((cu) => cu.clientId);
-      const primaryClient = clientUsers.find((cu) => cu.isPrimaryContact)?.client ?? clientUsers[0].client;
+      // Load the full client rows so we can pick a primary and render its name.
+      const clientAccounts = await prisma.clientAccount.findMany({
+        where: { id: { in: clientIds } },
+      });
+
+      // When scope is narrowed (single id) there is exactly one row. Otherwise,
+      // prefer the user's primary-contact link; fall back to the first row.
+      let primaryClient = clientAccounts[0];
+      if (clientAccounts.length > 1) {
+        const primaryLink = (request.clientUserRoles || []).find((cu) => cu.isPrimaryContact);
+        if (primaryLink) {
+          const match = clientAccounts.find((c) => c.id === primaryLink.clientId);
+          if (match) primaryClient = match;
+        }
+      }
+      if (!primaryClient) {
+        return reply.status(404).send({ message: 'No client account linked to this user' });
+      }
 
       // Fetch active tasks
       const activeTasks = await prisma.task.findMany({

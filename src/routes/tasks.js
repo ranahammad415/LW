@@ -8,6 +8,7 @@ import { mkdirSync, writeFileSync, unlinkSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { notify } from '../lib/notificationService.js';
 import { extractMentionedUserIds } from '../lib/mentionParser.js';
+import { resolveUploadBaseUrl, validateUpload, sanitizeUploadFilename, MAX_UPLOAD_SIZE_BYTES } from '../lib/uploadUrl.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -18,10 +19,15 @@ function buildTaskWhere(user) {
     return {};
   }
   if (user.role === 'PM') {
+    // A PM can see tasks for projects they lead OR projects belonging to a
+    // client they lead/secondary‑lead. The previous filter omitted
+    // `client.leadPmId`, which hid tasks for clients where the PM was the
+    // primary lead but not the project‑level lead.
     return {
       project: {
         OR: [
           { leadPmId: user.id },
+          { client: { leadPmId: user.id } },
           { client: { secondaryPmId: user.id } },
         ],
       },
@@ -423,6 +429,8 @@ Return the id of the single most restrictive preset that still allows this task 
           user: userMessage,
           json: true,
           maxTokens: 512,
+          feature: 'task_wp_preset_suggest',
+          userId: request.user?.id || null,
         });
 
         if (!text) {
@@ -1438,17 +1446,25 @@ Return the id of the single most restrictive preset that still allows this task 
       const buffer = await data.toBuffer();
       const fileName = data.filename || 'attachment';
       const fileSize = buffer.length;
+      const validation = validateUpload({ mimetype: data.mimetype, filename: fileName, size: fileSize });
+      if (!validation.ok) {
+        return reply.status(400).send({ message: validation.message });
+      }
+      if (fileSize > MAX_UPLOAD_SIZE_BYTES) {
+        return reply.status(413).send({ message: 'File too large' });
+      }
       // Save to uploads/YYYY/MM-DD/{uuid}-{filename}
       const now = new Date();
       const year = String(now.getFullYear());
       const monthDay = `${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
       const dir = join(UPLOADS_ROOT, year, monthDay);
       mkdirSync(dir, { recursive: true });
-      const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const safeName = sanitizeUploadFilename(fileName);
       const storedName = `${randomUUID()}-${safeName}`;
       writeFileSync(join(dir, storedName), buffer);
-      const baseUrl = `${request.protocol}://${request.host}`;
-      const fileUrl = `${baseUrl}/uploads/${year}/${monthDay}/${storedName}`;
+      const baseUrl = resolveUploadBaseUrl(request);
+      const relPath = `/uploads/${year}/${monthDay}/${storedName}`;
+      const fileUrl = baseUrl ? `${baseUrl}${relPath}` : relPath;
       const attachment = await prisma.taskAttachment.create({ data: { taskId, uploadedById: user.id, fileName, fileUrl, fileSize }, include: { uploadedBy: { select: { id: true, name: true } } } });
       await prisma.taskActivityLog.create({ data: { taskId, actorId: user.id, action: 'attachment_added', detail: fileName } });
       return reply.status(201).send({ id: attachment.id, taskId: attachment.taskId, fileName: attachment.fileName, fileUrl: attachment.fileUrl, fileSize: attachment.fileSize, createdAt: attachment.createdAt.toISOString(), uploadedBy: attachment.uploadedBy });

@@ -52,6 +52,7 @@ export async function extractCompetitors(responseSnippet) {
         json: true,
         maxTokens: 512,
         temperature: 0,
+        feature: 'competitor_extraction',
       });
 
       if (parsed && Array.isArray(parsed.competitors)) {

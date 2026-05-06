@@ -20,6 +20,7 @@ import { adminGlobalRoutes } from '../../src/routes/admin/global.js';
 import { adminAutomationRoutes } from '../../src/routes/admin/automation.js';
 import { adminWpRoutes } from '../../src/routes/admin/wp.js';
 import { adminNotificationRoutes } from '../../src/routes/admin/notifications.js';
+import { adminActivityReportRoutes } from '../../src/routes/admin/activity-reports.js';
 
 import { clientDashboardRoutes } from '../../src/routes/client/dashboard.js';
 import { clientAnalyticsRoutes } from '../../src/routes/client/analytics.js';
@@ -79,6 +80,7 @@ export async function buildApp() {
   app.register(adminAutomationRoutes, { prefix: '/api/admin' });
   app.register(adminWpRoutes, { prefix: '/api/admin' });
   app.register(adminNotificationRoutes, { prefix: '/api/admin' });
+  app.register(adminActivityReportRoutes, { prefix: '/api/admin' });
 
   app.register(projectRoutes, { prefix: '/api/projects' });
   app.register(taskRoutes, { prefix: '/api/tasks' });

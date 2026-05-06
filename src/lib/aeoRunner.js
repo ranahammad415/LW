@@ -27,6 +27,7 @@ export async function queryAiPlatform(platform, promptQuery) {
         system: `You are simulating the ${platform} AI search engine. Given a user query, produce a realistic search-engine-style response that mentions relevant companies, domains, and brands in the space. Be specific and include real-sounding domain names.`,
         user: promptQuery,
         maxTokens: 512,
+        feature: 'aeo_platform_query',
       });
       if (text && text.trim()) return text;
     } catch (err) {

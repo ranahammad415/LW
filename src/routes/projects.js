@@ -924,6 +924,9 @@ export async function projectRoutes(app) {
           user: userMessage,
           json: true,
           maxTokens: 1024,
+          feature: 'project_suggest_tasks',
+          userId: request.user?.id || null,
+          clientId: project.clientId || null,
         });
 
         if (!text) {

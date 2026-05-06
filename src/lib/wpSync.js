@@ -34,6 +34,7 @@ export async function maybeGenerateSummary({ excerpt, isElementor = false }) {
       system: 'Summarize this content change for a PM in 1-2 short sentences.',
       user: text.slice(0, 2000),
       maxTokens: 120,
+      feature: 'wp_change_summary',
     });
     return summary?.trim()?.slice(0, 1000) || null;
   } catch {

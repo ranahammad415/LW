@@ -26,15 +26,9 @@ export async function clientReportRoutes(app) {
       },
     },
     async (request, reply) => {
-      const userId = request.user.id;
+      const clientIds = request.clientAccountIds;
 
-      const clientUsers = await prisma.clientUser.findMany({
-        where: { userId },
-        select: { clientId: true },
-      });
-      const clientIds = clientUsers.map((cu) => cu.clientId);
-
-      if (clientIds.length === 0) {
+      if (!clientIds?.length) {
         return reply.send([]);
       }
 

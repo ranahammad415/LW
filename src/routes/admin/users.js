@@ -1,7 +1,11 @@
 import bcrypt from 'bcrypt';
 import { prisma } from '../../lib/prisma.js';
+import { BCRYPT_ROUNDS, validatePasswordStrength } from '../../lib/passwordPolicy.js';
 
-const BCRYPT_ROUNDS = 10;
+const CHANGE_PASSWORD_RATE_LIMIT = {
+  max: Number(process.env.RATE_LIMIT_CHANGE_PASSWORD_MAX || 10),
+  timeWindow: process.env.RATE_LIMIT_CHANGE_PASSWORD_WINDOW || '15 minutes',
+};
 
 export async function adminUserRoutes(app) {
   app.get(
@@ -101,19 +105,24 @@ export async function adminUserRoutes(app) {
     '/change-password',
     {
       onRequest: [app.verifyJwt, app.requireOwner],
+      config: { rateLimit: CHANGE_PASSWORD_RATE_LIMIT },
       schema: {
         body: {
           type: 'object',
           required: ['currentPassword', 'newPassword'],
           properties: {
             currentPassword: { type: 'string', minLength: 1 },
-            newPassword: { type: 'string', minLength: 8, maxLength: 128 },
+            newPassword: { type: 'string', minLength: 10, maxLength: 200 },
           },
         },
       },
     },
     async (request, reply) => {
       const { currentPassword, newPassword } = request.body;
+      const strength = validatePasswordStrength(newPassword);
+      if (!strength.ok) {
+        return reply.status(400).send({ message: strength.message });
+      }
       const user = await prisma.user.findUnique({
         where: { id: request.user.id },
         select: { id: true, passwordHash: true },
@@ -128,7 +137,11 @@ export async function adminUserRoutes(app) {
       const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
       await prisma.user.update({
         where: { id: user.id },
-        data: { passwordHash },
+        data: {
+          passwordHash,
+          // Bump tokenVersion so existing sessions/refresh tokens are invalidated.
+          tokenVersion: { increment: 1 },
+        },
       });
 
       return reply.send({ message: 'Password updated successfully' });

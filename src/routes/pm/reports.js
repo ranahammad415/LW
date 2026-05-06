@@ -239,6 +239,9 @@ ${completedTasks.length === 0 ? 'No completed tasks recorded for this month.' : 
             json: true,
             temperature: 0.7,
             maxTokens: 1024,
+            feature: 'monthly_report',
+            userId: request.user?.id || null,
+            clientId,
           });
           const raw = text;
           if (raw) {

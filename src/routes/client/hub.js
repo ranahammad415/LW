@@ -2,14 +2,6 @@ import { z } from 'zod';
 import { prisma } from '../../lib/prisma.js';
 import { notify } from '../../lib/notificationService.js';
 
-async function getClientIdsForUser(userId) {
-  const clientUsers = await prisma.clientUser.findMany({
-    where: { userId },
-    select: { clientId: true },
-  });
-  return clientUsers.map((cu) => cu.clientId);
-}
-
 const createIssueBodySchema = z.object({
   title: z.string().min(1).max(500),
   description: z.string().min(1),

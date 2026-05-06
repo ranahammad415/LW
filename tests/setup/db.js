@@ -62,6 +62,7 @@ export async function truncateAllTables() {
     'ChatChannel',
     'MeetingRecord',
     'MonthlyReport',
+    'projectactivityreport',
     'ClientAsset',
     'BusinessUpdate',
     'OnboardingChecklist',

@@ -1021,6 +1021,27 @@ model ToolArticle {
   @@map("tool_articles")
 }
 
+// ============================================
+// Project Activity Report — AI-generated monthly summary
+// ============================================
+
+model ProjectActivityReport {
+  id          String   @id @default(uuid())
+  scope       String   @db.VarChar(20) // "PROJECT" | "AGENCY"
+  projectId   String?
+  month       String   @db.VarChar(7)  // "YYYY-MM"
+  factsJson   Json
+  aiJson      Json?
+  narrativeMd String   @db.LongText
+  generatedBy String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now()) @updatedAt
+
+  @@unique([scope, projectId, month])
+  @@index([month])
+  @@map("projectactivityreport")
+}
+
 model AgencySetting {
   id                String   @id @default(uuid())
   agencyName        String   @default("Localwaves") @db.VarChar(255)
@@ -1412,4 +1433,61 @@ model OmniSearchContentVersion {
   @@index([sessionId])
   @@index([savedAt])
   @@index([sessionId, versionNumber])
+}
+
+// ============================================
+// AI — Usage log, Nova conversations & messages
+// ============================================
+
+model AiUsageLog {
+  id        String   @id @default(uuid())
+  model     String   @db.VarChar(100)
+  feature   String   @db.VarChar(100)
+  userId    String?
+  clientId  String?
+  tokensIn  Int      @default(0)
+  tokensOut Int      @default(0)
+  latencyMs Int      @default(0)
+  success   Boolean  @default(true)
+  errorCode String?  @db.VarChar(20)
+  createdAt DateTime @default(now())
+
+  @@index([feature, createdAt])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("aiusagelog")
+}
+
+model NovaConversation {
+  id            String   @id @default(uuid())
+  userId        String
+  clientId      String?
+  title         String   @default("New conversation") @db.VarChar(255)
+  summary       String?  @db.LongText
+  lastMessageAt DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @default(now()) @updatedAt
+
+  messages NovaMessage[]
+
+  @@index([userId, lastMessageAt])
+  @@index([clientId])
+  @@map("novaconversation")
+}
+
+model NovaMessage {
+  id             String   @id @default(uuid())
+  conversationId String
+  role           String   @db.VarChar(20) // 'user' | 'assistant'
+  content        String   @db.LongText
+  audioUrl       String?  @db.VarChar(500)
+  model          String?  @db.VarChar(100)
+  tokensIn       Int?
+  tokensOut      Int?
+  createdAt      DateTime @default(now())
+
+  conversation NovaConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@map("novamessage")
 }

@@ -55,6 +55,7 @@ const importOrder = [
   'TaskComment',
   'LookerEmbed',
   'MonthlyReport',
+    'ProjectActivityReport',
   'ClientAsset',
   'KeywordSuggestion',
   'BusinessUpdate',

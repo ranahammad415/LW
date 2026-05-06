@@ -8,18 +8,10 @@ export async function clientProjectsRoutes(app) {
       onRequest: [app.verifyJwt, app.requireClient],
     },
     async (request, reply) => {
-      const userId = request.user.id;
-
-      const clientUsers = await prisma.clientUser.findMany({
-        where: { userId },
-        select: { clientId: true },
-      });
-
-      if (clientUsers.length === 0) {
+      const clientIds = request.clientAccountIds;
+      if (!clientIds?.length) {
         return reply.status(404).send({ message: 'No client account linked to this user' });
       }
-
-      const clientIds = clientUsers.map((cu) => cu.clientId);
 
       const projects = await prisma.project.findMany({
         where: { clientId: { in: clientIds } },
@@ -107,18 +99,13 @@ export async function clientProjectsRoutes(app) {
       },
     },
     async (request, reply) => {
-      const userId = request.user.id;
       const { id: projectId } = request.params;
       const { keywordIds, sitemapNodeId, clientNote } = request.body || {};
 
-      const clientUsers = await prisma.clientUser.findMany({
-        where: { userId },
-        select: { clientId: true },
-      });
-      if (clientUsers.length === 0) {
+      const clientIds = request.clientAccountIds;
+      if (!clientIds?.length) {
         return reply.status(404).send({ message: 'No client account linked to this user' });
       }
-      const clientIds = clientUsers.map((cu) => cu.clientId);
 
       const project = await prisma.project.findUnique({
         where: { id: projectId },
@@ -211,18 +198,13 @@ export async function clientProjectsRoutes(app) {
       },
     },
     async (request, reply) => {
-      const userId = request.user.id;
       const { id: projectId } = request.params;
       const { keywordIds, clientNote } = request.body || {};
 
-      const clientUsers = await prisma.clientUser.findMany({
-        where: { userId },
-        select: { clientId: true },
-      });
-      if (clientUsers.length === 0) {
+      const clientIds = request.clientAccountIds;
+      if (!clientIds?.length) {
         return reply.status(404).send({ message: 'No client account linked to this user' });
       }
-      const clientIds = clientUsers.map((cu) => cu.clientId);
 
       const project = await prisma.project.findUnique({
         where: { id: projectId },
@@ -270,17 +252,12 @@ export async function clientProjectsRoutes(app) {
       onRequest: [app.verifyJwt, app.requireClient],
     },
     async (request, reply) => {
-      const userId = request.user.id;
       const { id: projectId } = request.params;
 
-      const clientUsers = await prisma.clientUser.findMany({
-        where: { userId },
-        select: { clientId: true },
-      });
-      if (clientUsers.length === 0) {
+      const clientIds = request.clientAccountIds;
+      if (!clientIds?.length) {
         return reply.status(404).send({ message: 'No client account linked to this user' });
       }
-      const clientIds = clientUsers.map((cu) => cu.clientId);
 
       const project = await prisma.project.findUnique({
         where: { id: projectId },
@@ -340,17 +317,12 @@ export async function clientProjectsRoutes(app) {
       },
     },
     async (request, reply) => {
-      const userId = request.user.id;
       const { id: projectId } = request.params;
 
-      const clientUsers = await prisma.clientUser.findMany({
-        where: { userId },
-        select: { clientId: true },
-      });
-      if (clientUsers.length === 0) {
+      const clientIds = request.clientAccountIds;
+      if (!clientIds?.length) {
         return reply.status(404).send({ message: 'No client account linked to this user' });
       }
-      const clientIds = clientUsers.map((cu) => cu.clientId);
 
       const project = await prisma.project.findUnique({
         where: { id: projectId },
@@ -402,17 +374,12 @@ export async function clientProjectsRoutes(app) {
       onRequest: [app.verifyJwt, app.requireClient],
     },
     async (request, reply) => {
-      const userId = request.user.id;
       const { id: projectId } = request.params;
 
-      const clientUsers = await prisma.clientUser.findMany({
-        where: { userId },
-        select: { clientId: true },
-      });
-      if (clientUsers.length === 0) {
+      const clientIds = request.clientAccountIds;
+      if (!clientIds?.length) {
         return reply.status(404).send({ message: 'No client account linked to this user' });
       }
-      const clientIds = clientUsers.map((cu) => cu.clientId);
 
       const project = await prisma.project.findUnique({
         where: { id: projectId },
@@ -464,17 +431,12 @@ export async function clientProjectsRoutes(app) {
       onRequest: [app.verifyJwt, app.requireClient],
     },
     async (request, reply) => {
-      const userId = request.user.id;
       const { id: projectId } = request.params;
 
-      const clientUsers = await prisma.clientUser.findMany({
-        where: { userId },
-        select: { clientId: true },
-      });
-      if (clientUsers.length === 0) {
+      const clientIds = request.clientAccountIds;
+      if (!clientIds?.length) {
         return reply.status(404).send({ message: 'No client account linked to this user' });
       }
-      const clientIds = clientUsers.map((cu) => cu.clientId);
 
       const project = await prisma.project.findUnique({
         where: { id: projectId },
@@ -643,15 +605,10 @@ export async function clientProjectsRoutes(app) {
       },
     },
     async (request, reply) => {
-      const userId = request.user.id;
       const { id: projectId } = request.params;
 
       // Verify client has access to this project
-      const clientUsers = await prisma.clientUser.findMany({
-        where: { userId },
-        select: { clientId: true },
-      });
-      const clientIds = clientUsers.map((cu) => cu.clientId);
+      const clientIds = request.clientAccountIds || [];
 
       const project = await prisma.project.findUnique({
         where: { id: projectId },
@@ -764,11 +721,7 @@ export async function clientProjectsRoutes(app) {
       const { id: projectId } = request.params;
       const { intakeData, checklist } = request.body || {};
 
-      const clientUsers = await prisma.clientUser.findMany({
-        where: { userId },
-        select: { clientId: true },
-      });
-      const clientIds = clientUsers.map((cu) => cu.clientId);
+      const clientIds = request.clientAccountIds || [];
 
       const project = await prisma.project.findUnique({
         where: { id: projectId },
@@ -871,15 +824,10 @@ export async function clientProjectsRoutes(app) {
       onRequest: [app.verifyJwt, app.requireClient],
     },
     async (request, reply) => {
-      const userId = request.user.id;
       const { id: projectId } = request.params;
 
       // Verify client owns this project
-      const clientUsers = await prisma.clientUser.findMany({
-        where: { userId },
-        select: { clientId: true },
-      });
-      const clientIds = clientUsers.map((cu) => cu.clientId);
+      const clientIds = request.clientAccountIds || [];
 
       const project = await prisma.project.findUnique({
         where: { id: projectId },

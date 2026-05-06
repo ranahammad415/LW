@@ -55,6 +55,7 @@ const models = [
   'TaskComment',
   'LookerEmbed',
   'MonthlyReport',
+  'ProjectActivityReport',
   'ClientAsset',
   'KeywordSuggestion',
   'BusinessUpdate',
