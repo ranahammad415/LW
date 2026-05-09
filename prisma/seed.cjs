@@ -196,6 +196,27 @@ async function main() {
   for (const p of presets) presetByName[p.name] = p.id;
 
   const presetRules = [
+    // ─── Exact taskType slug rules (highest priority, deterministic) ───
+    // These match the `taskType` field exactly so every template task gets a preset.
+    { patterns: [/\bcontent-writing\b/i], preset: 'Content Writing' },
+    { patterns: [/\bcontent-audit\b/i], preset: 'Monthly Report (Read-Only)' },
+    { patterns: [/\bon-page-seo\b/i], preset: 'Meta Optimisation' },
+    { patterns: [/\btechnical-seo\b/i], preset: 'Technical SEO' },
+    { patterns: [/\blocal-seo\b/i], preset: 'Technical SEO' },
+    { patterns: [/\bkeyword-research\b/i], preset: 'Monthly Report (Read-Only)' },
+    { patterns: [/\blink-building\b/i], preset: 'Technical SEO' },
+    { patterns: [/\baeo-geo\b/i], preset: 'Technical SEO' },
+    { patterns: [/\bux-audit\b/i], preset: 'Monthly Report (Read-Only)' },
+    { patterns: [/\bcro\b/i], preset: 'Meta Optimisation' },
+    { patterns: [/\breporting\b/i], preset: 'Monthly Report (Read-Only)' },
+    { patterns: [/\bcrawl-fix\b/i], preset: 'Crawl Fix' },
+    { patterns: [/\bschema-deployment\b/i, /\bschema\b/i], preset: 'Schema Deployment' },
+    { patterns: [/\bmeta-optimisation\b/i], preset: 'Meta Optimisation' },
+    { patterns: [/\bmonthly-report\b/i], preset: 'Monthly Report (Read-Only)' },
+    { patterns: [/\bstrategy-call\b/i], preset: 'Strategy Call (Read-Only)' },
+    { patterns: [/\bonboarding-task\b/i], preset: 'Onboarding / Full Setup' },
+
+    // ─── Free-form text fallback rules (match title/description) ───
     { patterns: [/content/i, /blog/i, /article/i, /copywriting/i, /write/i], preset: 'Content Writing' },
     { patterns: [/meta\s*(optim|tag|title|desc)/i, /on.?page/i], preset: 'Meta Optimisation' },
     { patterns: [/technical.?seo/i, /seo\s*audit/i, /site\s*speed/i, /core\s*web/i, /robots/i, /sitemap/i, /canonical/i, /redirect/i], preset: 'Technical SEO' },

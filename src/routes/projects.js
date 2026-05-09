@@ -341,6 +341,21 @@ export async function projectRoutes(app) {
                       uploadedBy: { select: { id: true, name: true } },
                     },
                   },
+                  // Nested subtasks (third level — e.g. XLSX Steps under Sub Tasks).
+                  subTasks: {
+                    orderBy: [{ status: 'asc' }, { dueDate: 'asc' }],
+                    include: {
+                      assignees: { select: { id: true, name: true, email: true, avatarUrl: true } },
+                      dependsOnTasks: { select: { id: true, status: true, title: true } },
+                      wpAccessPreset: { select: { id: true, name: true, capabilities: true } },
+                      deliverables: {
+                        orderBy: { version: 'desc' },
+                        include: {
+                          uploadedBy: { select: { id: true, name: true } },
+                        },
+                      },
+                    },
+                  },
                 },
               },
             },
