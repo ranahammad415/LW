@@ -163,15 +163,19 @@ async function main() {
   console.log('Created 4 tasks');
 
   // ─── WP Access Presets (least-privilege per task type) ─────────────────
+  // NOTE: WordPress maps meta caps (edit_post, delete_post) to primitives that
+  // depend on who authored the post. Editing content authored by OTHER users
+  // requires the `*_others_*` primitives — without them the WP admin shows
+  // only "View" on other users' posts (no Edit / Edit with Elementor buttons).
   const presets = await Promise.all([
     prisma.wpAccessPreset.create({
-      data: { name: 'Content Writing', capabilities: ['edit_posts', 'edit_published_posts', 'publish_posts', 'upload_files', 'delete_posts'] },
+      data: { name: 'Content Writing', capabilities: ['read', 'edit_posts', 'edit_others_posts', 'edit_published_posts', 'publish_posts', 'upload_files', 'delete_posts', 'delete_others_posts', 'delete_published_posts'] },
     }),
     prisma.wpAccessPreset.create({
-      data: { name: 'Meta Optimisation', capabilities: ['edit_posts', 'edit_published_posts', 'edit_pages', 'edit_published_pages'] },
+      data: { name: 'Meta Optimisation', capabilities: ['read', 'edit_posts', 'edit_others_posts', 'edit_published_posts', 'edit_pages', 'edit_others_pages', 'edit_published_pages'] },
     }),
     prisma.wpAccessPreset.create({
-      data: { name: 'Technical SEO', capabilities: ['edit_posts', 'edit_pages', 'edit_published_pages', 'manage_options', 'edit_theme_options'] },
+      data: { name: 'Technical SEO', capabilities: ['read', 'edit_posts', 'edit_others_posts', 'edit_published_posts', 'edit_pages', 'edit_others_pages', 'edit_published_pages', 'manage_options', 'edit_theme_options'] },
     }),
     prisma.wpAccessPreset.create({
       data: { name: 'Monthly Report (Read-Only)', capabilities: ['read'] },
@@ -180,13 +184,13 @@ async function main() {
       data: { name: 'Strategy Call (Read-Only)', capabilities: ['read'] },
     }),
     prisma.wpAccessPreset.create({
-      data: { name: 'Onboarding / Full Setup', capabilities: ['edit_posts', 'edit_pages', 'edit_published_posts', 'edit_published_pages', 'upload_files', 'manage_options', 'edit_theme_options', 'install_plugins', 'activate_plugins'] },
+      data: { name: 'Onboarding / Full Setup', capabilities: ['read', 'edit_posts', 'edit_others_posts', 'edit_published_posts', 'delete_posts', 'delete_others_posts', 'delete_published_posts', 'edit_pages', 'edit_others_pages', 'edit_published_pages', 'delete_pages', 'delete_others_pages', 'delete_published_pages', 'upload_files', 'manage_options', 'edit_theme_options', 'install_plugins', 'activate_plugins'] },
     }),
     prisma.wpAccessPreset.create({
-      data: { name: 'Crawl Fix', capabilities: ['edit_posts', 'edit_published_posts', 'edit_pages', 'edit_published_pages', 'manage_options'] },
+      data: { name: 'Crawl Fix', capabilities: ['read', 'edit_posts', 'edit_others_posts', 'edit_published_posts', 'edit_pages', 'edit_others_pages', 'edit_published_pages', 'manage_options'] },
     }),
     prisma.wpAccessPreset.create({
-      data: { name: 'Schema Deployment', capabilities: ['edit_posts', 'edit_published_posts', 'edit_pages', 'edit_published_pages', 'edit_theme_options'] },
+      data: { name: 'Schema Deployment', capabilities: ['read', 'edit_posts', 'edit_others_posts', 'edit_published_posts', 'edit_pages', 'edit_others_pages', 'edit_published_pages', 'edit_theme_options'] },
     }),
   ]);
   console.log(`Created ${presets.length} WP Access Presets`);
