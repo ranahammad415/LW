@@ -44,13 +44,13 @@ async function main() {
   console.log('\n3. Projects with WP API key:');
   const projects = await prisma.project.findMany({
     where: { wpApiKey: { not: null } },
-    select: { id: true, name: true, wpApiKey: true, leadPmId: true, secondaryPmId: true, clientId: true },
+    select: { id: true, name: true, wpApiKey: true, leadPmId: true, clientId: true },
   });
   if (projects.length === 0) {
     console.log('   ❌ No projects with wpApiKey!');
   } else {
     for (const p of projects) {
-      console.log(`   📁 ${p.name} | leadPm=${p.leadPmId || 'NONE'} | secPm=${p.secondaryPmId || 'NONE'} | client=${p.clientId || 'NONE'}`);
+      console.log(`   📁 ${p.name} | leadPm=${p.leadPmId || 'NONE'} | client=${p.clientId || 'NONE'}`);
     }
   }
 
