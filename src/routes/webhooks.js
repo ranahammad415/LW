@@ -198,6 +198,8 @@ export async function wpWebhookRoutes(app) {
     const revisionNumber = Number(body.revisionNumber) || 1;
     const pmPreviewUrl = String(body.pmPreviewUrl || '').slice(0, 1000) || null;
     const clientPreviewUrl = String(body.clientPreviewUrl || '').slice(0, 1000) || null;
+    // Fallback action URL: link to OS portal project page (never expires)
+    const portalProjectUrl = `/portal/admin/projects/${project.id}`;
     const pmDecision = body.pmDecision ? String(body.pmDecision).slice(0, 50) : null;
     const pmComment = body.pmComment ? String(body.pmComment).slice(0, 10000) : null;
     const clientDecision = body.clientDecision ? String(body.clientDecision).slice(0, 50) : null;
@@ -354,7 +356,7 @@ export async function wpWebhookRoutes(app) {
             slug: 'content_submitted_for_review',
             recipientIds: recipients,
             variables: { ...commonVars, roundLabel },
-            actionUrl: pmPreviewUrl,
+            actionUrl: pmPreviewUrl || portalProjectUrl,
             metadata: { contentReviewId: review.id },
           }).catch(() => {});
         }
@@ -366,7 +368,7 @@ export async function wpWebhookRoutes(app) {
             slug: 'content_pm_approved',
             recipientIds: internal,
             variables: commonVars,
-            actionUrl: clientPreviewUrl || pmPreviewUrl,
+            actionUrl: clientPreviewUrl || portalProjectUrl,
             metadata: { contentReviewId: review.id },
           }).catch(() => {});
         }
@@ -377,7 +379,7 @@ export async function wpWebhookRoutes(app) {
             slug: 'content_ready_for_client_review',
             recipientIds: uniq(clientUserIds),
             variables: commonVars,
-            actionUrl: clientPreviewUrl,
+            actionUrl: clientPreviewUrl || portalProjectUrl,
             metadata: { contentReviewId: review.id },
           }).catch(() => {});
         }
@@ -389,7 +391,7 @@ export async function wpWebhookRoutes(app) {
             slug: 'content_pm_changes_requested',
             recipientIds: recipients,
             variables: commonVars,
-            actionUrl: pmPreviewUrl,
+            actionUrl: pmPreviewUrl || portalProjectUrl,
             metadata: { contentReviewId: review.id },
           }).catch(() => {});
         }
@@ -401,7 +403,7 @@ export async function wpWebhookRoutes(app) {
             slug: 'content_client_approved',
             recipientIds: recipients,
             variables: commonVars,
-            actionUrl: pmPreviewUrl,
+            actionUrl: pmPreviewUrl || portalProjectUrl,
             metadata: { contentReviewId: review.id },
           }).catch(() => {});
         }
@@ -413,7 +415,7 @@ export async function wpWebhookRoutes(app) {
             slug: 'content_client_changes_requested',
             recipientIds: recipients,
             variables: commonVars,
-            actionUrl: pmPreviewUrl,
+            actionUrl: pmPreviewUrl || portalProjectUrl,
             metadata: { contentReviewId: review.id },
           }).catch(() => {});
         }
@@ -426,7 +428,7 @@ export async function wpWebhookRoutes(app) {
             slug: 'content_published',
             recipientIds: recipients,
             variables: commonVars,
-            actionUrl: clientPreviewUrl || pmPreviewUrl,
+            actionUrl: clientPreviewUrl || pmPreviewUrl || portalProjectUrl,
             metadata: { contentReviewId: review.id },
           }).catch(() => {});
         }
@@ -444,20 +446,44 @@ export async function wpWebhookRoutes(app) {
           client_changes_requested: 'content_client_changes_requested',
         };
         const slug = statusSlugMap[status] || 'content_submitted_for_review';
-        const clientUserIds = await getClientUserIds();
-        // Include everyone relevant: PMs + worker + owners + clients
-        const recipients = uniq([...pmIds, submittedById, ...ownerIds, ...clientUserIds]);
+      
+        // Target only the responsible party based on current status
+        let recipients;
+        if (status === 'pending_pm_review') {
+          // PM must review — notify PMs + Owners
+          recipients = uniq([...pmIds, ...ownerIds]);
+        } else if (status === 'pm_approved') {
+          // PM approved, waiting for client assignment — notify Worker + Owners
+          recipients = uniq([submittedById, ...ownerIds]);
+        } else if (status === 'pending_client_review') {
+          // Client must review — notify Clients + Owners
+          const clientUserIds = await getClientUserIds();
+          recipients = uniq([...clientUserIds, ...ownerIds]);
+        } else if (status === 'client_approved') {
+          // Client done, team should proceed — notify PMs + Worker + Owners
+          recipients = uniq([...pmIds, submittedById, ...ownerIds]);
+        } else if (status === 'changes_requested_by_pm' || status === 'pm_changes_requested') {
+          // Worker must fix — notify Worker + Owners
+          recipients = uniq([submittedById, ...ownerIds]);
+        } else if (status === 'changes_requested_by_client' || status === 'client_changes_requested') {
+          // Team must fix — notify PMs + Worker + Owners
+          recipients = uniq([...pmIds, submittedById, ...ownerIds]);
+        } else {
+          // Fallback: notify PMs + Owners
+          recipients = uniq([...pmIds, ...ownerIds]);
+        }
+      
         console.log(`[pipeline-notify] RESEND slug=${slug} recipients=${JSON.stringify(recipients)} status=${status}`);
         if (recipients.length > 0) {
           notify({
             slug,
             recipientIds: recipients,
             variables: commonVars,
-            actionUrl: clientPreviewUrl || pmPreviewUrl,
+            actionUrl: clientPreviewUrl || pmPreviewUrl || portalProjectUrl,
             metadata: { contentReviewId: review.id, resend: true },
           }).then(() => console.log(`[pipeline-notify] notify() resolved for slug=${slug}`)).catch((err) => console.error(`[pipeline-notify] notify() FAILED:`, err));
         } else {
-          console.warn('[pipeline-notify] RESEND: no recipients found — skipping notify()');
+          console.warn('[pipeline-notify] RESEND: no recipients found \u2014 skipping notify()');
         }
       }
     } catch {

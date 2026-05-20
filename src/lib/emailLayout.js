@@ -21,6 +21,7 @@ const FONT_STACK    = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-s
 
 const DEFAULT_LOGO_URL = 'https://app.localwaves.ai/favicon.png';
 const APP_URL  = process.env.FRONTEND_URL || 'https://app.localwaves.ai';
+const BACKEND_URL = process.env.APP_URL || 'https://account.localwaves.ai';
 
 // In-memory cache for agency settings (refreshed every 5 minutes)
 let _cachedSettings = null;
@@ -93,7 +94,7 @@ export async function wrapInBrandedLayout(opts = {}) {
   // Fetch dynamic agency settings
   const s = await getAgencySettings();
   const agencyName      = s?.agencyName || 'Localwaves';
-  const logoUrl         = s?.logoUrl ? `${APP_URL}${s.logoUrl}` : DEFAULT_LOGO_URL;
+  const logoUrl         = s?.logoUrl ? `${BACKEND_URL}${s.logoUrl}` : DEFAULT_LOGO_URL;
   const brandPrimary    = s?.emailPrimaryColor || DEFAULT_PRIMARY;
   const customHeaderHtml = s?.emailHeaderHtml || '';
   const customFooterHtml = s?.emailFooterHtml || '';

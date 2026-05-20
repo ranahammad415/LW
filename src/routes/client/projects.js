@@ -839,7 +839,11 @@ export async function clientProjectsRoutes(app) {
 
       try {
         const reviews = await prisma.wpContentReview.findMany({
-          where: { projectId, isPublished: false },
+          where: {
+            projectId,
+            isPublished: false,
+            status: { in: ['pending_client_review', 'client_approved', 'changes_requested_by_client'] },
+          },
           include: {
             events: { orderBy: { createdAt: 'desc' } },
           },
