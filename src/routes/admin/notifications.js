@@ -1,5 +1,6 @@
 import { prisma } from '../../lib/prisma.js';
 import { notify } from '../../lib/notificationService.js';
+import { sendEmail, smtpConfigured } from '../../lib/mailer.js';
 
 const VALID_AUDIENCES = ['AGENCY_OWNER', 'AGENCY_TEAM', 'CLIENT_MANAGER', 'CLIENT_VIEWER'];
 
@@ -481,6 +482,53 @@ export async function adminNotificationRoutes(app) {
       }
 
       return reply.send({ success: true, message: `Test sent using ${audience} variant` });
+    }
+  );
+
+  // ── Send a raw test email to any address (SMTP connectivity check) ──
+  app.post(
+    '/notifications/send-test-email',
+    {
+      onRequest: [app.verifyJwt, app.requireOwner],
+      schema: {
+        body: {
+          type: 'object',
+          properties: {
+            email: { type: 'string', format: 'email', minLength: 5 },
+          },
+          required: ['email'],
+        },
+      },
+    },
+    async (request, reply) => {
+      const { email } = request.body;
+
+      if (!smtpConfigured) {
+        return reply.status(503).send({
+          success: false,
+          message: 'SMTP is not configured on this server. Set SMTP_HOST, SMTP_USER, and SMTP_PASS environment variables.',
+        });
+      }
+
+      const result = await sendEmail({
+        to: email,
+        subject: 'Agency OS — Test Email',
+        html: `
+          <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
+            <h2 style="color:#111">Test Email from Agency OS</h2>
+            <p>If you can read this, your SMTP configuration is working correctly.</p>
+            <p style="color:#666;font-size:13px">Sent at: ${new Date().toISOString()}</p>
+            <p style="color:#666;font-size:13px">Triggered by: ${request.user.name || request.user.email}</p>
+          </div>
+        `,
+        text: `Test Email from Agency OS\n\nIf you can read this, your SMTP configuration is working correctly.\nSent at: ${new Date().toISOString()}\nTriggered by: ${request.user.name || request.user.email}`,
+      });
+
+      if (result.success) {
+        return reply.send({ success: true, message: `Test email sent to ${email}`, messageId: result.messageId });
+      } else {
+        return reply.status(500).send({ success: false, message: `Failed to send: ${result.error}` });
+      }
     }
   );
 }
