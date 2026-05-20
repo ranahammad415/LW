@@ -343,7 +343,7 @@ export async function wpWebhookRoutes(app) {
 
       // Common variables for all pipeline notifications
       const nowFormatted = new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
-      const commonVars = { postTitle, projectName: project.name || '', postType, submittedBy: submittedByName || 'Team member', submittedAt: nowFormatted };
+      const commonVars = { postTitle, contentTitle: postTitle, projectName: project.name || '', postType, submittedBy: submittedByName || 'Team member', submittedAt: nowFormatted };
 
       if (eventType === 'pipeline_submitted' || eventType === 'pipeline_resubmitted') {
         // PM(s) + Owners receive the "submitted for review" notification.

@@ -235,7 +235,7 @@ async function buildSharedEmailContext(slug, variables, metadata) {
  * Build rich email HTML for a single recipient using a resolved source
  * (base template or audience variant) and pre-enriched shared context.
  */
-function buildRichEmailHtml(slug, category, source, variables, actionUrl, sharedContext) {
+async function buildRichEmailHtml(slug, category, source, variables, actionUrl, sharedContext) {
   const { actorName, actionText, projectName, commentPreview, detailCardHtml, commentThreadHtml } = sharedContext;
   const ctaLabel = source.ctaLabel || CTA_LABEL_MAP[category] || 'View in Portal';
 
@@ -245,7 +245,7 @@ function buildRichEmailHtml(slug, category, source, variables, actionUrl, shared
 
   // If no actorName available (system notifications), use simple layout
   if (!actionText) {
-    return wrapInBrandedLayout({
+    return await wrapInBrandedLayout({
       bodyHtml: renderedBodyHtml,
       preheader,
       actionUrl,
@@ -265,7 +265,7 @@ function buildRichEmailHtml(slug, category, source, variables, actionUrl, shared
     commentBlockHtml = commentBlock(actorName, commentPreview);
   }
 
-  return wrapInBrandedLayout({
+  return await wrapInBrandedLayout({
     bodyHtml: (!commentBlockHtml && !detailCardHtml) ? renderedBodyHtml : '',
     preheader,
     actionUrl,
@@ -377,10 +377,10 @@ export async function notify({ slug, recipientIds, variables = {}, actionUrl = n
     // Build branded HTML for this recipient (reuses shared enrichment)
     let brandedHtml;
     try {
-      brandedHtml = buildRichEmailHtml(slug, template.category, source, variables, fullActionUrl, sharedContext);
+      brandedHtml = await buildRichEmailHtml(slug, template.category, source, variables, fullActionUrl, sharedContext);
     } catch (err) {
       console.error(`[notify] Rich email build failed for "${slug}"/${audience}, falling back:`, err.message);
-      brandedHtml = wrapInBrandedLayout({
+      brandedHtml = await wrapInBrandedLayout({
         bodyHtml: renderTemplate(source.bodyHtml, variables),
         preheader: renderedSubject,
         actionUrl: fullActionUrl,
