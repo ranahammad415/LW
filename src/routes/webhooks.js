@@ -1,6 +1,7 @@
 import { prisma } from '../lib/prisma.js';
 import { maybeGenerateSummary, autoSyncSitemap } from '../lib/wpSync.js';
 import { notify } from '../lib/notificationService.js';
+import { publish as publishRealtime } from '../lib/realtimeBus.js';
 
 export async function wpWebhookRoutes(app) {
   app.post('/wp-content-change', async (request, reply) => {
@@ -70,6 +71,14 @@ export async function wpWebhookRoutes(app) {
       // Auto-sync sitemap in background on delete
       autoSyncSitemap(project.id).catch(() => {});
 
+      try {
+        publishRealtime(project.id, 'wp:content-change', {
+          wpPostId,
+          status: 'deleted',
+          eventType: 'deleted',
+        });
+      } catch { /* fail-safe */ }
+
       return reply.send({ success: true, projectId: project.id, wpPostId, event: 'deleted' });
     }
 
@@ -138,6 +147,15 @@ export async function wpWebhookRoutes(app) {
     if (eventType === 'created') {
       autoSyncSitemap(project.id).catch(() => {});
     }
+
+    try {
+      publishRealtime(project.id, 'wp:content-change', {
+        wpPostId,
+        status,
+        eventType,
+        title,
+      });
+    } catch { /* fail-safe */ }
 
     return reply.send({ success: true, projectId: project.id, wpPostId });
   });
@@ -259,6 +277,19 @@ export async function wpWebhookRoutes(app) {
     } catch {
       // Don't fail the webhook if event creation fails
     }
+
+    // Push realtime update to any subscribers of this project (PM / client portals).
+    try {
+      publishRealtime(project.id, 'wp:pipeline', {
+        contentReviewId: review.id,
+        wpPipelineId,
+        wpPostId,
+        postTitle,
+        status,
+        eventType,
+        revisionNumber,
+      });
+    } catch { /* fail-safe */ }
 
     // Send notifications based on event type
     try {

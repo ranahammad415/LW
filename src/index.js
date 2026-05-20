@@ -47,6 +47,7 @@ import { pmPipelineRoutes } from './routes/pm/pipeline.js';
 import { pmDigestRoutes } from './routes/pm/digest.js';
 import { pmClientDashboardRoutes } from './routes/pm/clientDashboard.js';
 import { wpWebhookRoutes } from './routes/webhooks.js';
+import { realtimeRoutes } from './routes/realtime.js';
 import { toolRoutes } from './routes/tool.js';
 import omniSearchRoutes from './routes/omniSearch/index.js';
 import { adminAiUsageRoutes } from './routes/admin/ai-usage.js';
@@ -183,6 +184,7 @@ app.register(pmDigestRoutes, { prefix: '/api/pm' });
 app.register(pmClientDashboardRoutes, { prefix: '/api/pm' });
 app.register(pmInputRequestRoutes, { prefix: '/api/pm' });
 app.register(wpWebhookRoutes, { prefix: '/api/webhooks' });
+app.register(realtimeRoutes, { prefix: '/api/realtime' });
 app.register(toolRoutes, { prefix: '/api/tool' });
 app.register(omniSearchRoutes, { prefix: '/api/omni-search' });
 
