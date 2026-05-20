@@ -170,7 +170,7 @@ export async function wpWebhookRoutes(app) {
 
     const project = await prisma.project.findFirst({
       where: { wpApiKey: apiKey },
-      select: { id: true, leadPmId: true, name: true },
+      select: { id: true, leadPmId: true, secondaryPmId: true, name: true },
     });
     if (!project) {
       return reply.status(401).send({ message: 'Invalid API key' });
@@ -309,30 +309,50 @@ export async function wpWebhookRoutes(app) {
         } catch { return []; }
       };
 
+      // Helper: fetch all active OWNER (admin) user IDs
+      const getOwnerUserIds = async () => {
+        try {
+          const owners = await prisma.user.findMany({
+            where: { role: 'OWNER', isActive: true },
+            select: { id: true },
+          });
+          return owners.map((o) => o.id);
+        } catch { return []; }
+      };
+
+      // Helper: dedupe + drop falsy
+      const uniq = (arr) => Array.from(new Set((arr || []).filter(Boolean)));
+
+      // Resolve common recipient groups once per request
+      const ownerIds = await getOwnerUserIds();
+      const pmIds = uniq([project.leadPmId, project.secondaryPmId]);
+
       // Common variables for all pipeline notifications
       const nowFormatted = new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
       const commonVars = { postTitle, projectName: project.name || '', postType, submittedBy: submittedByName || 'Team member', submittedAt: nowFormatted };
 
       if (eventType === 'pipeline_submitted' || eventType === 'pipeline_resubmitted') {
-        const pmUserId = project.leadPmId;
-        if (pmUserId) {
+        // PM(s) + Owners receive the "submitted for review" notification.
+        const recipients = uniq([...pmIds, ...ownerIds]);
+        if (recipients.length > 0) {
           const roundLabel = revisionNumber > 1 ? ` (Round ${revisionNumber})` : '';
           notify({
             slug: 'content_submitted_for_review',
-            recipientIds: [pmUserId],
+            recipientIds: recipients,
             variables: { ...commonVars, roundLabel },
             actionUrl: pmPreviewUrl,
             metadata: { contentReviewId: review.id },
           }).catch(() => {});
         }
       } else if (eventType === 'pipeline_pm_approved') {
-        // Notify submitter that PM approved
-        if (submittedById) {
+        // Notify submitter (worker) + Owners that PM approved
+        const internal = uniq([submittedById, ...ownerIds]);
+        if (internal.length > 0) {
           notify({
             slug: 'content_pm_approved',
-            recipientIds: [submittedById],
+            recipientIds: internal,
             variables: commonVars,
-            actionUrl: null,
+            actionUrl: clientPreviewUrl || pmPreviewUrl,
             metadata: { contentReviewId: review.id },
           }).catch(() => {});
         }
@@ -341,42 +361,39 @@ export async function wpWebhookRoutes(app) {
         if (clientUserIds.length > 0) {
           notify({
             slug: 'content_ready_for_client_review',
-            recipientIds: clientUserIds,
+            recipientIds: uniq(clientUserIds),
             variables: commonVars,
             actionUrl: clientPreviewUrl,
             metadata: { contentReviewId: review.id },
           }).catch(() => {});
         }
       } else if (eventType === 'pipeline_pm_changes_requested') {
-        // Notify submitter/worker that PM requested changes
-        if (submittedById) {
+        // Notify submitter/worker + PM(s) + Owners that PM requested changes
+        const recipients = uniq([submittedById, ...pmIds, ...ownerIds]);
+        if (recipients.length > 0) {
           notify({
             slug: 'content_pm_changes_requested',
-            recipientIds: [submittedById],
+            recipientIds: recipients,
             variables: commonVars,
             actionUrl: pmPreviewUrl,
             metadata: { contentReviewId: review.id },
           }).catch(() => {});
         }
       } else if (eventType === 'pipeline_client_approved') {
-        // Notify PM and submitter/worker
-        const recipients = [];
-        if (project.leadPmId) recipients.push(project.leadPmId);
-        if (submittedById) recipients.push(submittedById);
+        // Notify PM(s) + submitter/worker + Owners
+        const recipients = uniq([...pmIds, submittedById, ...ownerIds]);
         if (recipients.length > 0) {
           notify({
             slug: 'content_client_approved',
             recipientIds: recipients,
             variables: commonVars,
-            actionUrl: null,
+            actionUrl: pmPreviewUrl,
             metadata: { contentReviewId: review.id },
           }).catch(() => {});
         }
       } else if (eventType === 'pipeline_client_changes_requested') {
-        // Notify PM and submitter/worker
-        const recipients = [];
-        if (project.leadPmId) recipients.push(project.leadPmId);
-        if (submittedById) recipients.push(submittedById);
+        // Notify PM(s) + submitter/worker + Owners
+        const recipients = uniq([...pmIds, submittedById, ...ownerIds]);
         if (recipients.length > 0) {
           notify({
             slug: 'content_client_changes_requested',
@@ -387,16 +404,15 @@ export async function wpWebhookRoutes(app) {
           }).catch(() => {});
         }
       } else if (eventType === 'pipeline_published') {
-        // Notify PM and submitter/worker
-        const recipients = [];
-        if (project.leadPmId) recipients.push(project.leadPmId);
-        if (submittedById) recipients.push(submittedById);
+        // Notify PM(s) + submitter/worker + Owners + Clients (so everyone knows it went live)
+        const clientUserIds = await getClientUserIds();
+        const recipients = uniq([...pmIds, submittedById, ...ownerIds, ...clientUserIds]);
         if (recipients.length > 0) {
           notify({
             slug: 'content_published',
             recipientIds: recipients,
             variables: commonVars,
-            actionUrl: null,
+            actionUrl: clientPreviewUrl || pmPreviewUrl,
             metadata: { contentReviewId: review.id },
           }).catch(() => {});
         }

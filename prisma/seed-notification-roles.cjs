@@ -59,10 +59,10 @@ const MATRIX = {
   meeting_scheduled:             { active: false, owner: 0, pm: 0, mgr: 0, viewer: 0 },
 
   // Pipeline
-  content_client_approved:         { active: true, owner: 0, pm: 0, mgr: 0, viewer: 0 }, // in-app only
-  content_client_changes_requested:{ active: true, owner: 0, pm: 0, mgr: 0, viewer: 0 }, // in-app only
-  content_pm_approved:             { active: true, owner: 0, pm: 0, mgr: 0, viewer: 0 }, // in-app only
-  content_pm_changes_requested:    { active: true, owner: 0, pm: 0, mgr: 0, viewer: 0 }, // in-app only
+  content_client_approved:         { active: true, owner: 1, pm: 1, mgr: 1, viewer: 0 },
+  content_client_changes_requested:{ active: true, owner: 1, pm: 1, mgr: 1, viewer: 0 },
+  content_pm_approved:             { active: true, owner: 1, pm: 1, mgr: 0, viewer: 0 },
+  content_pm_changes_requested:    { active: true, owner: 1, pm: 1, mgr: 0, viewer: 0 },
   content_published:               { active: true, owner: 1, pm: 1, mgr: 1, viewer: 0 },
   content_ready_for_client_review: { active: true, owner: 1, pm: 1, mgr: 1, viewer: 0 },
   content_submitted_for_review:    { active: true, owner: 1, pm: 1, mgr: 1, viewer: 0 },
