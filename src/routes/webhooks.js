@@ -71,6 +71,14 @@ export async function wpWebhookRoutes(app) {
       // Auto-sync sitemap in background on delete
       autoSyncSitemap(project.id).catch(() => {});
 
+      // Auto-cancel any active pipeline reviews for this post
+      try {
+        await prisma.wpContentReview.updateMany({
+          where: { projectId: project.id, wpPostId, isPublished: false },
+          data: { isPublished: true, publishedAt: new Date(), lastEventType: 'pipeline_cancelled', status: 'cancelled' },
+        });
+      } catch { /* fail-safe */ }
+
       try {
         publishRealtime(project.id, 'wp:content-change', {
           wpPostId,
@@ -414,6 +422,29 @@ export async function wpWebhookRoutes(app) {
             variables: commonVars,
             actionUrl: clientPreviewUrl || pmPreviewUrl,
             metadata: { contentReviewId: review.id },
+          }).catch(() => {});
+        }
+      } else if (eventType === 'pipeline_resend_notification') {
+        // Re-fire notifications based on the current pipeline status.
+        const statusSlugMap = {
+          pending_pm_review: 'content_submitted_for_review',
+          pending_client_review: 'content_ready_for_client_review',
+          pm_changes_requested: 'content_pm_changes_requested',
+          client_changes_requested: 'content_client_changes_requested',
+          pm_approved: 'content_pm_approved',
+          client_approved: 'content_client_approved',
+        };
+        const slug = statusSlugMap[status] || 'content_submitted_for_review';
+        const clientUserIds = await getClientUserIds();
+        // Include everyone relevant: PMs + worker + owners + clients
+        const recipients = uniq([...pmIds, submittedById, ...ownerIds, ...clientUserIds]);
+        if (recipients.length > 0) {
+          notify({
+            slug,
+            recipientIds: recipients,
+            variables: commonVars,
+            actionUrl: clientPreviewUrl || pmPreviewUrl,
+            metadata: { contentReviewId: review.id, resend: true },
           }).catch(() => {});
         }
       }
