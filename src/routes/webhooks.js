@@ -171,6 +171,7 @@ export async function wpWebhookRoutes(app) {
   /* ─── Pipeline event webhook from WP plugin ─── */
   app.post('/wp-pipeline-event', async (request, reply) => {
     const body = request.body || {};
+    console.log('[wp-pipeline-event] RECEIVED:', JSON.stringify({ eventType: body.eventType, status: body.status, pipelineId: body.pipelineId, postTitle: body.postTitle }));
     const apiKey = String(body.apiKey || '').trim();
     if (!apiKey) {
       return reply.status(401).send({ message: 'Missing apiKey' });
@@ -325,7 +326,10 @@ export async function wpWebhookRoutes(app) {
             select: { id: true },
           });
           return owners.map((o) => o.id);
-        } catch { return []; }
+        } catch (err) {
+          console.error('[pipeline-notify] getOwnerUserIds error:', err.message);
+          return [];
+        }
       };
 
       // Helper: dedupe + drop falsy
@@ -334,6 +338,8 @@ export async function wpWebhookRoutes(app) {
       // Resolve common recipient groups once per request
       const ownerIds = await getOwnerUserIds();
       const pmIds = uniq([project.leadPmId, project.secondaryPmId]);
+
+      console.log(`[pipeline-notify] eventType=${eventType} status=${status} ownerIds=${JSON.stringify(ownerIds)} pmIds=${JSON.stringify(pmIds)} submittedById=${submittedById}`);
 
       // Common variables for all pipeline notifications
       const nowFormatted = new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
@@ -429,15 +435,19 @@ export async function wpWebhookRoutes(app) {
         const statusSlugMap = {
           pending_pm_review: 'content_submitted_for_review',
           pending_client_review: 'content_ready_for_client_review',
-          pm_changes_requested: 'content_pm_changes_requested',
-          client_changes_requested: 'content_client_changes_requested',
           pm_approved: 'content_pm_approved',
           client_approved: 'content_client_approved',
+          changes_requested_by_pm: 'content_pm_changes_requested',
+          changes_requested_by_client: 'content_client_changes_requested',
+          // Legacy/alternate keys
+          pm_changes_requested: 'content_pm_changes_requested',
+          client_changes_requested: 'content_client_changes_requested',
         };
         const slug = statusSlugMap[status] || 'content_submitted_for_review';
         const clientUserIds = await getClientUserIds();
         // Include everyone relevant: PMs + worker + owners + clients
         const recipients = uniq([...pmIds, submittedById, ...ownerIds, ...clientUserIds]);
+        console.log(`[pipeline-notify] RESEND slug=${slug} recipients=${JSON.stringify(recipients)} status=${status}`);
         if (recipients.length > 0) {
           notify({
             slug,
@@ -445,7 +455,9 @@ export async function wpWebhookRoutes(app) {
             variables: commonVars,
             actionUrl: clientPreviewUrl || pmPreviewUrl,
             metadata: { contentReviewId: review.id, resend: true },
-          }).catch(() => {});
+          }).then(() => console.log(`[pipeline-notify] notify() resolved for slug=${slug}`)).catch((err) => console.error(`[pipeline-notify] notify() FAILED:`, err));
+        } else {
+          console.warn('[pipeline-notify] RESEND: no recipients found — skipping notify()');
         }
       }
     } catch {
