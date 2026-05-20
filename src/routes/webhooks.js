@@ -179,7 +179,7 @@ export async function wpWebhookRoutes(app) {
 
     const project = await prisma.project.findFirst({
       where: { wpApiKey: apiKey },
-      select: { id: true, leadPmId: true, secondaryPmId: true, name: true },
+      select: { id: true, leadPmId: true, name: true },
     });
     if (!project) {
       return reply.status(401).send({ message: 'Invalid API key' });
@@ -337,7 +337,7 @@ export async function wpWebhookRoutes(app) {
 
       // Resolve common recipient groups once per request
       const ownerIds = await getOwnerUserIds();
-      const pmIds = uniq([project.leadPmId, project.secondaryPmId]);
+      const pmIds = uniq([project.leadPmId]);
 
       console.log(`[pipeline-notify] eventType=${eventType} status=${status} ownerIds=${JSON.stringify(ownerIds)} pmIds=${JSON.stringify(pmIds)} submittedById=${submittedById}`);
 
