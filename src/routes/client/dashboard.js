@@ -96,12 +96,13 @@ export async function clientDashboardRoutes(app) {
         return reply.status(404).send({ message: 'No client account linked to this user' });
       }
 
-      // Fetch active tasks
+      // Fetch active tasks (main tasks only, exclude subtasks)
       const activeTasks = await prisma.task.findMany({
         where: {
           project: { clientId: { in: clientIds } },
           clientVisible: true,
           status: { notIn: ['COMPLETED', 'CANCELLED'] },
+          parentTaskId: null,
         },
         orderBy: { dueDate: 'asc' },
         include: {
