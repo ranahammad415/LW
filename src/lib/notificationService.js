@@ -350,6 +350,19 @@ export async function notify({ slug, recipientIds, variables = {}, actionUrl = n
     ? (actionUrl.startsWith('http') ? actionUrl : `${process.env.FRONTEND_URL || 'https://app.localwaves.ai'}${actionUrl}`)
     : null;
 
+  // Helper: append ?reviewer=<name> to a URL so the preview/landing page can
+  // attribute who is reviewing. Safe on malformed URLs (returns input).
+  const appendReviewerParam = (url, name) => {
+    if (!url || !name) return url;
+    try {
+      const u = new URL(url);
+      u.searchParams.set('reviewer', name);
+      return u.toString();
+    } catch {
+      return url;
+    }
+  };
+
   // 4. Pre-enrich shared context (detail card + comment thread) once
   const sharedContext = await buildSharedEmailContext(slug, variables, metadata);
 
@@ -374,16 +387,19 @@ export async function notify({ slug, recipientIds, variables = {}, actionUrl = n
     const renderedText = source.bodyText ? renderTemplate(source.bodyText, variables) : null;
     const renderedInApp = renderTemplate(source.inAppMessage, variables);
 
+    // Per-recipient action URL with reviewer name attached (display-only)
+    const userActionUrl = appendReviewerParam(fullActionUrl, user.name);
+
     // Build branded HTML for this recipient (reuses shared enrichment)
     let brandedHtml;
     try {
-      brandedHtml = await buildRichEmailHtml(slug, template.category, source, variables, fullActionUrl, sharedContext);
+      brandedHtml = await buildRichEmailHtml(slug, template.category, source, variables, userActionUrl, sharedContext);
     } catch (err) {
       console.error(`[notify] Rich email build failed for "${slug}"/${audience}, falling back:`, err.message);
       brandedHtml = await wrapInBrandedLayout({
         bodyHtml: renderTemplate(source.bodyHtml, variables),
         preheader: renderedSubject,
-        actionUrl: fullActionUrl,
+        actionUrl: userActionUrl,
         actionLabel: source.ctaLabel || CTA_LABEL_MAP[template.category] || 'View in Portal',
         category: template.category,
       });

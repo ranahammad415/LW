@@ -105,11 +105,11 @@ const templates = [
 
   // ── Pipeline / Content Review Category ──
   { slug: 'content_submitted_for_review', name: 'Content Submitted for Review', description: 'When content is submitted to PM for review', category: 'pipeline',
-    subject: '[Review] "{{postTitle}}" submitted for review \u2014 {{projectName}}',
-    bodyHtml: '<p>Content <strong>\u201c{{postTitle}}\u201d</strong> ({{postType}}) in project <strong>{{projectName}}</strong> has been submitted for your review{{roundLabel}}.</p><p>Submitted by: {{submittedBy}} on {{submittedAt}}</p>',
-    bodyText: 'Content "{{postTitle}}" ({{postType}}) in project "{{projectName}}" has been submitted for review{{roundLabel}}. Submitted by {{submittedBy}} on {{submittedAt}}.',
+    subject: '[Review] "{{postTitle}}" submitted for review — {{projectName}}',
+    bodyHtml: '<p>Content <strong>“{{postTitle}}”</strong> ({{postType}}) in project <strong>{{projectName}}</strong> has been submitted for your review{{roundLabel}}.</p><p style="color:#555;font-size:13px;line-height:1.5;">{{aiSummary}}</p><p>Submitted by: {{submittedBy}} on {{submittedAt}}</p>',
+    bodyText: 'Content "{{postTitle}}" ({{postType}}) in project "{{projectName}}" has been submitted for review{{roundLabel}}. {{aiSummary}} Submitted by {{submittedBy}} on {{submittedAt}}.',
     inAppMessage: '[{{projectName}}] "{{postTitle}}" ({{postType}}) submitted for review{{roundLabel}}',
-    variables: ['postTitle', 'projectName', 'postType', 'submittedBy', 'submittedAt', 'roundLabel', 'actionUrl'] },
+    variables: ['postTitle', 'projectName', 'postType', 'submittedBy', 'submittedAt', 'roundLabel', 'aiSummary', 'actionUrl'] },
 
   { slug: 'content_pm_approved', name: 'Content PM Approved', description: 'When PM approves content', category: 'pipeline',
     subject: '[Approved] "{{postTitle}}" approved by PM \u2014 {{projectName}}',
@@ -140,11 +140,11 @@ const templates = [
     variables: ['postTitle', 'projectName', 'postType', 'actionUrl'] },
 
   { slug: 'content_ready_for_client_review', name: 'Content Ready for Client Review', description: 'When PM approves content and it is sent to client for review', category: 'pipeline',
-    subject: '[Review Needed] "{{postTitle}}" is ready for your review \u2014 {{projectName}}',
-    bodyHtml: '<p>Content <strong>\u201c{{postTitle}}\u201d</strong> ({{postType}}) in project <strong>{{projectName}}</strong> has been approved by the PM and is now ready for your review.</p>',
-    bodyText: 'Content "{{postTitle}}" ({{postType}}) in project "{{projectName}}" is ready for your review.',
+    subject: '[Review Needed] "{{postTitle}}" is ready for your review — {{projectName}}',
+    bodyHtml: '<p>Content <strong>“{{postTitle}}”</strong> ({{postType}}) in project <strong>{{projectName}}</strong> has been approved by the PM and is now ready for your review.</p><p style="color:#555;font-size:13px;line-height:1.5;">{{aiSummary}}</p>',
+    bodyText: 'Content "{{postTitle}}" ({{postType}}) in project "{{projectName}}" is ready for your review. {{aiSummary}}',
     inAppMessage: '[{{projectName}}] "{{postTitle}}" ({{postType}}) is ready for your review',
-    variables: ['postTitle', 'projectName', 'postType', 'actionUrl'] },
+    variables: ['postTitle', 'projectName', 'postType', 'aiSummary', 'actionUrl'] },
 
   { slug: 'content_published', name: 'Content Published', description: 'When content is published', category: 'pipeline',
     subject: '[Published] "{{postTitle}}" \u2014 {{projectName}}',

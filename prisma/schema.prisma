@@ -50,33 +50,33 @@ model User {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @default(now()) @updatedAt
 
-  clientAccess                ClientUser[]         @relation("UserClientAccess")
-  addedClientUsers            ClientUser[]         @relation("AddedByRelation")
-  managedClientsLead          ClientAccount[]      @relation("LeadPmRelation")
-  managedClientsSec           ClientAccount[]      @relation("SecondaryPmRelation")
-  projectsLed                 Project[]            @relation("ProjectLeadPm")
-  assignedTasks               Task[]               @relation("TaskAssignees")
-  tasksCreated                Task[]               @relation("TasksCreated")
-  issuesReported              ClientIssue[]        @relation("IssueReporter")
-  assignedIssues              ClientIssue[]       @relation("IssueAssignee")
-  issueComments               IssueComment[]       @relation("CommentAuthor")
-  issueActivities             IssueActivityLog[]   @relation("IssueActivityActor")
-  taskActivities              TaskActivityLog[]    @relation("TaskActivityActor")
-  meetingsHosted              MeetingRecord[]      @relation("MeetingHost")
+  clientAccess                ClientUser[]             @relation("UserClientAccess")
+  addedClientUsers            ClientUser[]             @relation("AddedByRelation")
+  managedClientsLead          ClientAccount[]          @relation("LeadPmRelation")
+  managedClientsSec           ClientAccount[]          @relation("SecondaryPmRelation")
+  projectsLed                 Project[]                @relation("ProjectLeadPm")
+  assignedTasks               Task[]                   @relation("TaskAssignees")
+  tasksCreated                Task[]                   @relation("TasksCreated")
+  issuesReported              ClientIssue[]            @relation("IssueReporter")
+  assignedIssues              ClientIssue[]            @relation("IssueAssignee")
+  issueComments               IssueComment[]           @relation("CommentAuthor")
+  issueActivities             IssueActivityLog[]       @relation("IssueActivityActor")
+  taskActivities              TaskActivityLog[]        @relation("TaskActivityActor")
+  meetingsHosted              MeetingRecord[]          @relation("MeetingHost")
   dailyStandups               DailyStandup[]
   deliverableVersionsUploaded DeliverableVersion[]
   systemAlerts                SystemAlert[]
   taskComments                TaskComment[]
-  taskCommentReactions        TaskCommentReaction[] @relation("TaskCommentReactor")
-  taskAttachments             TaskAttachment[]      @relation("TaskAttachmentUploader")
-  inputRequestsCreated        ClientInputRequest[]  @relation("InputRequestedBy")
-  clientActivityLogs          ClientActivityLog[]   @relation("ClientActivityActor")
-  inputRequestsResponded      ClientInputRequest[]  @relation("InputRespondedBy")
+  taskCommentReactions        TaskCommentReaction[]    @relation("TaskCommentReactor")
+  taskAttachments             TaskAttachment[]         @relation("TaskAttachmentUploader")
+  inputRequestsCreated        ClientInputRequest[]     @relation("InputRequestedBy")
+  clientActivityLogs          ClientActivityLog[]      @relation("ClientActivityActor")
+  inputRequestsResponded      ClientInputRequest[]     @relation("InputRespondedBy")
   keywordComments             KeywordComment[]
-  keywordSuggestionsReviewed  KeywordSuggestion[] @relation("KeywordSuggestionReviewer")
+  keywordSuggestionsReviewed  KeywordSuggestion[]      @relation("KeywordSuggestionReviewer")
   notificationLogs            NotificationLog[]
   notificationPreferences     NotificationPreference[]
-  pmUpdatesAuthored           ClientPMUpdate[]      @relation("PMUpdateAuthor")
+  pmUpdatesAuthored           ClientPMUpdate[]         @relation("PMUpdateAuthor")
   passwordResetTokens         PasswordResetToken[]
 
   @@map("user")
@@ -131,7 +131,7 @@ model NotificationTemplate {
   createdAt          DateTime @default(now())
   updatedAt          DateTime @default(now()) @updatedAt
 
-  variants           NotificationTemplateVariant[]
+  variants NotificationTemplateVariant[]
 
   @@map("notificationtemplate")
 }
@@ -148,7 +148,7 @@ model NotificationTemplateVariant {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @default(now()) @updatedAt
 
-  template     NotificationTemplate @relation(fields: [templateSlug], references: [slug], onDelete: Cascade)
+  template NotificationTemplate @relation(fields: [templateSlug], references: [slug], onDelete: Cascade)
 
   @@unique([templateSlug, audience])
   @@map("notificationtemplatevariant")
@@ -223,44 +223,44 @@ model Package {
 }
 
 model ClientAccount {
-  id               String            @id @default(uuid())
-  packageId        String?
-  agencyName       String            @db.VarChar(255)
-  websiteUrl       String?           @db.VarChar(500)
-  industry         String?           @db.VarChar(255)
-  country          String?           @db.VarChar(100)
-  timezone         String?           @db.VarChar(100)
-  leadPmId         String?
-  secondaryPmId    String?
-  onboardingStatus OnboardingStatus? @default(PENDING)
-  onboardingStep   Int               @default(1)
-  healthScore      Int?
-  isActive         Boolean           @default(true)
-  analyticsGoogleEmail String?       @db.VarChar(255)
-  internalNotes    String?           @db.LongText
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @default(now()) @updatedAt
+  id                   String            @id @default(uuid())
+  packageId            String?
+  agencyName           String            @db.VarChar(255)
+  websiteUrl           String?           @db.VarChar(500)
+  industry             String?           @db.VarChar(255)
+  country              String?           @db.VarChar(100)
+  timezone             String?           @db.VarChar(100)
+  leadPmId             String?
+  secondaryPmId        String?
+  onboardingStatus     OnboardingStatus? @default(PENDING)
+  onboardingStep       Int               @default(1)
+  healthScore          Int?
+  isActive             Boolean           @default(true)
+  analyticsGoogleEmail String?           @db.VarChar(255)
+  internalNotes        String?           @db.LongText
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @default(now()) @updatedAt
 
-  package             Package?             @relation(fields: [packageId], references: [id])
-  leadPm              User?                @relation("LeadPmRelation", fields: [leadPmId], references: [id])
-  secondaryPm         User?                @relation("SecondaryPmRelation", fields: [secondaryPmId], references: [id])
-  clientUsers         ClientUser[]
-  projects            Project[]
-  lookerEmbeds        LookerEmbed[]
-  monthlyReports      MonthlyReport[]
-  clientAssets        ClientAsset[]
-  keywordSuggestions  KeywordSuggestion[]
-  businessUpdates     BusinessUpdate[]
-  clientIssues        ClientIssue[]
-  meetingRecords      MeetingRecord[]
-  intakeSubmissions   IntakeSubmission[]
-  contractRecords    ContractRecord[]
+  package              Package?               @relation(fields: [packageId], references: [id])
+  leadPm               User?                  @relation("LeadPmRelation", fields: [leadPmId], references: [id])
+  secondaryPm          User?                  @relation("SecondaryPmRelation", fields: [secondaryPmId], references: [id])
+  clientUsers          ClientUser[]
+  projects             Project[]
+  lookerEmbeds         LookerEmbed[]
+  monthlyReports       MonthlyReport[]
+  clientAssets         ClientAsset[]
+  keywordSuggestions   KeywordSuggestion[]
+  businessUpdates      BusinessUpdate[]
+  clientIssues         ClientIssue[]
+  meetingRecords       MeetingRecord[]
+  intakeSubmissions    IntakeSubmission[]
+  contractRecords      ContractRecord[]
   onboardingChecklists OnboardingChecklist[]
-  metricSnapshots    ClientMetricSnapshot[]
-  roiConfig          ClientROIConfig?
-  pmUpdates          ClientPMUpdate[]
-  activityLogs        ClientActivityLog[]
-  analyticsEmails     ClientAnalyticsEmail[]
+  metricSnapshots      ClientMetricSnapshot[]
+  roiConfig            ClientROIConfig?
+  pmUpdates            ClientPMUpdate[]
+  activityLogs         ClientActivityLog[]
+  analyticsEmails      ClientAnalyticsEmail[]
 
   @@map("clientaccount")
 }
@@ -355,9 +355,9 @@ model ClientActivityLog {
 }
 
 model ClientAnalyticsEmail {
-  id       String @id @default(uuid())
+  id       String   @id @default(uuid())
   clientId String
-  email    String @db.VarChar(255)
+  email    String   @db.VarChar(255)
   addedAt  DateTime @default(now())
 
   client ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
@@ -402,13 +402,13 @@ enum TaskPriority {
 }
 
 model Project {
-  id              String        @id @default(uuid())
-  clientId        String
-  name            String        @db.VarChar(255)
-  projectType     ProjectType
-  status          ProjectStatus @default(SETUP)
-  onboardingStep  Int           @default(1)
-  leadPmId        String?
+  id                 String        @id @default(uuid())
+  clientId           String
+  name               String        @db.VarChar(255)
+  projectType        ProjectType
+  status             ProjectStatus @default(SETUP)
+  onboardingStep     Int           @default(1)
+  leadPmId           String?
   wpUrl              String?       @db.VarChar(500)
   wpApiKey           String?       @db.VarChar(255)
   wpThemeName        String?       @db.VarChar(255)
@@ -418,22 +418,22 @@ model Project {
   gscSiteUrl         String?       @db.VarChar(500)
   gscLastSyncedAt    DateTime?
   createdAt          DateTime      @default(now())
-  updatedAt   DateTime      @default(now()) @updatedAt
+  updatedAt          DateTime      @default(now()) @updatedAt
 
-  client             ClientAccount       @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  leadPm             User?               @relation("ProjectLeadPm", fields: [leadPmId], references: [id])
-  tasks              Task[]
-  sitemapNodes       SitemapNode[]
-  trackedKeywords    KeywordTrack[]
-  promptLogs         PromptLog[]
-  clientAssets       ClientAsset[]
-  keywordSuggestions KeywordSuggestion[]
-  businessUpdates    BusinessUpdate[]
-  clientIssues       ClientIssue[]
-  wpPages            WpPage[]
-  contentReviews     WpContentReview[]
-  intakeSubmissions  IntakeSubmission[]
-  contractRecords    ContractRecord[]
+  client              ClientAccount        @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  leadPm              User?                @relation("ProjectLeadPm", fields: [leadPmId], references: [id])
+  tasks               Task[]
+  sitemapNodes        SitemapNode[]
+  trackedKeywords     KeywordTrack[]
+  promptLogs          PromptLog[]
+  clientAssets        ClientAsset[]
+  keywordSuggestions  KeywordSuggestion[]
+  businessUpdates     BusinessUpdate[]
+  clientIssues        ClientIssue[]
+  wpPages             WpPage[]
+  contentReviews      WpContentReview[]
+  intakeSubmissions   IntakeSubmission[]
+  contractRecords     ContractRecord[]
   onboardingChecklist OnboardingChecklist? @relation("ProjectOnboardingChecklist")
 
   @@map("project")
@@ -454,19 +454,19 @@ model SitemapNode {
 }
 
 model KeywordTrack {
-  id            String   @id @default(uuid())
-  projectId     String
-  keyword       String   @db.VarChar(500)
-  volume        Int?
-  currentRank   Int?
-  targetUrl     String?  @db.VarChar(500)
-  status        String   @default("PROPOSED") @db.VarChar(50)
-  sitemapNodeId String?
-  clientNote    String?  @db.LongText
+  id                 String   @id @default(uuid())
+  projectId          String
+  keyword            String   @db.VarChar(500)
+  volume             Int?
+  currentRank        Int?
+  targetUrl          String?  @db.VarChar(500)
+  status             String   @default("PROPOSED") @db.VarChar(50)
+  sitemapNodeId      String?
+  clientNote         String?  @db.LongText
   suggestedKeyword   String?
   suggestedTargetUrl String?
   suggestedNotes     String?  @db.LongText
-  updatedAt     DateTime @default(now()) @updatedAt
+  updatedAt          DateTime @default(now()) @updatedAt
 
   project     Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   sitemapNode SitemapNode?     @relation(fields: [sitemapNodeId], references: [id], onDelete: SetNull)
@@ -476,35 +476,35 @@ model KeywordTrack {
 }
 
 model KeywordComment {
-  id             String       @id @default(uuid())
+  id             String   @id @default(uuid())
   keywordTrackId String
   userId         String
-  message        String       @db.LongText
-  createdAt      DateTime     @default(now())
+  message        String   @db.LongText
+  createdAt      DateTime @default(now())
 
-  keywordTrack   KeywordTrack @relation(fields: [keywordTrackId], references: [id], onDelete: Cascade)
-  user           User         @relation(fields: [userId], references: [id])
+  keywordTrack KeywordTrack @relation(fields: [keywordTrackId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id])
 
   @@map("keywordcomment")
 }
 
 model PromptLog {
-  id              String   @id @default(uuid())
-  projectId       String
-  platform        String   @db.VarChar(100)
-  promptQuery     String   @db.LongText
-  llmResponse     String   @db.LongText
-  notes           String?  @db.LongText
-  keyword         String?  @db.VarChar(500)
-  targetUrl       String?  @db.VarChar(500)
-  cited           Boolean?
+  id               String   @id @default(uuid())
+  projectId        String
+  platform         String   @db.VarChar(100)
+  promptQuery      String   @db.LongText
+  llmResponse      String   @db.LongText
+  notes            String?  @db.LongText
+  keyword          String?  @db.VarChar(500)
+  targetUrl        String?  @db.VarChar(500)
+  cited            Boolean?
   competitorsCited Json?
-  sentimentScore  String?  @db.VarChar(20)
-  linkedWpPageId  String?
-  createdAt       DateTime @default(now())
+  sentimentScore   String?  @db.VarChar(20)
+  linkedWpPageId   String?
+  createdAt        DateTime @default(now())
 
-  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  linkedWpPage WpPage?  @relation(fields: [linkedWpPageId], references: [id], onDelete: SetNull)
+  project       Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  linkedWpPage  WpPage?           @relation(fields: [linkedWpPageId], references: [id], onDelete: SetNull)
   automatedRuns AeoAutomatedRun[]
 
   @@map("promptlog")
@@ -522,8 +522,6 @@ model AeoAutomatedRun {
   @@map("aeoautomatedrun")
 }
 
-
-
 model WpAccessPreset {
   id           String   @id @default(uuid())
   name         String   @db.VarChar(255)
@@ -535,8 +533,6 @@ model WpAccessPreset {
 
   @@map("wpaccesspreset")
 }
-
-
 
 model Task {
   id            String       @id @default(uuid())
@@ -554,27 +550,27 @@ model Task {
 
   parentTaskId     String?
   wpAccessPresetId String?
-  parentTask       Task?          @relation("SubTasks", fields: [parentTaskId], references: [id], onDelete: SetNull)
-  subTasks         Task[]         @relation("SubTasks")
+  parentTask       Task?           @relation("SubTasks", fields: [parentTaskId], references: [id], onDelete: SetNull)
+  subTasks         Task[]          @relation("SubTasks")
   wpAccessPreset   WpAccessPreset? @relation(fields: [wpAccessPresetId], references: [id], onDelete: SetNull)
 
   milestone String? @db.VarChar(100)
 
-  requiresClientInput   Boolean @default(false)
-  clientRequestNote    String? @db.LongText
-  clientProvidedInput  Boolean @default(false)
+  requiresClientInput    Boolean @default(false)
+  clientRequestNote      String? @db.LongText
+  clientProvidedInput    Boolean @default(false)
   clientProvidedResponse String? @db.LongText
 
-  project        Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  assignees      User[]               @relation("TaskAssignees")
-  createdBy      User?                @relation("TasksCreated", fields: [createdById], references: [id])
-  dependsOnTasks Task[]               @relation("TaskDependencies")
-  blockingTasks  Task[]               @relation("TaskDependencies")
-  deliverables   DeliverableVersion[]
-  comments       TaskComment[]
-  attachments    TaskAttachment[]
-  activityLogs   TaskActivityLog[]
-  wpPages        WpPage[]
+  project             Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assignees           User[]               @relation("TaskAssignees")
+  createdBy           User?                @relation("TasksCreated", fields: [createdById], references: [id])
+  dependsOnTasks      Task[]               @relation("TaskDependencies")
+  blockingTasks       Task[]               @relation("TaskDependencies")
+  deliverables        DeliverableVersion[]
+  comments            TaskComment[]
+  attachments         TaskAttachment[]
+  activityLogs        TaskActivityLog[]
+  wpPages             WpPage[]
   clientInputRequests ClientInputRequest[]
 
   @@map("task")
@@ -604,10 +600,10 @@ model TaskComment {
   createdAt DateTime  @default(now())
   editedAt  DateTime?
 
-  task      Task                   @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  user      User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  parent    TaskComment?           @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
-  replies   TaskComment[]          @relation("CommentReplies")
+  task      Task                  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user      User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent    TaskComment?          @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies   TaskComment[]         @relation("CommentReplies")
   reactions TaskCommentReaction[]
 
   @@map("taskcomment")
@@ -708,18 +704,18 @@ model ClientAsset {
 }
 
 model KeywordSuggestion {
-  id           String    @id @default(uuid())
-  clientId     String
-  projectId    String?
-  keyword      String
-  targetPage   String?
-  priority     String
-  notes        String?   @db.LongText
-  status       String    @default("PENDING")
-  submittedAt  DateTime  @default(now())
-  reviewedBy   String?
-  reviewedAt   DateTime?
-  reviewNote   String?   @db.LongText
+  id          String    @id @default(uuid())
+  clientId    String
+  projectId   String?
+  keyword     String
+  targetPage  String?
+  priority    String
+  notes       String?   @db.LongText
+  status      String    @default("PENDING")
+  submittedAt DateTime  @default(now())
+  reviewedBy  String?
+  reviewedAt  DateTime?
+  reviewNote  String?   @db.LongText
 
   client   ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
   project  Project?      @relation(fields: [projectId], references: [id])
@@ -743,25 +739,25 @@ model BusinessUpdate {
 }
 
 model ClientIssue {
-  id                String    @id @default(uuid())
-  clientId          String
-  projectId         String?
-  reportedById      String
-  assigneeId        String?
-  wpAccessPresetId  String?
-  title             String    @db.VarChar(500)
-  description       String    @db.LongText
-  status            String    @default("OPEN")
-  priority          String    @default("MEDIUM")
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @default(now()) @updatedAt
-  resolvedAt        DateTime?
+  id               String    @id @default(uuid())
+  clientId         String
+  projectId        String?
+  reportedById     String
+  assigneeId       String?
+  wpAccessPresetId String?
+  title            String    @db.VarChar(500)
+  description      String    @db.LongText
+  status           String    @default("OPEN")
+  priority         String    @default("MEDIUM")
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @default(now()) @updatedAt
+  resolvedAt       DateTime?
 
-  client         ClientAccount   @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  project        Project?        @relation(fields: [projectId], references: [id])
-  reportedBy     User            @relation("IssueReporter", fields: [reportedById], references: [id])
-  assignee       User?           @relation("IssueAssignee", fields: [assigneeId], references: [id])
-  wpAccessPreset WpAccessPreset? @relation(fields: [wpAccessPresetId], references: [id])
+  client         ClientAccount      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  project        Project?           @relation(fields: [projectId], references: [id])
+  reportedBy     User               @relation("IssueReporter", fields: [reportedById], references: [id])
+  assignee       User?              @relation("IssueAssignee", fields: [assigneeId], references: [id])
+  wpAccessPreset WpAccessPreset?    @relation(fields: [wpAccessPresetId], references: [id])
   comments       IssueComment[]
   activityLogs   IssueActivityLog[]
 
@@ -816,29 +812,29 @@ model MeetingRecord {
 }
 
 model WpPage {
-  id               String   @id @default(uuid())
+  id               String    @id @default(uuid())
   projectId        String
   wpPostId         Int
-  title            String   @db.VarChar(500)
-  slug             String   @db.VarChar(500)
-  status           String   @db.VarChar(50)
-  postType         String   @db.VarChar(50)
-  url              String   @db.VarChar(500)
-  content          String   @db.LongText
-  excerpt          String?  @db.LongText
-  featuredImageUrl String?  @db.VarChar(500)
-  template         String?  @db.VarChar(200)
-  seoTitle         String?  @db.VarChar(500)
-  seoDescription   String?  @db.LongText
-  contentHash      String   @db.VarChar(64)
+  title            String    @db.VarChar(500)
+  slug             String    @db.VarChar(500)
+  status           String    @db.VarChar(50)
+  postType         String    @db.VarChar(50)
+  url              String    @db.VarChar(500)
+  content          String    @db.LongText
+  excerpt          String?   @db.LongText
+  featuredImageUrl String?   @db.VarChar(500)
+  template         String?   @db.VarChar(200)
+  seoTitle         String?   @db.VarChar(500)
+  seoDescription   String?   @db.LongText
+  contentHash      String    @db.VarChar(64)
   taskId           String?
   modifiedAt       DateTime?
-  syncedAt         DateTime @default(now())
-  createdAt        DateTime @default(now())
+  syncedAt         DateTime  @default(now())
+  createdAt        DateTime  @default(now())
 
-  project   Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  task      Task?            @relation(fields: [taskId], references: [id], onDelete: SetNull)
-  snapshots WpPageSnapshot[]
+  project    Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  task       Task?            @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  snapshots  WpPageSnapshot[]
   promptLogs PromptLog[]
 
   @@unique([projectId, wpPostId])
@@ -893,12 +889,13 @@ model WpContentReview {
   clientReviewedAt String?   @db.VarChar(50)
   revisionNumber   Int       @default(1)
   lastEventType    String?   @db.VarChar(100)
+  aiSummary        String?   @db.Text
   isPublished      Boolean   @default(false)
   publishedAt      DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @default(now()) @updatedAt
 
-  project Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
   events  WpContentReviewEvent[]
 
   @@unique([projectId, wpPipelineId])
@@ -936,9 +933,9 @@ model ClientInputRequest {
   requestedAt   DateTime  @default(now())
   respondedAt   DateTime?
 
-  task          Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  requestedBy   User      @relation("InputRequestedBy", fields: [requestedById], references: [id])
-  respondedBy   User?     @relation("InputRespondedBy", fields: [respondedById], references: [id])
+  task        Task  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  requestedBy User  @relation("InputRequestedBy", fields: [requestedById], references: [id])
+  respondedBy User? @relation("InputRespondedBy", fields: [respondedById], references: [id])
 
   @@map("clientinputrequest")
 }
@@ -1029,7 +1026,7 @@ model ProjectActivityReport {
   id          String   @id @default(uuid())
   scope       String   @db.VarChar(20) // "PROJECT" | "AGENCY"
   projectId   String?
-  month       String   @db.VarChar(7)  // "YYYY-MM"
+  month       String   @db.VarChar(7) // "YYYY-MM"
   factsJson   Json
   aiJson      Json?
   narrativeMd String   @db.LongText
@@ -1071,7 +1068,7 @@ model OmniSearchProject {
   name        String   @db.VarChar(255)
   domain      String   @db.VarChar(500)
   description String?  @db.Text
-  settings    String?  @db.LongText  // JSON config
+  settings    String?  @db.LongText // JSON config
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -1090,23 +1087,23 @@ model OmniSearchProject {
 }
 
 model OmniSearchKeyword {
-  id            Int      @id @default(autoincrement())
-  projectId     Int
-  keyword       String   @db.VarChar(500)
-  volume        Int?     // monthly search volume
-  difficulty    Float?   // keyword difficulty 0-100
-  cpc           Float?   // cost per click
-  serpFeatures  String?  @db.Text  // JSON array of SERP features
-  country       String   @db.VarChar(10) @default("US")
-  intent        String?  @db.VarChar(50) // informational, transactional, navigational, commercial
-  isTracked     Boolean  @default(false)
-  clusterId     Int?
-  dataSource    String   @db.VarChar(50) @default("claude_estimated") // dataforseo | serpapi | gsc | claude_estimated
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id           Int      @id @default(autoincrement())
+  projectId    Int
+  keyword      String   @db.VarChar(500)
+  volume       Int? // monthly search volume
+  difficulty   Float? // keyword difficulty 0-100
+  cpc          Float? // cost per click
+  serpFeatures String?  @db.Text // JSON array of SERP features
+  country      String   @default("US") @db.VarChar(10)
+  intent       String?  @db.VarChar(50) // informational, transactional, navigational, commercial
+  isTracked    Boolean  @default(false)
+  clusterId    Int?
+  dataSource   String   @default("claude_estimated") @db.VarChar(50) // dataforseo | serpapi | gsc | claude_estimated
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
-  project   OmniSearchProject         @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  cluster   OmniSearchKeywordCluster?  @relation(fields: [clusterId], references: [id], onDelete: SetNull)
+  project     OmniSearchProject         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  cluster     OmniSearchKeywordCluster? @relation(fields: [clusterId], references: [id], onDelete: SetNull)
   rankHistory OmniSearchRankHistory[]
 
   @@index([projectId])
@@ -1128,16 +1125,16 @@ model OmniSearchKeywordCluster {
 }
 
 model OmniSearchRankHistory {
-  id         Int      @id @default(autoincrement())
-  keywordId  Int
-  position   Int?     // null = not ranking
-  url        String?  @db.VarChar(500)  // ranking URL
-  engine     String   @db.VarChar(50) @default("google")  // google, bing, yahoo, etc.
-  device     String   @db.VarChar(20) @default("desktop")
-  location   String?  @db.VarChar(100)
-  serpFeatures String? @db.Text  // JSON: which SERP features appear
-  dataSource String   @db.VarChar(50) @default("claude_estimated") // serpapi | dataforseo | gsc | claude_estimated
-  checkedAt  DateTime @default(now())
+  id           Int      @id @default(autoincrement())
+  keywordId    Int
+  position     Int? // null = not ranking
+  url          String?  @db.VarChar(500) // ranking URL
+  engine       String   @default("google") @db.VarChar(50) // google, bing, yahoo, etc.
+  device       String   @default("desktop") @db.VarChar(20)
+  location     String?  @db.VarChar(100)
+  serpFeatures String?  @db.Text // JSON: which SERP features appear
+  dataSource   String   @default("claude_estimated") @db.VarChar(50) // serpapi | dataforseo | gsc | claude_estimated
+  checkedAt    DateTime @default(now())
 
   keyword OmniSearchKeyword @relation(fields: [keywordId], references: [id], onDelete: Cascade)
 
@@ -1147,20 +1144,20 @@ model OmniSearchRankHistory {
 }
 
 model OmniSearchContentSession {
-  id             Int      @id @default(autoincrement())
-  projectId      Int
-  targetKeyword  String   @db.VarChar(500)
-  title          String?  @db.VarChar(500)
-  content        String?  @db.LongText
-  htmlContent    String?  @db.LongText
-  nlpScore       Float?   // overall content score 0-100
-  wordCount      Int?
+  id               Int      @id @default(autoincrement())
+  projectId        Int
+  targetKeyword    String   @db.VarChar(500)
+  title            String?  @db.VarChar(500)
+  content          String?  @db.LongText
+  htmlContent      String?  @db.LongText
+  nlpScore         Float? // overall content score 0-100
+  wordCount        Int?
   readabilityScore Float? // Flesch-Kincaid or similar
-  termData       String?  @db.LongText  // JSON: recommended terms + usage counts
-  serpData       String?  @db.LongText  // JSON: top SERP competitors analysis
-  status         String   @db.VarChar(50) @default("draft") // draft, optimizing, published
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  termData         String?  @db.LongText // JSON: recommended terms + usage counts
+  serpData         String?  @db.LongText // JSON: top SERP competitors analysis
+  status           String   @default("draft") @db.VarChar(50) // draft, optimizing, published
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   project  OmniSearchProject          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   articles OmniSearchArticle[]
@@ -1177,11 +1174,11 @@ model OmniSearchArticle {
   topic           String   @db.VarChar(500)
   title           String?  @db.VarChar(500)
   content         String   @db.LongText
-  outline         String?  @db.LongText  // JSON: article outline/structure
+  outline         String?  @db.LongText // JSON: article outline/structure
   metaDescription String?  @db.VarChar(500)
   model           String?  @db.VarChar(100) // which AI model generated
   wordCount       Int?
-  type            String   @db.VarChar(50) @default("article") // article, outline, rewrite, humanized
+  type            String   @default("article") @db.VarChar(50) // article, outline, rewrite, humanized
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -1192,19 +1189,19 @@ model OmniSearchArticle {
 }
 
 model OmniSearchAudit {
-  id           Int      @id @default(autoincrement())
+  id           Int       @id @default(autoincrement())
   projectId    Int
-  url          String   @db.VarChar(500)  // root URL audited
-  status       String   @db.VarChar(50) @default("pending") // pending, crawling, analyzing, completed, failed
-  pagesScanned Int      @default(0)
-  issueCount   Int      @default(0)
-  healthScore  Float?   // 0-100 site health
-  summary      String?  @db.LongText  // JSON: audit summary
-  settings     String?  @db.Text  // JSON: audit configuration
+  url          String    @db.VarChar(500) // root URL audited
+  status       String    @default("pending") @db.VarChar(50) // pending, crawling, analyzing, completed, failed
+  pagesScanned Int       @default(0)
+  issueCount   Int       @default(0)
+  healthScore  Float? // 0-100 site health
+  summary      String?   @db.LongText // JSON: audit summary
+  settings     String?   @db.Text // JSON: audit configuration
   completedAt  DateTime?
-  createdAt    DateTime @default(now())
+  createdAt    DateTime  @default(now())
 
-  project OmniSearchProject     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project OmniSearchProject       @relation(fields: [projectId], references: [id], onDelete: Cascade)
   issues  OmniSearchAuditIssue[]
   pages   OmniSearchCrawledPage[]
 
@@ -1215,8 +1212,8 @@ model OmniSearchAudit {
 model OmniSearchAuditIssue {
   id          Int      @id @default(autoincrement())
   auditId     Int
-  type        String   @db.VarChar(100)  // missing_title, duplicate_meta, broken_link, etc.
-  severity    String   @db.VarChar(20)   // critical, warning, info
+  type        String   @db.VarChar(100) // missing_title, duplicate_meta, broken_link, etc.
+  severity    String   @db.VarChar(20) // critical, warning, info
   url         String   @db.VarChar(500)
   description String   @db.Text
   suggestion  String?  @db.Text
@@ -1230,22 +1227,22 @@ model OmniSearchAuditIssue {
 }
 
 model OmniSearchCrawledPage {
-  id          Int      @id @default(autoincrement())
-  auditId     Int
-  url         String   @db.VarChar(500)
-  statusCode  Int?
-  title       String?  @db.VarChar(500)
-  metaDesc    String?  @db.VarChar(500)
-  h1          String?  @db.VarChar(500)
-  canonical   String?  @db.VarChar(500)
-  wordCount   Int?
-  loadTime    Float?   // seconds
-  contentType String?  @db.VarChar(100)
+  id            Int      @id @default(autoincrement())
+  auditId       Int
+  url           String   @db.VarChar(500)
+  statusCode    Int?
+  title         String?  @db.VarChar(500)
+  metaDesc      String?  @db.VarChar(500)
+  h1            String?  @db.VarChar(500)
+  canonical     String?  @db.VarChar(500)
+  wordCount     Int?
+  loadTime      Float? // seconds
+  contentType   String?  @db.VarChar(100)
   internalLinks Int?
   externalLinks Int?
-  images      Int?
-  indexable   Boolean  @default(true)
-  crawledAt   DateTime @default(now())
+  images        Int?
+  indexable     Boolean  @default(true)
+  crawledAt     DateTime @default(now())
 
   audit OmniSearchAudit @relation(fields: [auditId], references: [id], onDelete: Cascade)
 
@@ -1254,24 +1251,24 @@ model OmniSearchCrawledPage {
 }
 
 model OmniSearchBacklink {
-  id            Int      @id @default(autoincrement())
-  projectId     Int
-  sourceUrl     String   @db.VarChar(500)
-  sourceDomain  String   @db.VarChar(255)
-  targetUrl     String   @db.VarChar(500)
-  anchorText    String?  @db.VarChar(500)
-  domainRating  Float?   // 0-100
-  trustFlow     Float?   // 0-100
-  citationFlow  Float?   // 0-100
-  spamScore     Float?   // 0-100 higher = more toxic (for disavow auto-detect)
-  isDoFollow    Boolean  @default(true)
-  isActive      Boolean  @default(true)
-  dataSource    String   @db.VarChar(50) @default("claude_estimated") // dataforseo | majestic | ahrefs | claude_estimated
-  firstSeen     DateTime @default(now())
-  lastSeen      DateTime @default(now())
+  id           Int      @id @default(autoincrement())
+  projectId    Int
+  sourceUrl    String   @db.VarChar(500)
+  sourceDomain String   @db.VarChar(255)
+  targetUrl    String   @db.VarChar(500)
+  anchorText   String?  @db.VarChar(500)
+  domainRating Float? // 0-100
+  trustFlow    Float? // 0-100
+  citationFlow Float? // 0-100
+  spamScore    Float? // 0-100 higher = more toxic (for disavow auto-detect)
+  isDoFollow   Boolean  @default(true)
+  isActive     Boolean  @default(true)
+  dataSource   String   @default("claude_estimated") @db.VarChar(50) // dataforseo | majestic | ahrefs | claude_estimated
+  firstSeen    DateTime @default(now())
+  lastSeen     DateTime @default(now())
 
-  project  OmniSearchProject       @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  disavow  OmniSearchDisavowEntry?
+  project OmniSearchProject       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  disavow OmniSearchDisavowEntry?
 
   @@index([projectId])
   @@index([sourceDomain])
@@ -1279,12 +1276,12 @@ model OmniSearchBacklink {
 }
 
 model OmniSearchDisavowEntry {
-  id          Int      @id @default(autoincrement())
-  backlinkId  Int      @unique
-  reason      String   @db.VarChar(500)
-  status      String   @db.VarChar(50) @default("flagged") // flagged, exported, submitted
-  scope       String   @db.VarChar(10) @default("domain") // domain | url
-  createdAt   DateTime @default(now())
+  id         Int      @id @default(autoincrement())
+  backlinkId Int      @unique
+  reason     String   @db.VarChar(500)
+  status     String   @default("flagged") @db.VarChar(50) // flagged, exported, submitted
+  scope      String   @default("domain") @db.VarChar(10) // domain | url
+  createdAt  DateTime @default(now())
 
   backlink OmniSearchBacklink @relation(fields: [backlinkId], references: [id], onDelete: Cascade)
 
@@ -1292,14 +1289,14 @@ model OmniSearchDisavowEntry {
 }
 
 model OmniSearchGeoPrompt {
-  id          Int      @id @default(autoincrement())
-  projectId   Int
-  prompt      String   @db.Text
-  platform    String   @db.VarChar(50)  // chatgpt, perplexity, gemini, claude, copilot, grok, meta_ai, deepseek
-  frequency   String   @db.VarChar(20) @default("daily") // hourly, daily, weekly
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id        Int      @id @default(autoincrement())
+  projectId Int
+  prompt    String   @db.Text
+  platform  String   @db.VarChar(50) // chatgpt, perplexity, gemini, claude, copilot, grok, meta_ai, deepseek
+  frequency String   @default("daily") @db.VarChar(20) // hourly, daily, weekly
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   project   OmniSearchProject       @relation(fields: [projectId], references: [id], onDelete: Cascade)
   responses OmniSearchGeoResponse[]
@@ -1309,19 +1306,19 @@ model OmniSearchGeoPrompt {
 }
 
 model OmniSearchGeoResponse {
-  id             Int      @id @default(autoincrement())
-  promptId       Int
-  platform       String   @db.VarChar(50)
-  response       String   @db.LongText
-  brandMentioned Boolean  @default(false)
-  sentiment      String?  @db.VarChar(20)  // positive, neutral, negative
-  citationUrl    String?  @db.VarChar(500)
-  citationRank   Int?     // position in citation list
-  competitorsMentioned String? @db.Text  // JSON array
-  entityAccuracy Float?   // 0-100 how accurately the AI describes the brand
-  country        String?  @db.VarChar(10) // ISO-2 country code for regional GEO breakdown
-  responseSource String   @db.VarChar(50) @default("simulated") // simulated | real_chatgpt | real_perplexity | real_gemini | real_claude | real_openai
-  checkedAt      DateTime @default(now())
+  id                   Int      @id @default(autoincrement())
+  promptId             Int
+  platform             String   @db.VarChar(50)
+  response             String   @db.LongText
+  brandMentioned       Boolean  @default(false)
+  sentiment            String?  @db.VarChar(20) // positive, neutral, negative
+  citationUrl          String?  @db.VarChar(500)
+  citationRank         Int? // position in citation list
+  competitorsMentioned String?  @db.Text // JSON array
+  entityAccuracy       Float? // 0-100 how accurately the AI describes the brand
+  country              String?  @db.VarChar(10) // ISO-2 country code for regional GEO breakdown
+  responseSource       String   @default("simulated") @db.VarChar(50) // simulated | real_chatgpt | real_perplexity | real_gemini | real_claude | real_openai
+  checkedAt            DateTime @default(now())
 
   prompt OmniSearchGeoPrompt @relation(fields: [promptId], references: [id], onDelete: Cascade)
 
@@ -1331,19 +1328,19 @@ model OmniSearchGeoResponse {
 }
 
 model OmniSearchLocalCitation {
-  id              Int      @id @default(autoincrement())
-  projectId       Int
-  platform        String   @db.VarChar(100) // google_business, yelp, facebook, apple_maps, etc.
-  listingUrl      String?  @db.VarChar(500)
-  businessName    String?  @db.VarChar(255)
-  address         String?  @db.Text
-  phone           String?  @db.VarChar(50)
-  napConsistency  Boolean  @default(true)  // Name-Address-Phone consistent
-  rating          Float?
-  reviewCount     Int?
-  isVerified      Boolean  @default(false)
-  lastChecked     DateTime @default(now())
-  createdAt       DateTime @default(now())
+  id             Int      @id @default(autoincrement())
+  projectId      Int
+  platform       String   @db.VarChar(100) // google_business, yelp, facebook, apple_maps, etc.
+  listingUrl     String?  @db.VarChar(500)
+  businessName   String?  @db.VarChar(255)
+  address        String?  @db.Text
+  phone          String?  @db.VarChar(50)
+  napConsistency Boolean  @default(true) // Name-Address-Phone consistent
+  rating         Float?
+  reviewCount    Int?
+  isVerified     Boolean  @default(false)
+  lastChecked    DateTime @default(now())
+  createdAt      DateTime @default(now())
 
   project OmniSearchProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
@@ -1352,16 +1349,16 @@ model OmniSearchLocalCitation {
 }
 
 model OmniSearchReport {
-  id         Int      @id @default(autoincrement())
-  projectId  Int
-  type       String   @db.VarChar(50) // seo_overview, rank_report, content_report, geo_report, backlink_report, full_report
-  title      String   @db.VarChar(255)
-  data       String   @db.LongText  // JSON report data
-  period     String   @db.VarChar(50) // weekly, monthly, quarterly, custom
-  startDate  DateTime?
-  endDate    DateTime?
-  format     String   @db.VarChar(20) @default("json") // json, pdf, csv
-  createdAt  DateTime @default(now())
+  id        Int       @id @default(autoincrement())
+  projectId Int
+  type      String    @db.VarChar(50) // seo_overview, rank_report, content_report, geo_report, backlink_report, full_report
+  title     String    @db.VarChar(255)
+  data      String    @db.LongText // JSON report data
+  period    String    @db.VarChar(50) // weekly, monthly, quarterly, custom
+  startDate DateTime?
+  endDate   DateTime?
+  format    String    @default("json") @db.VarChar(20) // json, pdf, csv
+  createdAt DateTime  @default(now())
 
   project OmniSearchProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
@@ -1371,19 +1368,19 @@ model OmniSearchReport {
 }
 
 model OmniSearchAutomationTask {
-  id          Int      @id @default(autoincrement())
-  projectId   Int
-  type        String   @db.VarChar(100) // content_refresh, rank_check, geo_monitor, audit_schedule, link_prospect, content_publish
-  name        String   @db.VarChar(255)
-  config      String   @db.LongText  // JSON task configuration
-  status      String   @db.VarChar(50) @default("active") // active, paused, completed, failed
-  schedule    String?  @db.VarChar(100) // cron expression or interval
-  lastRun     DateTime?
-  nextRun     DateTime?
-  runCount    Int      @default(0)
-  lastResult  String?  @db.Text  // JSON: last execution result
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id         Int       @id @default(autoincrement())
+  projectId  Int
+  type       String    @db.VarChar(100) // content_refresh, rank_check, geo_monitor, audit_schedule, link_prospect, content_publish
+  name       String    @db.VarChar(255)
+  config     String    @db.LongText // JSON task configuration
+  status     String    @default("active") @db.VarChar(50) // active, paused, completed, failed
+  schedule   String?   @db.VarChar(100) // cron expression or interval
+  lastRun    DateTime?
+  nextRun    DateTime?
+  runCount   Int       @default(0)
+  lastResult String?   @db.Text // JSON: last execution result
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   project OmniSearchProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
@@ -1393,21 +1390,21 @@ model OmniSearchAutomationTask {
 }
 
 model OmniSearchOutreach {
-  id            Int      @id @default(autoincrement())
-  projectId     Int
-  targetDomain  String   @db.VarChar(255)
-  targetUrl     String?  @db.VarChar(500)
-  contactName   String?  @db.VarChar(255)
-  contactEmail  String?  @db.VarChar(255)
-  status        String   @db.VarChar(50) @default("prospect") // prospect, contacted, replied, negotiating, secured, rejected
-  domainRating  Float?
-  emailSubject  String?  @db.VarChar(500)
-  emailBody     String?  @db.LongText
-  notes         String?  @db.Text
-  sentAt        DateTime?
-  repliedAt     DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id           Int       @id @default(autoincrement())
+  projectId    Int
+  targetDomain String    @db.VarChar(255)
+  targetUrl    String?   @db.VarChar(500)
+  contactName  String?   @db.VarChar(255)
+  contactEmail String?   @db.VarChar(255)
+  status       String    @default("prospect") @db.VarChar(50) // prospect, contacted, replied, negotiating, secured, rejected
+  domainRating Float?
+  emailSubject String?   @db.VarChar(500)
+  emailBody    String?   @db.LongText
+  notes        String?   @db.Text
+  sentAt       DateTime?
+  repliedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   project OmniSearchProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
@@ -1417,16 +1414,16 @@ model OmniSearchOutreach {
 }
 
 model OmniSearchContentVersion {
-  id             Int      @id @default(autoincrement())
-  sessionId      Int
-  versionNumber  Int      @default(1)
-  content        String   @db.LongText
-  score          Float?
-  wordCount      Int?
-  semanticGrade  String?  @db.VarChar(5) // A+, A, B, C, D, F
-  savedBy        String?  @db.VarChar(255) // user identifier
-  changeNote     String?  @db.VarChar(500) // description of changes
-  savedAt        DateTime @default(now())
+  id            Int      @id @default(autoincrement())
+  sessionId     Int
+  versionNumber Int      @default(1)
+  content       String   @db.LongText
+  score         Float?
+  wordCount     Int?
+  semanticGrade String?  @db.VarChar(5) // A+, A, B, C, D, F
+  savedBy       String?  @db.VarChar(255) // user identifier
+  changeNote    String?  @db.VarChar(500) // description of changes
+  savedAt       DateTime @default(now())
 
   session OmniSearchContentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 

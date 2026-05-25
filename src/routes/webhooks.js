@@ -268,6 +268,26 @@ export async function wpWebhookRoutes(app) {
       },
     });
 
+    // Generate / persist AI summary on initial submit or resubmit (only when missing).
+    // Skipped silently on failure — emails will fall back to empty summary line.
+    if (!review.aiSummary && (eventType === 'pipeline_submitted' || eventType === 'pipeline_resubmitted')) {
+      try {
+        const rawExcerpt = String(body.postExcerpt || body.postContent || '').slice(0, 4000);
+        if (rawExcerpt) {
+          const aiSummary = await maybeGenerateSummary({ excerpt: rawExcerpt, isElementor: !!body.isElementor });
+          if (aiSummary) {
+            await prisma.wpContentReview.update({
+              where: { id: review.id },
+              data: { aiSummary },
+            });
+            review.aiSummary = aiSummary;
+          }
+        }
+      } catch (err) {
+        console.error('[pipeline-notify] aiSummary generation failed:', err.message);
+      }
+    }
+
     // Create immutable event log entry
     try {
       await prisma.wpContentReviewEvent.create({
@@ -345,7 +365,7 @@ export async function wpWebhookRoutes(app) {
 
       // Common variables for all pipeline notifications
       const nowFormatted = new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
-      const commonVars = { postTitle, contentTitle: postTitle, projectName: project.name || '', postType, submittedBy: submittedByName || 'Team member', submittedAt: nowFormatted };
+      const commonVars = { postTitle, contentTitle: postTitle, projectName: project.name || '', postType, submittedBy: submittedByName || 'Team member', submittedAt: nowFormatted, aiSummary: review.aiSummary || '' };
 
       if (eventType === 'pipeline_submitted' || eventType === 'pipeline_resubmitted') {
         // PM(s) + Owners receive the "submitted for review" notification.
@@ -420,9 +440,10 @@ export async function wpWebhookRoutes(app) {
           }).catch(() => {});
         }
       } else if (eventType === 'pipeline_published') {
-        // Notify PM(s) + submitter/worker + Owners + Clients (so everyone knows it went live)
+        // Publish announcement: Owners + Client Managers + Client Viewers only.
+        // Worker/PM are excluded — they triggered the publish themselves.
         const clientUserIds = await getClientUserIds();
-        const recipients = uniq([...pmIds, submittedById, ...ownerIds, ...clientUserIds]);
+        const recipients = uniq([...ownerIds, ...clientUserIds]);
         if (recipients.length > 0) {
           notify({
             slug: 'content_published',

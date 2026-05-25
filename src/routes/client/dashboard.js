@@ -110,6 +110,20 @@ export async function clientDashboardRoutes(app) {
         },
       });
 
+      // Fetch content reviews awaiting client action
+      const contentReviews = await prisma.wpContentReview.findMany({
+        where: {
+          project: { clientId: { in: clientIds } },
+          isPublished: false,
+          status: { in: ['pending_client_review'] },
+        },
+        orderBy: { updatedAt: 'desc' },
+        include: {
+          project: { select: { name: true } },
+        },
+        take: 10,
+      });
+
       // Fetch setup projects for onboarding
       const setupProjects = await prisma.project.findMany({
         where: {
@@ -173,6 +187,14 @@ export async function clientDashboardRoutes(app) {
             }
           : null,
         keyMetrics,
+        contentReviews: contentReviews.map((r) => ({
+          id: r.id,
+          postTitle: r.postTitle,
+          status: r.status,
+          projectName: r.project?.name || '',
+          clientPreviewUrl: r.clientPreviewUrl,
+          updatedAt: r.updatedAt?.toISOString() || null,
+        })),
         activeTasks: activeTasks.map((t) => ({
           id: t.id,
           title: t.title,
