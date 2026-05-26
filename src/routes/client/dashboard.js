@@ -54,6 +54,21 @@ export async function clientDashboardRoutes(app) {
                   },
                 },
               },
+              contentReviews: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    id: { type: 'string' },
+                    postTitle: { type: 'string' },
+                    status: { type: 'string' },
+                    projectId: { type: 'string' },
+                    projectName: { type: 'string' },
+                    clientPreviewUrl: { type: 'string', nullable: true },
+                    updatedAt: { type: 'string', nullable: true },
+                  },
+                },
+              },
               setupProjects: {
                 type: 'array',
                 items: {
@@ -119,7 +134,7 @@ export async function clientDashboardRoutes(app) {
         },
         orderBy: { updatedAt: 'desc' },
         include: {
-          project: { select: { name: true } },
+          project: { select: { id: true, name: true } },
         },
         take: 10,
       });
@@ -191,6 +206,7 @@ export async function clientDashboardRoutes(app) {
           id: r.id,
           postTitle: r.postTitle,
           status: r.status,
+          projectId: r.project?.id || '',
           projectName: r.project?.name || '',
           clientPreviewUrl: r.clientPreviewUrl,
           updatedAt: r.updatedAt?.toISOString() || null,
