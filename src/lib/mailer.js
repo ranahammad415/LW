@@ -35,12 +35,27 @@ export async function sendEmail({ to, subject, html, text }) {
   }
 
   try {
+    // Mailgun rewrites every <a href> with a https://email.mg.localwaves.ai/c/<encoded>
+    // wrapper when click-tracking is on. That hides the real URL from recipients
+    // (and our "Open pipeline" / preview buttons must show the real WP preview URL
+    // so unauthenticated recipients land on the right page). Setting these custom
+    // headers tells Mailgun to skip click tracking for this message. Open tracking
+    // (pixel) is left on — disable with MAILGUN_TRACK_OPENS=no if you want it off.
+    const headers = {};
+    if ((process.env.MAILGUN_TRACK_CLICKS || 'no').toLowerCase() === 'no') {
+      headers['X-Mailgun-Track-Clicks'] = 'no';
+    }
+    if ((process.env.MAILGUN_TRACK_OPENS || '').toLowerCase() === 'no') {
+      headers['X-Mailgun-Track-Opens'] = 'no';
+    }
+
     const info = await transporter.sendMail({
       from: `"${fromName}" <${fromEmail}>`,
       to,
       subject,
       html,
       text: text || undefined,
+      headers,
     });
     return { success: true, messageId: info.messageId };
   } catch (err) {
