@@ -1,6 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { maybeGenerateSummary, autoSyncSitemap } from '../lib/wpSync.js';
-import { notify } from '../lib/notificationService.js';
+import { notify, notifyTest } from '../lib/notificationService.js';
 import { publish as publishRealtime } from '../lib/realtimeBus.js';
 
 export async function wpWebhookRoutes(app) {
@@ -377,7 +377,7 @@ export async function wpWebhookRoutes(app) {
             recipientIds: recipients,
             variables: { ...commonVars, roundLabel },
             actionUrl: pmPreviewUrl || portalProjectUrl,
-            metadata: { contentReviewId: review.id },
+            metadata: { contentReviewId: review.id, projectId: project.id },
           }).catch(() => {});
         }
       } else if (eventType === 'pipeline_pm_approved') {
@@ -388,8 +388,8 @@ export async function wpWebhookRoutes(app) {
             slug: 'content_pm_approved',
             recipientIds: internal,
             variables: commonVars,
-            actionUrl: clientPreviewUrl || portalProjectUrl,
-            metadata: { contentReviewId: review.id },
+            actionUrl: clientPreviewUrl || pmPreviewUrl || portalProjectUrl,
+            metadata: { contentReviewId: review.id, projectId: project.id },
           }).catch(() => {});
         }
         // Notify client users that content is ready for their review
@@ -400,7 +400,7 @@ export async function wpWebhookRoutes(app) {
             recipientIds: uniq(clientUserIds),
             variables: commonVars,
             actionUrl: clientPreviewUrl || portalProjectUrl,
-            metadata: { contentReviewId: review.id },
+            metadata: { contentReviewId: review.id, projectId: project.id },
           }).catch(() => {});
         }
       } else if (eventType === 'pipeline_pm_changes_requested') {
@@ -412,7 +412,7 @@ export async function wpWebhookRoutes(app) {
             recipientIds: recipients,
             variables: commonVars,
             actionUrl: pmPreviewUrl || portalProjectUrl,
-            metadata: { contentReviewId: review.id },
+            metadata: { contentReviewId: review.id, projectId: project.id },
           }).catch(() => {});
         }
       } else if (eventType === 'pipeline_client_approved') {
@@ -424,7 +424,7 @@ export async function wpWebhookRoutes(app) {
             recipientIds: recipients,
             variables: commonVars,
             actionUrl: pmPreviewUrl || portalProjectUrl,
-            metadata: { contentReviewId: review.id },
+            metadata: { contentReviewId: review.id, projectId: project.id },
           }).catch(() => {});
         }
       } else if (eventType === 'pipeline_client_changes_requested') {
@@ -436,7 +436,7 @@ export async function wpWebhookRoutes(app) {
             recipientIds: recipients,
             variables: commonVars,
             actionUrl: pmPreviewUrl || portalProjectUrl,
-            metadata: { contentReviewId: review.id },
+            metadata: { contentReviewId: review.id, projectId: project.id },
           }).catch(() => {});
         }
       } else if (eventType === 'pipeline_published') {
@@ -450,7 +450,7 @@ export async function wpWebhookRoutes(app) {
             recipientIds: recipients,
             variables: commonVars,
             actionUrl: clientPreviewUrl || pmPreviewUrl || portalProjectUrl,
-            metadata: { contentReviewId: review.id },
+            metadata: { contentReviewId: review.id, projectId: project.id },
           }).catch(() => {});
         }
       } else if (eventType === 'pipeline_resend_notification') {
@@ -467,7 +467,41 @@ export async function wpWebhookRoutes(app) {
           client_changes_requested: 'content_client_changes_requested',
         };
         const slug = statusSlugMap[status] || 'content_submitted_for_review';
-      
+
+        // ---------- TEST MODE ----------
+        // If the WP plugin requested a test send, route the same template+vars
+        // to the provided test addresses instead of real recipients. No DB writes.
+        if (body.testMode === true || body.testMode === 'true' || body.testMode === 1) {
+          const te = body.testEmails || {};
+          const testRecipients = [];
+          if (te.owner)  testRecipients.push({ email: String(te.owner).trim(),  audience: 'AGENCY_OWNER',   name: 'Test Owner' });
+          if (te.pm)     testRecipients.push({ email: String(te.pm).trim(),     audience: 'AGENCY_TEAM',    name: 'Test PM' });
+          if (te.client) testRecipients.push({ email: String(te.client).trim(), audience: 'CLIENT_MANAGER', name: 'Test Client' });
+          console.log(`[pipeline-notify] TEST RESEND slug=${slug} testRecipients=${JSON.stringify(testRecipients.map(r => r.email))} status=${status}`);
+          if (testRecipients.length > 0) {
+            const results = await notifyTest({
+              slug,
+              variables: commonVars,
+              actionUrl: clientPreviewUrl || pmPreviewUrl || portalProjectUrl,
+              metadata: { contentReviewId: review.id, projectId: project.id, test: true },
+              testRecipients,
+            }).catch((err) => {
+              console.error('[pipeline-notify] notifyTest() FAILED:', err);
+              return [{ success: false, error: err.message }];
+            });
+            return reply.send({
+              success: true,
+              testMode: true,
+              projectId: project.id,
+              wpPipelineId,
+              results,
+            });
+          } else {
+            return reply.send({ success: true, testMode: true, results: [], message: 'No test emails provided.' });
+          }
+        }
+        // ---------- END TEST MODE ----------
+
         // Target only the responsible party based on current status
         let recipients;
         if (status === 'pending_pm_review') {
@@ -501,7 +535,7 @@ export async function wpWebhookRoutes(app) {
             recipientIds: recipients,
             variables: commonVars,
             actionUrl: clientPreviewUrl || pmPreviewUrl || portalProjectUrl,
-            metadata: { contentReviewId: review.id, resend: true },
+            metadata: { contentReviewId: review.id, projectId: project.id, resend: true },
           }).then(() => console.log(`[pipeline-notify] notify() resolved for slug=${slug}`)).catch((err) => console.error(`[pipeline-notify] notify() FAILED:`, err));
         } else {
           console.warn('[pipeline-notify] RESEND: no recipients found \u2014 skipping notify()');

@@ -350,6 +350,40 @@ export async function notify({ slug, recipientIds, variables = {}, actionUrl = n
     ? (actionUrl.startsWith('http') ? actionUrl : `${process.env.FRONTEND_URL || 'https://app.localwaves.ai'}${actionUrl}`)
     : null;
 
+  // Helper: rewrite a portal project URL path to match the recipient's role.
+  // Webhooks pass `/portal/admin/projects/{id}` as a stable fallback; this
+  // function swaps the role segment so PMs / clients land on a page they can
+  // actually access (avoids /unauthorized 404). Project ID is read from
+  // metadata.projectId. Other URLs (full external, non-project paths) pass
+  // through unchanged.
+  const rewritePortalUrlForUser = (url, user) => {
+    if (!url) return url;
+    const projectId = metadata?.projectId;
+    if (!projectId) return url;
+    const role = String(user.role || '').toUpperCase();
+    let rolePath;
+    if (role === 'OWNER') rolePath = 'admin';
+    else if (role === 'CLIENT') rolePath = 'client';
+    else rolePath = 'pm'; // PM, TEAM_MEMBER, CONTRACTOR
+    const targetPath = `/portal/${rolePath}/projects/${projectId}`;
+    try {
+      const u = new URL(url);
+      // Only rewrite if the URL points at one of our portal project pages
+      if (/^\/portal\/(admin|pm|client)\/projects\//.test(u.pathname)) {
+        u.pathname = targetPath;
+        return u.toString();
+      }
+      return url;
+    } catch {
+      // Relative path — prefix frontend host
+      const base = process.env.FRONTEND_URL || 'https://app.localwaves.ai';
+      if (/^\/portal\/(admin|pm|client)\/projects\//.test(url)) {
+        return `${base}${targetPath}`;
+      }
+      return url;
+    }
+  };
+
   // Helper: append ?reviewer=<name> to a URL so the preview/landing page can
   // attribute who is reviewing. Safe on malformed URLs (returns input).
   const appendReviewerParam = (url, name) => {
@@ -387,8 +421,9 @@ export async function notify({ slug, recipientIds, variables = {}, actionUrl = n
     const renderedText = source.bodyText ? renderTemplate(source.bodyText, variables) : null;
     const renderedInApp = renderTemplate(source.inAppMessage, variables);
 
-    // Per-recipient action URL with reviewer name attached (display-only)
-    const userActionUrl = appendReviewerParam(fullActionUrl, user.name);
+    // Per-recipient action URL: role-aware portal path + reviewer name
+    const roleAwareUrl = rewritePortalUrlForUser(fullActionUrl, user);
+    const userActionUrl = appendReviewerParam(roleAwareUrl, user.name);
 
     // Build branded HTML for this recipient (reuses shared enrichment)
     let brandedHtml;
@@ -477,4 +512,103 @@ export async function notify({ slug, recipientIds, variables = {}, actionUrl = n
       });
     }
   }
+}
+
+/**
+ * Test-send: render a template per audience and email it to arbitrary
+ * addresses WITHOUT writing SystemAlerts, NotificationLogs, or touching
+ * real recipients. Used by the WP "Notify > Test" flow so admins can preview
+ * exactly what each audience will receive.
+ *
+ * @param {object}   opts
+ * @param {string}   opts.slug              - Notification template slug
+ * @param {object}   [opts.variables]       - Template variable values
+ * @param {string}   [opts.actionUrl]       - CTA URL (already includes reviewer param if needed)
+ * @param {object}   [opts.metadata]        - Extra context for shared email enrichment
+ * @param {Array<{email:string, audience:string, name?:string}>} opts.testRecipients
+ *        - Each entry: { email, audience: 'AGENCY_OWNER'|'AGENCY_TEAM'|'CLIENT_MANAGER'|'CLIENT_VIEWER', name? }
+ * @returns {Promise<Array<{email:string, audience:string, success:boolean, error?:string}>>}
+ */
+export async function notifyTest({ slug, variables = {}, actionUrl = null, metadata = null, testRecipients = [] }) {
+  const results = [];
+  if (!Array.isArray(testRecipients) || testRecipients.length === 0) return results;
+
+  // Fetch template
+  let template;
+  try {
+    template = await prisma.notificationTemplate.findUnique({ where: { slug } });
+  } catch (err) {
+    console.error(`[notifyTest] Failed to fetch template "${slug}":`, err.message);
+    return testRecipients.map((r) => ({ email: r.email, audience: r.audience, success: false, error: 'Template fetch failed' }));
+  }
+  if (!template) {
+    return testRecipients.map((r) => ({ email: r.email, audience: r.audience, success: false, error: 'Template not found' }));
+  }
+
+  // Fetch per-audience variants
+  const variantsByAudience = {};
+  try {
+    const variants = await prisma.notificationTemplateVariant.findMany({ where: { templateSlug: slug } });
+    for (const v of variants) variantsByAudience[v.audience] = v;
+  } catch (err) {
+    console.warn(`[notifyTest] Variant fetch skipped for "${slug}":`, err.message);
+  }
+
+  // Resolve action URL to full URL if relative
+  const fullActionUrl = actionUrl
+    ? (actionUrl.startsWith('http') ? actionUrl : `${process.env.FRONTEND_URL || 'https://app.localwaves.ai'}${actionUrl}`)
+    : null;
+
+  // Pre-enrich shared context once
+  const sharedContext = await buildSharedEmailContext(slug, variables, metadata);
+
+  for (const recipient of testRecipients) {
+    const email = String(recipient.email || '').trim();
+    if (!email) continue;
+    const audience = recipient.audience || 'AGENCY_TEAM';
+    const reviewerName = recipient.name || `Test (${audience})`;
+
+    // Append ?reviewer= for attribution (same behavior as real notify)
+    let userActionUrl = fullActionUrl;
+    if (userActionUrl && reviewerName) {
+      try {
+        const u = new URL(userActionUrl);
+        u.searchParams.set('reviewer', reviewerName);
+        userActionUrl = u.toString();
+      } catch { /* keep as-is */ }
+    }
+
+    const source = resolveVariantForAudience(variantsByAudience, audience, template);
+    const subject = `[TEST] ${renderTemplate(source.subject, variables)}`;
+    const renderedText = source.bodyText ? renderTemplate(source.bodyText, variables) : null;
+
+    let brandedHtml;
+    try {
+      brandedHtml = await buildRichEmailHtml(slug, template.category, source, variables, userActionUrl, sharedContext);
+    } catch (err) {
+      console.error(`[notifyTest] Rich email build failed for "${slug}"/${audience}:`, err.message);
+      brandedHtml = await wrapInBrandedLayout({
+        bodyHtml: renderTemplate(source.bodyHtml, variables),
+        preheader: subject,
+        actionUrl: userActionUrl,
+        actionLabel: source.ctaLabel || CTA_LABEL_MAP[template.category] || 'View in Portal',
+        category: template.category,
+      });
+    }
+
+    // Prepend a visible test banner so it's obvious this is a test send
+    const testBanner = '<div style="background:#fef3c7;border:1px solid #f59e0b;color:#92400e;padding:10px 14px;border-radius:6px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:13px;margin-bottom:12px;">' +
+      '<strong>⚠️ TEST EMAIL</strong> — Sent to <code>' + email + '</code> as audience <strong>' + audience + '</strong>. No real recipients were notified; no logs were recorded.' +
+      '</div>';
+    const htmlWithBanner = brandedHtml.replace(/<body([^>]*)>/i, (m) => m + testBanner);
+
+    try {
+      const result = await sendEmail({ to: email, subject, html: htmlWithBanner, text: renderedText });
+      results.push({ email, audience, success: !!result.success, error: result.success ? undefined : (result.error || 'Unknown error') });
+    } catch (err) {
+      results.push({ email, audience, success: false, error: err.message });
+    }
+  }
+
+  return results;
 }
