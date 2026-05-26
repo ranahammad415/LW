@@ -74,6 +74,7 @@ const FOOTER_MESSAGES = {
  * @param {string} [opts.category]        - Template category
  * @param {string} [opts.actionHeaderHtml]  - Rendered actionHeader() component
  * @param {string} [opts.commentBlockHtml]  - Rendered commentBlock() for the trigger comment
+ * @param {string} [opts.summaryHtml]       - Optional short summary block (e.g. AI 2–3 line content summary)
  * @param {string} [opts.detailCardHtml]    - Rendered taskDetailCard() or issueDetailCard()
  * @param {string} [opts.commentThreadHtml] - Rendered commentThread() for recent comments
  * @returns {string} Complete HTML email document
@@ -87,6 +88,7 @@ export async function wrapInBrandedLayout(opts = {}) {
     category,
     actionHeaderHtml = '',
     commentBlockHtml = '',
+    summaryHtml = '',
     detailCardHtml = '',
     commentThreadHtml = '',
   } = opts;
@@ -157,6 +159,9 @@ export async function wrapInBrandedLayout(opts = {}) {
 
           <!-- Primary comment text (if this is a comment notification) -->
           ${commentBlockHtml ? `<tr><td style="padding:0 32px;font-family:${FONT_STACK};">${commentBlockHtml}</td></tr>` : ''}
+
+          <!-- AI / content summary (e.g. 2–3 line pipeline content summary) -->
+          ${summaryHtml ? `<tr><td style="padding:0 32px 8px;font-family:${FONT_STACK};">${summaryHtml}</td></tr>` : ''}
 
           <!-- Body content (rendered template text, used when no rich components) -->
           ${bodyHtml && !actionHeaderHtml ? `<tr><td style="padding:16px 32px;font-family:${FONT_STACK};font-size:15px;line-height:1.6;color:${BRAND_TEXT};">${bodyHtml}</td></tr>` : ''}

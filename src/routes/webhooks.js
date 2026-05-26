@@ -198,8 +198,11 @@ export async function wpWebhookRoutes(app) {
     const revisionNumber = Number(body.revisionNumber) || 1;
     const pmPreviewUrl = String(body.pmPreviewUrl || '').slice(0, 1000) || null;
     const clientPreviewUrl = String(body.clientPreviewUrl || '').slice(0, 1000) || null;
-    // Fallback action URL: link to OS portal project page (never expires)
-    const portalProjectUrl = `/portal/admin/projects/${project.id}`;
+    // Fallback action URL: link to OS portal project page (never expires).
+    // Deep-link to the Content Reviews tab so recipients land on the relevant
+    // section instead of the default List View. The role-aware rewrite in
+    // notificationService preserves the query string when swapping the path.
+    const portalProjectUrl = `/portal/admin/projects/${project.id}?tab=content-reviews`;
     const pmDecision = body.pmDecision ? String(body.pmDecision).slice(0, 50) : null;
     const pmComment = body.pmComment ? String(body.pmComment).slice(0, 10000) : null;
     const clientDecision = body.clientDecision ? String(body.clientDecision).slice(0, 50) : null;
@@ -230,8 +233,13 @@ export async function wpWebhookRoutes(app) {
         submittedById,
         pmMemberName,
         pmMemberId,
-        pmPreviewUrl,
-        clientPreviewUrl,
+        // Defensive: only overwrite preview URLs when WP actually sent fresh
+        // values. If the WP transient expired and the plugin sent empty
+        // strings, we coerced to null above — don't wipe the previously
+        // stored URL. (Task 1 in the WP plugin self-heals this; this is a
+        // belt-and-suspenders for any future code path.)
+        ...(pmPreviewUrl ? { pmPreviewUrl } : {}),
+        ...(clientPreviewUrl ? { clientPreviewUrl } : {}),
         pmDecision,
         pmComment,
         clientDecision,
@@ -268,9 +276,11 @@ export async function wpWebhookRoutes(app) {
       },
     });
 
-    // Generate / persist AI summary on initial submit or resubmit (only when missing).
-    // Skipped silently on failure — emails will fall back to empty summary line.
-    if (!review.aiSummary && (eventType === 'pipeline_submitted' || eventType === 'pipeline_resubmitted')) {
+    // Generate / persist AI summary on initial submit, resubmit, OR resend
+    // notification (so legacy rows created before AI summary existed get
+    // backfilled the next time someone clicks Notify). Skipped silently on
+    // failure — emails will fall back to empty summary line.
+    if (!review.aiSummary && (eventType === 'pipeline_submitted' || eventType === 'pipeline_resubmitted' || eventType === 'pipeline_resend_notification')) {
       try {
         const rawExcerpt = String(body.postExcerpt || body.postContent || '').slice(0, 4000);
         if (rawExcerpt) {

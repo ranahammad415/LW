@@ -232,12 +232,41 @@ async function buildSharedEmailContext(slug, variables, metadata) {
 }
 
 /**
+ * Escape a plain string for safe inclusion in HTML.
+ */
+function escapeHtml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Build a small italic block to render the AI/content summary in pipeline
+ * notifications. Returns '' if no summary is provided.
+ */
+function buildSummaryBlockHtml(summary) {
+  const text = String(summary || '').trim();
+  if (!text) return '';
+  return (
+    '<div style="margin:0 0 12px;padding:10px 14px;background:#f8fafc;border-left:3px solid #6366f1;border-radius:4px;">' +
+      '<p style="margin:0;font-size:13px;line-height:1.55;color:#475569;font-style:italic;">' +
+        escapeHtml(text) +
+      '</p>' +
+    '</div>'
+  );
+}
+
+/**
  * Build rich email HTML for a single recipient using a resolved source
  * (base template or audience variant) and pre-enriched shared context.
  */
 async function buildRichEmailHtml(slug, category, source, variables, actionUrl, sharedContext) {
   const { actorName, actionText, projectName, commentPreview, detailCardHtml, commentThreadHtml } = sharedContext;
   const ctaLabel = source.ctaLabel || CTA_LABEL_MAP[category] || 'View in Portal';
+  const summaryHtml = buildSummaryBlockHtml(variables.aiSummary);
 
   // Rendered simple body from the resolved source (fallback content)
   const renderedBodyHtml = renderTemplate(source.bodyHtml, variables);
@@ -251,6 +280,7 @@ async function buildRichEmailHtml(slug, category, source, variables, actionUrl, 
       actionUrl,
       actionLabel: ctaLabel,
       category,
+      summaryHtml,
     });
   }
 
@@ -266,13 +296,14 @@ async function buildRichEmailHtml(slug, category, source, variables, actionUrl, 
   }
 
   return await wrapInBrandedLayout({
-    bodyHtml: (!commentBlockHtml && !detailCardHtml) ? renderedBodyHtml : '',
+    bodyHtml: (!commentBlockHtml && !detailCardHtml && !summaryHtml) ? renderedBodyHtml : '',
     preheader,
     actionUrl,
     actionLabel: ctaLabel,
     category,
     actionHeaderHtml,
     commentBlockHtml,
+    summaryHtml,
     detailCardHtml,
     commentThreadHtml,
   });
