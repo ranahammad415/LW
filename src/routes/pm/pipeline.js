@@ -211,17 +211,47 @@ export async function pmPipelineRoutes(app) {
           return reply.status(403).send({ message: 'Access denied' });
         }
 
+        // OWNER acts as admin — bypass the WP pipeline state-machine guard so
+        // approve / request-changes never fails with "This action is not allowed
+        // in the current state." regardless of the current pipeline status. The
+        // reviewer name is forwarded so the WP plugin can prefix the stored
+        // comment with [Admin override by <reviewer>] for the audit trail.
+        const isAdmin = request.user.role === 'OWNER';
+        const wpBody = { decision, comment: comment || '' };
+        if (isAdmin) {
+          wpBody.as_admin = true;
+          if (request.user.name) wpBody.reviewer = request.user.name;
+          request.log.info(
+            { pipelineId: wpPipelineId, projectId, reviewer: request.user.name, decision },
+            'Admin override on pipeline pm-review'
+          );
+        }
+
         const baseUrl = project.wpUrl.replace(/\/$/, '');
         const url = `${baseUrl}/wp-json/lwa/v1/pipeline/${wpPipelineId}/pm-review`;
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: {
-            ...wpHeaders(project.wpApiKey),
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ decision, comment: comment || '' }),
-          signal: AbortSignal.timeout(15000),
-        });
+
+        let res;
+        try {
+          res = await fetch(url, {
+            method: 'POST',
+            headers: {
+              ...wpHeaders(project.wpApiKey),
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(wpBody),
+            signal: AbortSignal.timeout(15000),
+          });
+        } catch (fetchErr) {
+          // Network / timeout / DNS failure talking to WP — surface a clean
+          // error instead of leaking the raw stack trace.
+          request.log.error({ err: fetchErr, url }, 'WP pm-review fetch failed');
+          const isTimeout = fetchErr?.name === 'TimeoutError' || fetchErr?.name === 'AbortError';
+          return reply.status(502).send({
+            message: isTimeout
+              ? 'WordPress did not respond in time. Please try again.'
+              : 'Unable to reach WordPress site.',
+          });
+        }
 
         const json = await res.json().catch(() => ({}));
         if (!res.ok) {
