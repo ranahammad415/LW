@@ -1059,6 +1059,18 @@ model AgencySetting {
   @@map("agency_setting")
 }
 
+model ModalityConfig {
+  id         String   @id @default(uuid())
+  featureKey String   @db.VarChar(100)
+  role       String   @db.VarChar(50)
+  enabled    Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @default(now()) @updatedAt
+
+  @@unique([featureKey, role])
+  @@map("modality_config")
+}
+
 // ============================================
 // OmniSearch Tool Models
 // ============================================

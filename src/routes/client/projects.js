@@ -918,5 +918,111 @@ export async function clientProjectsRoutes(app) {
       }
     }
   );
+
+  // ── Client: All Content Reviews across projects ──
+  app.get(
+    '/pipeline',
+    {
+      onRequest: [app.verifyJwt, app.requireClient],
+    },
+    async (request, reply) => {
+      const clientIds = request.clientAccountIds || [];
+      if (!clientIds.length) {
+        return reply.status(404).send({ message: 'No client account linked to this user' });
+      }
+
+      const { status, includePublished } = request.query || {};
+
+      try {
+        const where = {
+          project: { clientId: { in: clientIds } },
+        };
+
+        if (status) {
+          where.status = status;
+        }
+
+        if (includePublished !== 'true') {
+          where.isPublished = false;
+        }
+
+        const reviews = await prisma.wpContentReview.findMany({
+          where,
+          include: {
+            events: { orderBy: { createdAt: 'desc' } },
+            project: { select: { id: true, name: true } },
+          },
+          orderBy: { updatedAt: 'desc' },
+        });
+
+        const STATUS_LABELS = {
+          draft: 'Draft',
+          pending_pm_review: 'Pending PM Review',
+          pm_approved: 'PM Approved',
+          pending_client_review: 'Awaiting Your Review',
+          client_approved: 'Approved',
+          changes_requested_by_pm: 'Changes Requested',
+          changes_requested_by_client: 'Changes Requested',
+          cancelled: 'Cancelled',
+        };
+        const STATUS_COLORS = {
+          draft: '#888',
+          pending_pm_review: '#f0b849',
+          pm_approved: '#f0b849',
+          pending_client_review: '#f0b849',
+          client_approved: '#00a32a',
+          changes_requested_by_pm: '#d63638',
+          changes_requested_by_client: '#d63638',
+          cancelled: '#888',
+        };
+
+        const result = reviews.map((r) => ({
+          id: r.id,
+          projectId: r.projectId,
+          projectName: r.project?.name || '',
+          clientName: null,
+          wpPipelineId: r.wpPipelineId,
+          wpPostId: r.wpPostId,
+          postTitle: r.postTitle,
+          wpPostStatus: '',
+          status: r.status,
+          statusLabel: STATUS_LABELS[r.status] || r.status,
+          submittedByName: r.submittedByName,
+          submittedById: r.submittedById,
+          pmMemberName: r.pmMemberName,
+          pmMemberId: r.pmMemberId,
+          pmPreviewUrl: r.pmPreviewUrl,
+          clientPreviewUrl: r.clientPreviewUrl,
+          pmDecision: r.pmDecision,
+          pmComment: r.pmComment,
+          pmReviewedAt: r.pmReviewedAt || null,
+          clientDecision: r.clientDecision,
+          clientComment: r.clientComment,
+          clientReviewedAt: r.clientReviewedAt || null,
+          revisionNumber: r.revisionNumber,
+          createdAt: r.createdAt?.toISOString() || null,
+          updatedAt: r.updatedAt?.toISOString() || null,
+          history: (r.events || []).map((e) => ({
+            revisionNumber: e.revisionNumber,
+            status: e.status,
+            statusLabel: STATUS_LABELS[e.status] || e.status,
+            statusColor: STATUS_COLORS[e.status] || '#888',
+            pmComment: e.pmComment,
+            clientComment: e.clientComment,
+            workerNote: e.workerNote,
+            pmReviewedAt: e.pmReviewedAt,
+            clientReviewedAt: e.clientReviewedAt,
+            createdAt: e.createdAt?.toISOString() || null,
+            updatedAt: e.createdAt?.toISOString() || null,
+          })),
+        }));
+
+        return reply.send(result);
+      } catch (err) {
+        request.log.error(err);
+        return reply.status(500).send({ message: 'Failed to fetch content reviews' });
+      }
+    }
+  );
 }
 
