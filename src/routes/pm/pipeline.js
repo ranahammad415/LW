@@ -265,4 +265,61 @@ export async function pmPipelineRoutes(app) {
       }
     }
   );
+
+  // POST /api/pm/pipeline/:projectId/:wpPipelineId/publish
+  app.post(
+    '/pipeline/:projectId/:wpPipelineId/publish',
+    { onRequest: [app.verifyJwt, requirePmOrOwner] },
+    async (request, reply) => {
+      try {
+        const { projectId, wpPipelineId } = request.params;
+
+        const project = await prisma.project.findUnique({
+          where: { id: projectId },
+          select: { wpUrl: true, wpApiKey: true, leadPmId: true },
+        });
+        if (!project || !project.wpUrl || !project.wpApiKey) {
+          return reply.status(404).send({ message: 'Project not found or no WP config' });
+        }
+
+        // Access check
+        if (request.user.role === 'PM' && project.leadPmId !== request.user.id) {
+          return reply.status(403).send({ message: 'Access denied' });
+        }
+
+        const baseUrl = project.wpUrl.replace(/\/$/, '');
+        const url = `${baseUrl}/wp-json/lwa/v1/pipeline/${wpPipelineId}/publish`;
+
+        let res;
+        try {
+          res = await fetch(url, {
+            method: 'POST',
+            headers: {
+              ...wpHeaders(project.wpApiKey),
+              'Content-Type': 'application/json',
+            },
+            signal: AbortSignal.timeout(15000),
+          });
+        } catch (fetchErr) {
+          request.log.error({ err: fetchErr, url }, 'WP publish fetch failed');
+          const isTimeout = fetchErr?.name === 'TimeoutError' || fetchErr?.name === 'AbortError';
+          return reply.status(502).send({
+            message: isTimeout
+              ? 'WordPress did not respond in time. Please try again.'
+              : 'Unable to reach WordPress site.',
+          });
+        }
+
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          return reply.status(res.status).send({ message: json.message || 'WP API error' });
+        }
+
+        return reply.send(json);
+      } catch (err) {
+        request.log.error(err);
+        return reply.status(500).send({ message: 'Failed to publish post' });
+      }
+    }
+  );
 }

@@ -23,16 +23,24 @@ async function getListWhere(user) {
     });
     const clientIds = clients.map((c) => c.id);
     if (clientIds.length === 0) return null;
-    return { clientId: { in: clientIds } };
+    return {
+      clientId: { in: clientIds },
+      status: { not: 'REQUESTED' },
+    };
   }
   if (user.role === 'TEAM_MEMBER' || user.role === 'CONTRACTOR') {
-    return { assigneeId: user.id };
+    return {
+      assigneeId: user.id,
+      status: { not: 'REQUESTED' },
+    };
   }
   return null;
 }
 
 function canAccessIssue(issue, user) {
-  if (user.role === 'PM' || user.role === 'OWNER') return true;
+  if (user.role === 'OWNER') return true;
+  if (issue.status === 'REQUESTED') return false;
+  if (user.role === 'PM') return true;
   if (user.role === 'TEAM_MEMBER' || user.role === 'CONTRACTOR') return issue.assigneeId === user.id;
   return false;
 }

@@ -364,7 +364,10 @@ export async function adminGlobalRoutes(app) {
     async (request, reply) => {
       const issue = await prisma.clientIssue.findUnique({
         where: { id: request.params.id },
-        include: { assignee: { select: { id: true, name: true } } },
+        include: {
+          assignee: { select: { id: true, name: true } },
+          reportedBy: { select: { id: true, name: true } },
+        },
       });
       if (!issue) return reply.status(404).send({ message: 'Issue not found' });
       const { status, assigneeId } = request.body || {};
@@ -438,15 +441,64 @@ export async function adminGlobalRoutes(app) {
 
       // Notification: issue status changed
       if (status !== undefined && status !== issue.status) {
-        const recipients = [issue.reportedById];
-        if (issue.assigneeId) recipients.push(issue.assigneeId);
-        notify({
-          slug: status === 'RESOLVED' ? 'issue_resolved' : 'issue_status_changed',
-          recipientIds: recipients.filter((r) => r !== request.user.id),
-          variables: { issueTitle: issue.title, oldStatus: issue.status, newStatus: status, changedBy: request.user.name || 'Admin' },
-          actionUrl: `/portal/admin/issues`,
-          metadata: { issueId: issue.id },
-        }).catch(() => {});
+        if (issue.status === 'REQUESTED' && status === 'OPEN') {
+          // Trigger deferred notifications on approval!
+          try {
+            const issueProject = issue.projectId
+              ? await prisma.project.findUnique({ where: { id: issue.projectId }, select: { leadPmId: true } })
+              : null;
+            const owners = await prisma.user.findMany({ where: { role: 'OWNER', isActive: true }, select: { id: true } });
+            const clientAccount = await prisma.clientAccount.findUnique({ where: { id: issue.clientId }, select: { agencyName: true, leadPmId: true } });
+            
+            const issueRecipients = [
+              issueProject?.leadPmId,
+              clientAccount?.leadPmId,
+              ...owners.map((o) => o.id),
+            ].filter((uid) => uid && uid !== issue.reportedById);
+            
+            if (issueRecipients.length > 0) {
+              notify({
+                slug: 'issue_created',
+                recipientIds: issueRecipients,
+                variables: {
+                  issueTitle: issue.title,
+                  clientName: clientAccount?.agencyName || '',
+                  reportedBy: issue.reportedBy?.name || '',
+                },
+                actionUrl: `/portal/admin/issues`,
+                metadata: { issueId: issue.id },
+              }).catch(() => {});
+            }
+          } catch (_) {}
+
+          try {
+            const otherUsers = await prisma.clientUser.findMany({
+              where: { clientId: issue.clientId, userId: { not: issue.reportedById } },
+              select: { userId: true },
+            });
+            if (otherUsers.length > 0) {
+              const clientAccount = await prisma.clientAccount.findUnique({ where: { id: issue.clientId }, select: { agencyName: true } });
+              notify({
+                slug: 'client_issue_created_team',
+                recipientIds: otherUsers.map((cu) => cu.userId),
+                variables: { reporterName: issue.reportedBy?.name || 'A team member', issueTitle: issue.title, clientName: clientAccount?.agencyName || '' },
+                actionUrl: '/portal/client/issues',
+                metadata: { issueId: issue.id },
+              }).catch(() => {});
+            }
+          } catch (_) {}
+        } else {
+          // Normal status change notification
+          const recipients = [issue.reportedById];
+          if (issue.assigneeId) recipients.push(issue.assigneeId);
+          notify({
+            slug: status === 'RESOLVED' ? 'issue_resolved' : 'issue_status_changed',
+            recipientIds: recipients.filter((r) => r !== request.user.id),
+            variables: { issueTitle: issue.title, oldStatus: issue.status, newStatus: status, changedBy: request.user.name || 'Admin' },
+            actionUrl: `/portal/admin/issues`,
+            metadata: { issueId: issue.id },
+          }).catch(() => {});
+        }
       }
 
       // Notification: issue assigned
@@ -465,6 +517,25 @@ export async function adminGlobalRoutes(app) {
         status: updated.status,
         assignee: updated.assignee ? { id: updated.assignee.id, name: updated.assignee.name } : null,
       });
+    }
+  );
+
+  // DELETE /api/admin/issues/:id — owner deletes/rejects support request
+  app.delete(
+    '/issues/:id',
+    { onRequest: [app.verifyJwt, app.requireOwner] },
+    async (request, reply) => {
+      try {
+        const { id } = request.params;
+        const issue = await prisma.clientIssue.findUnique({ where: { id } });
+        if (!issue) return reply.status(404).send({ message: 'Issue not found' });
+        
+        await prisma.clientIssue.delete({ where: { id } });
+        return reply.status(204).send();
+      } catch (err) {
+        request.log.error({ err }, 'DELETE /admin/issues/:id error');
+        return reply.status(500).send({ message: err.message || 'Failed to delete support request' });
+      }
     }
   );
 

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import jwt from 'jsonwebtoken';
 import { prisma } from '../../lib/prisma.js';
 import { notify } from '../../lib/notificationService.js';
 
@@ -126,7 +127,7 @@ export async function clientHubRoutes(app) {
       const year = query.year != null ? Number(query.year) : null;
 
       const where = { clientId: { in: clientIds } };
-      if (status && ['OPEN', 'IN_PROGRESS', 'RESOLVED'].includes(status)) {
+      if (status && ['OPEN', 'IN_PROGRESS', 'RESOLVED', 'PENDING_REVIEW', 'REQUESTED'].includes(status)) {
         where.status = status;
       }
       if (month != null && year != null && !Number.isNaN(month) && !Number.isNaN(year)) {
@@ -211,29 +212,41 @@ export async function clientHubRoutes(app) {
             title,
             description,
             priority: priority || 'MEDIUM',
+            status: 'REQUESTED',
           },
         });
 
-        // Notify PM and owners about the new issue
+        // Notify owners about the new pending support request with action links
         try {
-          const issueProject = projectIdToUse
-            ? await prisma.project.findUnique({ where: { id: projectIdToUse }, select: { leadPmId: true } })
-            : null;
-          const owners = await prisma.user.findMany({ where: { role: 'OWNER', isActive: true }, select: { id: true } });
-          const clientAccount = await prisma.clientAccount.findUnique({ where: { id: clientId }, select: { agencyName: true, leadPmId: true } });
-          const issueRecipients = [
-            issueProject?.leadPmId,
-            clientAccount?.leadPmId,
-            ...owners.map((o) => o.id),
-          ].filter((id) => id && id !== request.user.id);
-          if (issueRecipients.length > 0) {
+          const owners = await prisma.user.findMany({ where: { role: 'OWNER', isActive: true }, select: { id: true, email: true } });
+          const clientAccount = await prisma.clientAccount.findUnique({ where: { id: clientId }, select: { agencyName: true } });
+          if (owners.length > 0) {
+            const approveToken = jwt.sign(
+              { issueId: issue.id, action: 'approve' },
+              process.env.JWT_ACCESS_SECRET,
+              { expiresIn: '14d' }
+            );
+            const rejectToken = jwt.sign(
+              { issueId: issue.id, action: 'reject' },
+              process.env.JWT_ACCESS_SECRET,
+              { expiresIn: '14d' }
+            );
+
+            const backendUrl = process.env.BACKEND_URL || 'http://localhost:3000';
+            const approveUrl = `${backendUrl}/api/public/issues/action?id=${issue.id}&action=approve&token=${approveToken}`;
+            const rejectUrl = `${backendUrl}/api/public/issues/action?id=${issue.id}&action=reject&token=${rejectToken}`;
+
             notify({
-              slug: 'issue_created',
-              recipientIds: issueRecipients,
+              slug: 'support_request_pending_review',
+              recipientIds: owners.map((o) => o.id),
               variables: {
                 issueTitle: title,
                 clientName: clientAccount?.agencyName || '',
                 reportedBy: request.user.name || '',
+                priority: priority || 'MEDIUM',
+                issueDescription: description,
+                approveUrl,
+                rejectUrl,
               },
               actionUrl: `/portal/admin/issues`,
               metadata: { issueId: issue.id },
@@ -241,22 +254,8 @@ export async function clientHubRoutes(app) {
           }
         } catch (_) { /* don't fail issue creation if notification fails */ }
 
-        // Notify other client users about the issue
+        // Log client activity
         try {
-          const otherUsers = await prisma.clientUser.findMany({
-            where: { clientId, userId: { not: request.user.id } },
-            select: { userId: true },
-          });
-          if (otherUsers.length > 0) {
-            const clientAccount = await prisma.clientAccount.findUnique({ where: { id: clientId }, select: { agencyName: true } });
-            notify({
-              slug: 'client_issue_created_team',
-              recipientIds: otherUsers.map((cu) => cu.userId),
-              variables: { reporterName: request.user.name || 'A team member', issueTitle: title, clientName: clientAccount?.agencyName || '' },
-              actionUrl: '/portal/client/issues',
-              metadata: { issueId: issue.id },
-            }).catch(() => {});
-          }
           await prisma.clientActivityLog.create({
             data: { clientId, userId: request.user.id, action: 'issue_created', detail: `Reported issue: "${title}"`, metadata: { issueId: issue.id } },
           });

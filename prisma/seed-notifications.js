@@ -189,6 +189,13 @@ const templates = [
     inAppMessage: 'Issue resolved: {{issueTitle}}',
     variables: ['issueTitle', 'changedBy', 'actionUrl'] },
 
+  { slug: 'support_request_pending_review', name: 'Support Request Pending Review', description: 'Sent to admin/owners when a client submits a support request that needs approval', category: 'issue',
+    subject: 'Action Required: Approve Support Request - {{issueTitle}} ({{clientName}})',
+    bodyHtml: '<p>A new support request requires your review before it is visible to the team.</p><p><strong>Title:</strong> {{issueTitle}}</p><p><strong>Client:</strong> {{clientName}}</p><p><strong>Reported By:</strong> {{reportedBy}}</p><p><strong>Priority:</strong> {{priority}}</p><p><strong>Description:</strong></p><blockquote style="border-left:3px solid #6366f1;padding:8px 12px;margin:12px 0;background:#f8fafc;border-radius:4px;">{{issueDescription}}</blockquote><div style="margin-top:24px;text-align:center;"><a href="{{approveUrl}}" style="background-color:#10b981;color:white;padding:12px 24px;text-decoration:none;border-radius:6px;font-weight:bold;display:inline-block;margin-right:12px;">Approve</a><a href="{{rejectUrl}}" style="background-color:#ef4444;color:white;padding:12px 24px;text-decoration:none;border-radius:6px;font-weight:bold;display:inline-block;">Not Approved</a></div>',
+    bodyText: 'A new support request requires your review:\nTitle: {{issueTitle}}\nClient: {{clientName}}\nReported By: {{reportedBy}}\nPriority: {{priority}}\nDescription: {{issueDescription}}\n\nApprove: {{approveUrl}}\nReject/Not Approved: {{rejectUrl}}',
+    inAppMessage: 'New support request from {{clientName}} needs review: {{issueTitle}}',
+    variables: ['issueTitle', 'clientName', 'reportedBy', 'priority', 'issueDescription', 'approveUrl', 'rejectUrl'] },
+
   // ── Client / Account Category ──
   { slug: 'client_onboarding_complete', name: 'Client Onboarding Complete', description: 'When a client finishes onboarding', category: 'client',
     subject: 'Onboarding Complete: {{clientName}}',

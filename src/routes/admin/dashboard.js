@@ -62,7 +62,7 @@ export async function adminDashboardRoutes(app) {
           orderBy: { agencyName: 'asc' },
         }),
         prisma.clientIssue.findMany({
-          where: { status: 'OPEN' },
+          where: { status: { in: ['OPEN', 'REQUESTED'] } },
           take: 5,
           orderBy: { createdAt: 'desc' },
           include: {
