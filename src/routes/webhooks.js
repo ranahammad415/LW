@@ -13,7 +13,7 @@ export async function wpWebhookRoutes(app) {
 
     const project = await prisma.project.findFirst({
       where: { wpApiKey: apiKey },
-      select: { id: true, wpUrl: true },
+      select: { id: true, wpUrl: true, name: true },
     });
     if (!project) {
       return reply.status(401).send({ message: 'Invalid API key' });
@@ -156,6 +156,107 @@ export async function wpWebhookRoutes(app) {
       autoSyncSitemap(project.id).catch(() => {});
     }
 
+    if (status === 'publish') {
+      try {
+        const review = await prisma.wpContentReview.findFirst({
+          where: { projectId: project.id, wpPostId, isPublished: false },
+        });
+
+        if (review) {
+          // Update it to published
+          await prisma.wpContentReview.update({
+            where: { id: review.id },
+            data: {
+              isPublished: true,
+              publishedAt: new Date(),
+              lastEventType: 'pipeline_published',
+              status: 'publish',
+            },
+          });
+
+          // Also write an event log entry for history
+          await prisma.wpContentReviewEvent.create({
+            data: {
+              contentReviewId: review.id,
+              eventType: 'pipeline_published',
+              status: 'publish',
+              revisionNumber: review.revisionNumber,
+            },
+          });
+
+          // Send content_published notification
+          const getClientUserIds = async () => {
+            try {
+              const proj = await prisma.project.findUnique({
+                where: { id: project.id },
+                select: { clientId: true },
+              });
+              if (!proj?.clientId) return [];
+              const clientUsers = await prisma.clientUser.findMany({
+                where: { clientId: proj.clientId },
+                select: { userId: true },
+              });
+              return clientUsers.map((cu) => cu.userId);
+            } catch { return []; }
+          };
+
+          const getOwnerUserIds = async () => {
+            try {
+              const owners = await prisma.user.findMany({
+                where: { role: 'OWNER', isActive: true },
+                select: { id: true },
+              });
+              return owners.map((o) => o.id);
+            } catch { return []; }
+          };
+
+          const uniq = (arr) => Array.from(new Set((arr || []).filter(Boolean)));
+
+          const ownerIds = await getOwnerUserIds();
+          const clientUserIds = await getClientUserIds();
+          const recipients = uniq([...ownerIds, ...clientUserIds]);
+
+          if (recipients.length > 0) {
+            const nowFormatted = new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+            const commonVars = {
+              postTitle: review.postTitle || title,
+              contentTitle: review.postTitle || title,
+              projectName: project.name || '',
+              postType: review.postType || postType || 'Page',
+              submittedBy: review.submittedByName || 'Team member',
+              submittedAt: nowFormatted,
+              aiSummary: review.aiSummary || '',
+            };
+
+            const portalProjectUrl = `/portal/admin/projects/${project.id}?tab=content-reviews`;
+
+            notify({
+              slug: 'content_published',
+              recipientIds: recipients,
+              variables: commonVars,
+              actionUrl: review.clientPreviewUrl || review.pmPreviewUrl || portalProjectUrl,
+              metadata: { contentReviewId: review.id, projectId: project.id },
+            }).catch(() => {});
+          }
+
+          // Realtime publish pipeline update
+          try {
+            publishRealtime(project.id, 'wp:pipeline', {
+              contentReviewId: review.id,
+              wpPipelineId: review.wpPipelineId,
+              wpPostId,
+              postTitle: review.postTitle,
+              status: 'publish',
+              eventType: 'pipeline_published',
+              revisionNumber: review.revisionNumber,
+            });
+          } catch { /* fail-safe */ }
+        }
+      } catch (err) {
+        console.error('[wp-content-change] Pipeline publish handling failed:', err.message);
+      }
+    }
+
     try {
       publishRealtime(project.id, 'wp:content-change', {
         wpPostId,
@@ -219,6 +320,17 @@ export async function wpWebhookRoutes(app) {
     // Determine published/cancelled flags
     const isPublishEvent = eventType === 'pipeline_published';
     const isCancelEvent = eventType === 'pipeline_cancelled';
+
+    let alreadyPublished = false;
+    try {
+      const existingReview = await prisma.wpContentReview.findUnique({
+        where: {
+          projectId_wpPipelineId: { projectId: project.id, wpPipelineId },
+        },
+        select: { isPublished: true },
+      });
+      alreadyPublished = existingReview?.isPublished || false;
+    } catch { /* fail-safe */ }
 
     // Upsert the content review record
     const review = await prisma.wpContentReview.upsert({
@@ -450,18 +562,20 @@ export async function wpWebhookRoutes(app) {
           }).catch(() => {});
         }
       } else if (eventType === 'pipeline_published') {
-        // Publish announcement: Owners + Client Managers + Client Viewers only.
-        // Worker/PM are excluded — they triggered the publish themselves.
-        const clientUserIds = await getClientUserIds();
-        const recipients = uniq([...ownerIds, ...clientUserIds]);
-        if (recipients.length > 0) {
-          notify({
-            slug: 'content_published',
-            recipientIds: recipients,
-            variables: commonVars,
-            actionUrl: clientPreviewUrl || pmPreviewUrl || portalProjectUrl,
-            metadata: { contentReviewId: review.id, projectId: project.id },
-          }).catch(() => {});
+        if (!alreadyPublished) {
+          // Publish announcement: Owners + Client Managers + Client Viewers only.
+          // Worker/PM are excluded — they triggered the publish themselves.
+          const clientUserIds = await getClientUserIds();
+          const recipients = uniq([...ownerIds, ...clientUserIds]);
+          if (recipients.length > 0) {
+            notify({
+              slug: 'content_published',
+              recipientIds: recipients,
+              variables: commonVars,
+              actionUrl: clientPreviewUrl || pmPreviewUrl || portalProjectUrl,
+              metadata: { contentReviewId: review.id, projectId: project.id },
+            }).catch(() => {});
+          }
         }
       } else if (eventType === 'pipeline_resend_notification') {
         // Re-fire notifications based on the current pipeline status.
