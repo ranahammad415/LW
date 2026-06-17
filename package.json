@@ -34,6 +34,8 @@
     "bcrypt": "^5.1.1",
     "csv-parser": "^3.2.0",
     "dotenv": "^16.4.5",
+    "pdf-parse": "^1.1.1",
+    "mammoth": "^1.8.0",
     "fast-xml-parser": "^4.3.0",
     "fastify": "^5.0.0",
     "fastify-type-provider-zod": "^5.0.0",
