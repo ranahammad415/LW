@@ -23,6 +23,7 @@ const FEATURES = [
   { key: 'standups', scopes: ['PM', 'TEAM_MEMBER', 'CONTRACTOR'] },
   { key: 'reports', scopes: ['PM'] },
   { key: 'dailyDigest', scopes: ['PM'] },
+  { key: 'knowledgeEngine', scopes: ['OWNER', 'PM', 'CLIENT'] },
 ];
 
 const ROLES = ['OWNER', 'PM', 'TEAM_MEMBER', 'CONTRACTOR', 'CLIENT'];
