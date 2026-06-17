@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import pdfParse from 'pdf-parse';
 import mammoth from 'mammoth';
 import { generateChat } from './ai.js';
+import YAML from 'yaml';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BACKEND_DIR = path.resolve(__dirname, '../..');
@@ -89,74 +90,15 @@ export async function extractFileContent(buffer, extension) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function stringifyYaml(obj) {
-  const lines = [];
-  for (const [key, val] of Object.entries(obj)) {
-    if (Array.isArray(val)) {
-      lines.push(`${key}:`);
-      for (const item of val) {
-        lines.push(`  - ${String(item).replace(/"/g, '\\"')}`);
-      }
-    } else if (typeof val === 'object' && val !== null) {
-      lines.push(`${key}: ${JSON.stringify(val)}`);
-    } else {
-      const valStr = String(val);
-      if (valStr.includes('\n') || valStr.includes(':') || valStr.includes('"')) {
-        lines.push(`${key}: ${JSON.stringify(valStr)}`);
-      } else {
-        lines.push(`${key}: ${valStr}`);
-      }
-    }
-  }
-  return lines.join('\n');
+  return YAML.stringify(obj).trim();
 }
 
 export function parseYaml(yamlText) {
-  const obj = {};
-  const lines = yamlText.split('\n');
-  let currentKey = null;
-  let currentArray = null;
-
-  for (let line of lines) {
-    line = line.trimEnd();
-    if (!line.trim()) continue;
-
-    if (line.trim().startsWith('- ')) {
-      if (currentArray) {
-        let val = line.trim().slice(2);
-        if (val.startsWith('"') && val.endsWith('"')) {
-          try { val = JSON.parse(val); } catch (_) {}
-        }
-        currentArray.push(val);
-      }
-      continue;
-    }
-
-    const match = line.match(/^([a-zA-Z0-9_-]+)\s*:\s*(.*)$/);
-    if (match) {
-      const key = match[1];
-      let val = match[2].trim();
-
-      if (val === '') {
-        currentKey = key;
-        currentArray = [];
-        obj[key] = currentArray;
-      } else {
-        currentKey = null;
-        currentArray = null;
-        if (val.startsWith('"') && val.endsWith('"')) {
-          try { val = JSON.parse(val); } catch (_) {}
-        } else if (val === 'true') {
-          val = true;
-        } else if (val === 'false') {
-          val = false;
-        } else if (!isNaN(val) && val !== '') {
-          val = Number(val);
-        }
-        obj[key] = val;
-      }
-    }
+  try {
+    return YAML.parse(yamlText) || {};
+  } catch (_) {
+    return {};
   }
-  return obj;
 }
 
 export function slugify(text) {
@@ -204,6 +146,10 @@ export function writeOkfFile(clientId, relativeFolder, filename, metadata, body)
     metadata.created_at = now;
   }
   metadata.updated_at = now;
+
+  // Add standard OKF schemas
+  metadata.okf_version = "1.0.0";
+  metadata.schema_type = metadata.type || "general";
 
   const yamlHeader = stringifyYaml(metadata);
   const content = `---\n${yamlHeader}\n---\n\n${body.trim()}\n`;
