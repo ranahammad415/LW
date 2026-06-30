@@ -77,6 +77,7 @@ model User {
   notificationLogs            NotificationLog[]
   notificationPreferences     NotificationPreference[]
   pmUpdatesAuthored           ClientPMUpdate[]         @relation("PMUpdateAuthor")
+  htmlReportsUploaded         ProjectHtmlReport[]      @relation("HtmlReportUploader")
   passwordResetTokens         PasswordResetToken[]
 
   @@map("user")
@@ -435,6 +436,7 @@ model Project {
   intakeSubmissions   IntakeSubmission[]
   contractRecords     ContractRecord[]
   onboardingChecklist OnboardingChecklist? @relation("ProjectOnboardingChecklist")
+  htmlReports         ProjectHtmlReport[]
 
   @@map("project")
 }
@@ -1037,6 +1039,27 @@ model ProjectActivityReport {
   @@unique([scope, projectId, month])
   @@index([month])
   @@map("projectactivityreport")
+}
+
+model ProjectHtmlReport {
+  id           String       @id @default(uuid())
+  projectId    String
+  month        String       @db.VarChar(7) // YYYY-MM
+  title        String?      @db.VarChar(255)
+  fileName     String       @db.VarChar(255)
+  storedPath   String       @db.VarChar(500)
+  fileSize     Int?
+  status       ReportStatus @default(DELIVERED)
+  uploadedById String
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @default(now()) @updatedAt
+
+  project    Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  uploadedBy User    @relation("HtmlReportUploader", fields: [uploadedById], references: [id])
+
+  @@unique([projectId, month])
+  @@index([month])
+  @@map("projecthtmlreport")
 }
 
 model AgencySetting {

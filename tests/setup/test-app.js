@@ -5,7 +5,7 @@ import multipart from '@fastify/multipart';
 
 import { verifyJwt } from '../../src/lib/verifyJwt.js';
 import { requireOwner } from '../../src/lib/requireOwner.js';
-import { requireClient } from '../../src/lib/requireClient.js';
+import { requireClient, requireClientWriter } from '../../src/lib/requireClient.js';
 import { requirePM } from '../../src/lib/requirePM.js';
 
 import { authRoutes } from '../../src/routes/auth.js';
@@ -21,6 +21,7 @@ import { adminAutomationRoutes } from '../../src/routes/admin/automation.js';
 import { adminWpRoutes } from '../../src/routes/admin/wp.js';
 import { adminNotificationRoutes } from '../../src/routes/admin/notifications.js';
 import { adminActivityReportRoutes } from '../../src/routes/admin/activity-reports.js';
+import { adminProjectHtmlReportRoutes } from '../../src/routes/admin/project-html-reports.js';
 
 import { clientDashboardRoutes } from '../../src/routes/client/dashboard.js';
 import { clientAnalyticsRoutes } from '../../src/routes/client/analytics.js';
@@ -34,8 +35,8 @@ import { clientRoiRoutes } from '../../src/routes/client/roi.js';
 import { clientNovaRoutes } from '../../src/routes/client/nova.js';
 
 import { pmReportRoutes } from '../../src/routes/pm/reports.js';
+import { pmProjectHtmlReportRoutes } from '../../src/routes/pm/project-html-reports.js';
 import { pmStandupRoutes } from '../../src/routes/pm/standups.js';
-import { pmChatRoutes } from '../../src/routes/pm/chat.js';
 import { pmAlertRoutes } from '../../src/routes/pm/alerts.js';
 import { pmTasksRoutes } from '../../src/routes/pm/tasks.js';
 import { pmIssueRoutes } from '../../src/routes/pm/issues.js';
@@ -67,6 +68,7 @@ export async function buildApp() {
   app.decorate('verifyJwt', verifyJwt);
   app.decorate('requireOwner', requireOwner);
   app.decorate('requireClient', requireClient);
+  app.decorate('requireClientWriter', requireClientWriter);
   app.decorate('requirePM', requirePM);
 
   // Routes — exact same prefixes as index.js
@@ -81,6 +83,7 @@ export async function buildApp() {
   app.register(adminWpRoutes, { prefix: '/api/admin' });
   app.register(adminNotificationRoutes, { prefix: '/api/admin' });
   app.register(adminActivityReportRoutes, { prefix: '/api/admin' });
+  app.register(adminProjectHtmlReportRoutes, { prefix: '/api/admin' });
 
   app.register(projectRoutes, { prefix: '/api/projects' });
   app.register(taskRoutes, { prefix: '/api/tasks' });
@@ -97,8 +100,8 @@ export async function buildApp() {
   app.register(clientNovaRoutes, { prefix: '/api/client' });
 
   app.register(pmReportRoutes, { prefix: '/api/pm' });
+  app.register(pmProjectHtmlReportRoutes, { prefix: '/api/pm' });
   app.register(pmStandupRoutes, { prefix: '/api/pm' });
-  app.register(pmChatRoutes, { prefix: '/api/pm' });
   app.register(pmAlertRoutes, { prefix: '/api/pm' });
   app.register(pmTasksRoutes, { prefix: '/api/pm' });
   app.register(pmIssueRoutes, { prefix: '/api/pm' });

@@ -1,0 +1,390 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://localwaves.dev/schemas/agency-data-import.v1.json",
+  "title": "Localwaves Agency Data Import",
+  "description": "Structured payload for a data agent to describe clients, projects, team, tasks, progress, updates, and deliverables before feeding Localwaves.",
+  "type": "object",
+  "required": ["meta", "teamRoster", "projects"],
+  "additionalProperties": false,
+  "properties": {
+    "meta": { "$ref": "#/$defs/meta" },
+    "teamRoster": { "$ref": "#/$defs/teamRoster" },
+    "clients": { "type": "array", "items": { "$ref": "#/$defs/client" } },
+    "projects": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/projectBundle" } }
+  },
+  "$defs": {
+    "meta": {
+      "type": "object",
+      "required": ["version", "planLabel", "importMode"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "type": "string", "enum": ["1.0", "1.1"] },
+        "planLabel": { "type": "string", "minLength": 1, "description": "Human label, e.g. June 2026 SEO Plan" },
+        "importMode": {
+          "type": "string",
+          "enum": ["plan_only", "plan_with_progress", "sync_progress"],
+          "description": "plan_only = create tasks as TO_DO; plan_with_progress = create with statuses/dates; sync_progress = update existing tasks matched by ref or title"
+        },
+        "generatedAt": { "type": "string", "format": "date-time" },
+        "generatedBy": { "type": "string" },
+        "notes": { "type": "string" }
+      }
+    },
+    "teamRoster": {
+      "type": "object",
+      "description": "Maps short assigneeKey → person lookup. Importer resolves by email (preferred) or name contains.",
+      "additionalProperties": { "$ref": "#/$defs/teamMemberRef" },
+      "minProperties": 1
+    },
+    "teamMemberRef": {
+      "type": "object",
+      "required": ["email"],
+      "additionalProperties": false,
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["PM", "TEAM_MEMBER", "CONTRACTOR"] },
+        "required": { "type": "boolean", "default": true }
+      }
+    },
+    "client": {
+      "type": "object",
+      "required": ["ref", "agencyName"],
+      "additionalProperties": false,
+      "properties": {
+        "ref": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "agencyName": { "type": "string" },
+        "websiteUrl": { "type": "string" },
+        "industry": { "type": "string" },
+        "leadPmKey": { "type": "string" },
+        "secondaryPmKey": { "type": "string" }
+      }
+    },
+    "projectBundle": {
+      "type": "object",
+      "required": ["ref", "project", "taskGroups"],
+      "additionalProperties": false,
+      "properties": {
+        "ref": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+        "clientRef": { "type": "string" },
+        "projectMatch": {
+          "type": "object",
+          "description": "How to find an existing project in DB (at least one field required at validation time)",
+          "additionalProperties": false,
+          "properties": {
+            "projectNameContains": { "type": "string" },
+            "clientNameContains": { "type": "string" }
+          }
+        },
+        "project": { "$ref": "#/$defs/project" },
+        "taskGroups": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/taskGroup" }
+        },
+        "projectUpdates": {
+          "type": "array",
+          "description": "Operational progress reports. Each taskUpdate becomes a TaskComment and sets Task.status from completion.",
+          "items": { "$ref": "#/$defs/projectUpdate" }
+        },
+        "pmUpdates": { "type": "array", "items": { "$ref": "#/$defs/pmUpdate" } },
+        "businessUpdates": { "type": "array", "items": { "$ref": "#/$defs/businessUpdate" } },
+        "keywords": { "type": "array", "items": { "$ref": "#/$defs/keyword" } }
+      }
+    },
+    "projectUpdate": {
+      "type": "object",
+      "required": ["ref", "reportedAt", "reportedByKey", "taskUpdates"],
+      "additionalProperties": false,
+      "properties": {
+        "ref": { "type": "string" },
+        "periodLabel": { "type": "string", "description": "e.g. Week 2 — Jul 7–11" },
+        "reportedAt": { "type": "string", "format": "date-time" },
+        "reportedByKey": { "type": "string" },
+        "narrative": { "type": "string", "description": "Optional project-level summary for this reporting period" },
+        "taskUpdates": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/taskUpdate" }
+        }
+      }
+    },
+    "taskUpdate": {
+      "type": "object",
+      "required": ["ref", "taskRef", "update", "authorKey", "completion"],
+      "additionalProperties": false,
+      "properties": {
+        "ref": { "type": "string" },
+        "taskRef": {
+          "type": "string",
+          "description": "ref of a task, step, or milestone group — must exist in taskGroups"
+        },
+        "update": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Posted verbatim as a TaskComment on the matched task"
+        },
+        "authorKey": { "type": "string" },
+        "postedAt": { "type": "string", "format": "date-time" },
+        "completion": { "$ref": "#/$defs/taskCompletion" }
+      }
+    },
+    "taskCompletion": {
+      "type": "object",
+      "required": ["isComplete", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "isComplete": {
+          "type": "boolean",
+          "description": "true = work done for this item; importer sets status to COMPLETED (or NEEDS_REVIEW if PM sign-off required)"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "TO_DO",
+            "IN_PROGRESS",
+            "NEEDS_REVIEW",
+            "REVISION_NEEDED",
+            "BLOCKED",
+            "WAITING_DEPENDENCY",
+            "COMPLETED",
+            "CANCELLED"
+          ]
+        },
+        "needsPmReview": {
+          "type": "boolean",
+          "default": false,
+          "description": "When true and isComplete=true, use NEEDS_REVIEW instead of COMPLETED"
+        },
+        "blockedReason": { "type": "string" },
+        "completedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "project": {
+      "type": "object",
+      "required": ["name", "projectType"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "projectType": {
+          "type": "string",
+          "enum": [
+            "SEO_CAMPAIGN",
+            "AEO_GEO_CAMPAIGN",
+            "WEBSITE_DESIGN",
+            "WEBSITE_DEVELOPMENT",
+            "SOCIAL_MEDIA_CAMPAIGN",
+            "ONE_OFF_PROJECT"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": ["SETUP", "ACTIVE", "PAUSED", "COMPLETED", "ARCHIVED"],
+          "default": "ACTIVE"
+        },
+        "leadPmKey": { "type": "string" },
+        "wpUrl": { "type": "string" }
+      }
+    },
+    "taskGroup": {
+      "type": "object",
+      "required": ["ref", "milestone", "tasks"],
+      "additionalProperties": false,
+      "properties": {
+        "ref": { "type": "string" },
+        "milestone": { "type": "string", "description": "Becomes the parent/main task title in Localwaves UI" },
+        "tasks": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/task" } }
+      }
+    },
+    "task": {
+      "type": "object",
+      "required": ["ref", "title", "taskType", "assigneeKey"],
+      "additionalProperties": false,
+      "properties": {
+        "ref": { "type": "string" },
+        "title": { "type": "string", "description": "Sub-task title under the milestone parent" },
+        "taskType": { "$ref": "#/$defs/taskType" },
+        "priority": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"], "default": "MEDIUM" },
+        "assigneeKeys": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Multiple assignees; assigneeKey is shorthand for a single primary assignee"
+        },
+        "assigneeKey": { "type": "string" },
+        "goal": { "type": "string" },
+        "description": { "type": "string" },
+        "steps": { "type": "array", "items": { "$ref": "#/$defs/step" } },
+        "dependsOnRefs": { "type": "array", "items": { "type": "string" } },
+        "clientVisible": { "type": "boolean", "default": true },
+        "dueDate": { "type": "string", "format": "date" },
+        "progress": { "$ref": "#/$defs/taskProgress" },
+        "clientInput": { "$ref": "#/$defs/clientInput" },
+        "deliverables": { "type": "array", "items": { "$ref": "#/$defs/deliverable" } },
+        "comments": { "type": "array", "items": { "$ref": "#/$defs/taskComment" } },
+        "activity": { "type": "array", "items": { "$ref": "#/$defs/taskActivity" } }
+      }
+    },
+    "step": {
+      "type": "object",
+      "required": ["ref", "title"],
+      "additionalProperties": false,
+      "properties": {
+        "ref": { "type": "string" },
+        "title": { "type": "string" },
+        "assigneeKey": { "type": "string" },
+        "progress": { "$ref": "#/$defs/taskProgress" }
+      }
+    },
+    "taskProgress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "TO_DO",
+            "IN_PROGRESS",
+            "NEEDS_REVIEW",
+            "REVISION_NEEDED",
+            "BLOCKED",
+            "WAITING_DEPENDENCY",
+            "COMPLETED",
+            "CANCELLED"
+          ]
+        },
+        "blockedReason": { "type": "string" },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "completedAt": { "type": "string", "format": "date-time" },
+        "percentComplete": { "type": "integer", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "clientInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "required": { "type": "boolean" },
+        "requestNote": { "type": "string" },
+        "status": { "type": "string", "enum": ["PENDING", "FULFILLED", "CANCELLED"] },
+        "clientResponse": { "type": "string" },
+        "respondedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "deliverable": {
+      "type": "object",
+      "required": ["ref", "label"],
+      "additionalProperties": false,
+      "properties": {
+        "ref": { "type": "string" },
+        "label": { "type": "string" },
+        "version": { "type": "integer", "minimum": 1, "default": 1 },
+        "fileUrl": { "type": "string" },
+        "notes": { "type": "string" },
+        "uploadedByKey": { "type": "string" },
+        "uploadedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "taskComment": {
+      "type": "object",
+      "required": ["authorKey", "content"],
+      "additionalProperties": false,
+      "properties": {
+        "authorKey": { "type": "string" },
+        "content": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "taskActivity": {
+      "type": "object",
+      "required": ["action", "actorKey"],
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "task_created",
+            "status_change",
+            "priority_changed",
+            "assignee_added",
+            "assignee_removed",
+            "client_input_requested",
+            "client_input_fulfilled",
+            "comment_added",
+            "deliverable_uploaded"
+          ]
+        },
+        "actorKey": { "type": "string" },
+        "detail": { "type": "string" },
+        "occurredAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "pmUpdate": {
+      "type": "object",
+      "required": ["ref", "message", "authorKey"],
+      "additionalProperties": false,
+      "properties": {
+        "ref": { "type": "string" },
+        "message": { "type": "string" },
+        "authorKey": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "clientVisible": { "type": "boolean", "default": true }
+      }
+    },
+    "businessUpdate": {
+      "type": "object",
+      "required": ["ref", "updateType", "details"],
+      "additionalProperties": false,
+      "properties": {
+        "ref": { "type": "string" },
+        "updateType": {
+          "type": "string",
+          "enum": [
+            "NEW_PRODUCT",
+            "NEW_LOCATION",
+            "PRICING_CHANGE",
+            "TEAM_CHANGE",
+            "REBRAND",
+            "SEASONAL",
+            "OTHER"
+          ]
+        },
+        "details": { "type": "string" },
+        "submittedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "keyword": {
+      "type": "object",
+      "required": ["ref", "keyword"],
+      "additionalProperties": false,
+      "properties": {
+        "ref": { "type": "string" },
+        "keyword": { "type": "string" },
+        "volume": { "type": "integer" },
+        "currentRank": { "type": "integer" },
+        "targetUrl": { "type": "string" },
+        "status": { "type": "string", "enum": ["PROPOSED", "APPROVED", "TRACKING", "PAUSED"] }
+      }
+    },
+    "taskType": {
+      "type": "string",
+      "enum": [
+        "content-writing",
+        "meta-optimisation",
+        "technical-seo",
+        "monthly-report",
+        "strategy-call",
+        "onboarding-task",
+        "crawl-fix",
+        "schema-deployment",
+        "content-audit",
+        "on-page-seo",
+        "local-seo",
+        "keyword-research",
+        "link-building",
+        "aeo-geo",
+        "ux-audit",
+        "cro",
+        "reporting"
+      ]
+    }
+  }
+}

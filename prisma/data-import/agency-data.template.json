@@ -1,0 +1,304 @@
+{
+  "meta": {
+    "version": "1.1",
+    "planLabel": "REPLACE_ME — e.g. June 2026 SEO Campaign Plan",
+    "importMode": "plan_with_progress",
+    "generatedAt": "2026-06-30T00:00:00.000Z",
+    "generatedBy": "data-agent",
+    "notes": "Replace all REPLACE_ME values. Keep stable ref IDs across exports."
+  },
+
+  "teamRoster": {
+    "hamza": {
+      "email": "hamza@thephinixsolutions.com",
+      "name": "Hamza Ashraf",
+      "role": "PM",
+      "required": true
+    },
+    "sami": {
+      "email": "sami@thephinixsolutions.com",
+      "name": "Sami Ullah",
+      "role": "PM",
+      "required": true
+    },
+    "mudassar": {
+      "email": "mudassar@thephinixsolutions.com",
+      "name": "Mudassar Nazar",
+      "role": "TEAM_MEMBER",
+      "required": true
+    },
+    "bisma": {
+      "email": "bisma@thephinixsolutions.com",
+      "name": "Bisma Syed",
+      "role": "TEAM_MEMBER",
+      "required": true
+    },
+    "awais": {
+      "email": "awais@thephinixsolutions.com",
+      "name": "Awais Sadiq",
+      "role": "TEAM_MEMBER",
+      "required": true
+    }
+  },
+
+  "clients": [
+    {
+      "ref": "client-example",
+      "agencyName": "REPLACE_ME Client Name",
+      "websiteUrl": "https://example.com",
+      "industry": "REPLACE_ME",
+      "leadPmKey": "hamza"
+    }
+  ],
+
+  "projects": [
+    {
+      "ref": "proj-example-seo",
+      "clientRef": "client-example",
+      "projectMatch": {
+        "projectNameContains": "REPLACE_ME project name substring",
+        "clientNameContains": "REPLACE_ME client name substring"
+      },
+      "project": {
+        "name": "SEO - REPLACE_ME Client",
+        "projectType": "SEO_CAMPAIGN",
+        "status": "ACTIVE",
+        "leadPmKey": "hamza",
+        "wpUrl": "https://example.com"
+      },
+
+      "taskGroups": [
+        {
+          "ref": "grp-authority-backlinks",
+          "milestone": "Authority / Backlink Growth",
+          "tasks": [
+            {
+              "ref": "task-authority-campaigns",
+              "title": "Authority campaigns — target high-DR referring domains",
+              "taskType": "link-building",
+              "priority": "HIGH",
+              "assigneeKey": "mudassar",
+              "goal": "Build topical authority. Earn high-DR referring domains in the niche.",
+              "description": "Run outreach campaigns targeting authoritative referring domains relevant to the niche.",
+              "dueDate": "2026-07-15",
+              "clientVisible": true,
+              "dependsOnRefs": [],
+              "steps": [
+                {
+                  "ref": "step-authority-1",
+                  "title": "Build prospect list of authoritative sites in niche",
+                  "assigneeKey": "mudassar",
+                  "progress": { "status": "COMPLETED", "completedAt": "2026-06-10T14:00:00.000Z" }
+                },
+                {
+                  "ref": "step-authority-2",
+                  "title": "Prepare pitch templates and value-add angles",
+                  "assigneeKey": "mudassar",
+                  "progress": { "status": "IN_PROGRESS", "startedAt": "2026-06-11T09:00:00.000Z", "percentComplete": 40 }
+                },
+                {
+                  "ref": "step-authority-3",
+                  "title": "Execute outreach and follow-ups",
+                  "assigneeKey": "mudassar",
+                  "progress": { "status": "TO_DO" }
+                },
+                {
+                  "ref": "step-authority-4",
+                  "title": "Secure placements and verify live links",
+                  "assigneeKey": "mudassar",
+                  "progress": { "status": "TO_DO" }
+                }
+              ],
+              "progress": {
+                "status": "IN_PROGRESS",
+                "startedAt": "2026-06-08T10:00:00.000Z",
+                "percentComplete": 35
+              },
+              "deliverables": [
+                {
+                  "ref": "del-authority-prospect-list",
+                  "label": "Prospect list spreadsheet",
+                  "version": 1,
+                  "fileUrl": "/uploads/REPLACE_ME/prospect-list.xlsx",
+                  "notes": "First pass — 120 domains shortlisted",
+                  "uploadedByKey": "mudassar",
+                  "uploadedAt": "2026-06-10T16:30:00.000Z"
+                }
+              ],
+              "comments": [
+                {
+                  "authorKey": "hamza",
+                  "content": "Focus on DR 50+ publishers in the electrical services niche first.",
+                  "createdAt": "2026-06-09T11:00:00.000Z"
+                }
+              ],
+              "activity": [
+                {
+                  "action": "task_created",
+                  "actorKey": "hamza",
+                  "detail": "Authority campaigns — target high-DR referring domains",
+                  "occurredAt": "2026-06-08T10:00:00.000Z"
+                },
+                {
+                  "action": "status_change",
+                  "actorKey": "mudassar",
+                  "detail": "changed status from TO_DO to IN_PROGRESS",
+                  "occurredAt": "2026-06-08T10:05:00.000Z"
+                }
+              ],
+              "clientInput": null
+            },
+            {
+              "ref": "task-competitor-gap",
+              "title": "Competitor gap coverage — close backlink gaps vs top competitors",
+              "taskType": "link-building",
+              "priority": "HIGH",
+              "assigneeKey": "mudassar",
+              "goal": "Close backlink gaps vs top competitors to lift relative authority.",
+              "description": "Identify backlinks pointing to competitors but missing for us and execute outreach.",
+              "dueDate": "2026-07-22",
+              "dependsOnRefs": ["task-authority-campaigns"],
+              "steps": [
+                { "ref": "step-gap-1", "title": "Run backlink gap analysis across top-3 competitors", "progress": { "status": "TO_DO" } },
+                { "ref": "step-gap-2", "title": "Filter and shortlist quality referring domains", "progress": { "status": "TO_DO" } },
+                { "ref": "step-gap-3", "title": "Prioritize by DR, relevance, traffic", "progress": { "status": "TO_DO" } },
+                { "ref": "step-gap-4", "title": "Run outreach to close the gap", "progress": { "status": "TO_DO" } }
+              ],
+              "progress": { "status": "WAITING_DEPENDENCY" }
+            }
+          ]
+        },
+        {
+          "ref": "grp-on-page-seo",
+          "milestone": "On-Page SEO",
+          "tasks": [
+            {
+              "ref": "task-meta-optimisation",
+              "title": "Meta title & description optimisation — priority pages",
+              "taskType": "on-page-seo",
+              "priority": "MEDIUM",
+              "assigneeKeys": ["bisma", "awais"],
+              "assigneeKey": "bisma",
+              "goal": "Improve CTR on money pages with refreshed meta tags.",
+              "description": "Rewrite meta titles and descriptions for top 20 landing pages.",
+              "dueDate": "2026-07-01",
+              "steps": [
+                { "ref": "step-meta-1", "title": "Audit current meta tags on priority URLs", "progress": { "status": "COMPLETED" } },
+                { "ref": "step-meta-2", "title": "Draft optimised titles and descriptions", "progress": { "status": "NEEDS_REVIEW" } },
+                { "ref": "step-meta-3", "title": "PM review and client approval if needed", "progress": { "status": "TO_DO" } },
+                { "ref": "step-meta-4", "title": "Publish updates in WordPress", "progress": { "status": "TO_DO" } }
+              ],
+              "progress": { "status": "NEEDS_REVIEW" },
+              "clientInput": {
+                "required": true,
+                "requestNote": "Please confirm preferred tone of voice for meta descriptions (formal vs conversational).",
+                "status": "PENDING"
+              }
+            }
+          ]
+        }
+      ],
+
+      "projectUpdates": [
+        {
+          "ref": "pu-week-1",
+          "periodLabel": "Week 1 — Jun 23–27, 2026",
+          "reportedAt": "2026-06-27T17:00:00.000Z",
+          "reportedByKey": "hamza",
+          "narrative": "Backlink prospecting underway. Meta tag drafts submitted for PM review.",
+          "taskUpdates": [
+            {
+              "ref": "tu-step-authority-1",
+              "taskRef": "step-authority-1",
+              "update": "Prospect list complete — 120 authoritative domains shortlisted and uploaded to deliverables.",
+              "authorKey": "mudassar",
+              "postedAt": "2026-06-10T16:30:00.000Z",
+              "completion": {
+                "isComplete": true,
+                "status": "COMPLETED",
+                "completedAt": "2026-06-10T16:30:00.000Z"
+              }
+            },
+            {
+              "ref": "tu-step-authority-2",
+              "taskRef": "step-authority-2",
+              "update": "Pitch templates drafted for guest-post and resource-page outreach. ~40% complete — awaiting PM tone check before finalising.",
+              "authorKey": "mudassar",
+              "postedAt": "2026-06-11T11:00:00.000Z",
+              "completion": {
+                "isComplete": false,
+                "status": "IN_PROGRESS"
+              }
+            },
+            {
+              "ref": "tu-task-authority-campaigns",
+              "taskRef": "task-authority-campaigns",
+              "update": "Parent task roll-up: step 1 done, step 2 in progress. Outreach not yet started.",
+              "authorKey": "hamza",
+              "postedAt": "2026-06-27T17:00:00.000Z",
+              "completion": {
+                "isComplete": false,
+                "status": "IN_PROGRESS"
+              }
+            },
+            {
+              "ref": "tu-step-meta-2",
+              "taskRef": "step-meta-2",
+              "update": "Meta titles and descriptions drafted for all 20 priority URLs. Ready for PM review before client handoff.",
+              "authorKey": "bisma",
+              "postedAt": "2026-06-26T15:00:00.000Z",
+              "completion": {
+                "isComplete": true,
+                "status": "NEEDS_REVIEW",
+                "needsPmReview": true
+              }
+            },
+            {
+              "ref": "tu-task-meta",
+              "taskRef": "task-meta-optimisation",
+              "update": "Audit complete. Drafts with PM for review. Blocked on client tone-of-voice confirmation.",
+              "authorKey": "bisma",
+              "postedAt": "2026-06-26T15:30:00.000Z",
+              "completion": {
+                "isComplete": false,
+                "status": "NEEDS_REVIEW",
+                "needsPmReview": true,
+                "blockedReason": "Waiting on client tone-of-voice input"
+              }
+            }
+          ]
+        }
+      ],
+
+      "pmUpdates": [
+        {
+          "ref": "pmu-week-1",
+          "message": "**Week 1 update:** Foundation audit complete. Backlink prospecting started. Meta optimisation drafts ready for review.",
+          "authorKey": "hamza",
+          "createdAt": "2026-06-27T17:00:00.000Z",
+          "clientVisible": true
+        }
+      ],
+
+      "businessUpdates": [
+        {
+          "ref": "bu-new-service-line",
+          "updateType": "NEW_PRODUCT",
+          "details": "Client launched a new emergency repair service — update keyword targets and landing pages accordingly.",
+          "submittedAt": "2026-06-20T12:00:00.000Z"
+        }
+      ],
+
+      "keywords": [
+        {
+          "ref": "kw-primary-1",
+          "keyword": "REPLACE_ME primary keyword",
+          "volume": 1200,
+          "currentRank": 18,
+          "targetUrl": "https://example.com/services/",
+          "status": "TRACKING"
+        }
+      ]
+    }
+  ]
+}
