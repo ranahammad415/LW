@@ -1,5 +1,6 @@
 import { prisma } from '../../lib/prisma.js';
 import { syncPipelineFromWp } from '../../lib/pipelineSync.js';
+import { STATUS_LABELS, formatHistoryEvent } from '../../lib/pipelineFormat.js';
 
 const PM_ROLES = ['PM', 'OWNER'];
 
@@ -17,30 +18,6 @@ function wpHeaders(apiKey) {
     'User-Agent': 'Localwaves-AgencyOS/1.0 (+https://localwaves; pipeline sync)',
   };
 }
-
-/** Status label map */
-const STATUS_LABELS = {
-  draft: 'Draft',
-  pending_pm_review: 'Pending PM Review',
-  pm_approved: 'PM Approved',
-  pending_client_review: 'Pending Client',
-  client_approved: 'Approved',
-  changes_requested_by_pm: 'Changes (PM)',
-  changes_requested_by_client: 'Changes (Client)',
-  cancelled: 'Cancelled',
-};
-
-/** Status color map */
-const STATUS_COLORS = {
-  draft: '#888',
-  pending_pm_review: '#f0b849',
-  pm_approved: '#f0b849',
-  pending_client_review: '#f0b849',
-  client_approved: '#00a32a',
-  changes_requested_by_pm: '#d63638',
-  changes_requested_by_client: '#d63638',
-  cancelled: '#888',
-};
 
 function formatReview(r) {
   return {
@@ -69,19 +46,9 @@ function formatReview(r) {
     revisionNumber: r.revisionNumber,
     createdAt: r.createdAt?.toISOString() || null,
     updatedAt: r.updatedAt?.toISOString() || null,
-    history: (r.events || []).map((e) => ({
-      revisionNumber: e.revisionNumber,
-      status: e.status,
-      statusLabel: STATUS_LABELS[e.status] || e.status,
-      statusColor: STATUS_COLORS[e.status] || '#888',
-      pmComment: e.pmComment,
-      clientComment: e.clientComment,
-      workerNote: e.workerNote,
-      pmReviewedAt: e.pmReviewedAt,
-      clientReviewedAt: e.clientReviewedAt,
-      createdAt: e.createdAt?.toISOString() || null,
-      updatedAt: e.createdAt?.toISOString() || null,
-    })),
+    history: (r.events || [])
+      .filter((e) => e.eventType !== 'pipeline_resend_notification')
+      .map((e) => formatHistoryEvent(e)),
   };
 }
 

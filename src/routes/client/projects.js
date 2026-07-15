@@ -1,5 +1,9 @@
 import { prisma } from '../../lib/prisma.js';
 import { notify } from '../../lib/notificationService.js';
+import {
+  CLIENT_STATUS_LABELS,
+  formatHistoryEvent,
+} from '../../lib/pipelineFormat.js';
 
 export async function clientProjectsRoutes(app) {
   app.get(
@@ -850,27 +854,6 @@ export async function clientProjectsRoutes(app) {
           orderBy: { updatedAt: 'desc' },
         });
 
-        const STATUS_LABELS = {
-          draft: 'Draft',
-          pending_pm_review: 'Pending PM Review',
-          pm_approved: 'PM Approved',
-          pending_client_review: 'Awaiting Your Review',
-          client_approved: 'Approved',
-          changes_requested_by_pm: 'Changes Requested',
-          changes_requested_by_client: 'Changes Requested',
-          cancelled: 'Cancelled',
-        };
-        const STATUS_COLORS = {
-          draft: '#888',
-          pending_pm_review: '#f0b849',
-          pm_approved: '#f0b849',
-          pending_client_review: '#f0b849',
-          client_approved: '#00a32a',
-          changes_requested_by_pm: '#d63638',
-          changes_requested_by_client: '#d63638',
-          cancelled: '#888',
-        };
-
         const result = reviews.map((r) => ({
           id: r.id,
           projectId: r.projectId,
@@ -881,7 +864,7 @@ export async function clientProjectsRoutes(app) {
           postTitle: r.postTitle,
           wpPostStatus: '',
           status: r.status,
-          statusLabel: STATUS_LABELS[r.status] || r.status,
+          statusLabel: CLIENT_STATUS_LABELS[r.status] || r.status,
           submittedByName: r.submittedByName,
           submittedById: r.submittedById,
           pmMemberName: r.pmMemberName,
@@ -897,19 +880,9 @@ export async function clientProjectsRoutes(app) {
           revisionNumber: r.revisionNumber,
           createdAt: r.createdAt?.toISOString() || null,
           updatedAt: r.updatedAt?.toISOString() || null,
-          history: (r.events || []).map((e) => ({
-            revisionNumber: e.revisionNumber,
-            status: e.status,
-            statusLabel: STATUS_LABELS[e.status] || e.status,
-            statusColor: STATUS_COLORS[e.status] || '#888',
-            pmComment: e.pmComment,
-            clientComment: e.clientComment,
-            workerNote: e.workerNote,
-            pmReviewedAt: e.pmReviewedAt,
-            clientReviewedAt: e.clientReviewedAt,
-            createdAt: e.createdAt?.toISOString() || null,
-            updatedAt: e.createdAt?.toISOString() || null,
-          })),
+          history: (r.events || [])
+            .filter((e) => e.eventType !== 'pipeline_resend_notification')
+            .map((e) => formatHistoryEvent(e, CLIENT_STATUS_LABELS)),
         }));
 
         return reply.send(result);
@@ -955,27 +928,6 @@ export async function clientProjectsRoutes(app) {
           orderBy: { updatedAt: 'desc' },
         });
 
-        const STATUS_LABELS = {
-          draft: 'Draft',
-          pending_pm_review: 'Pending PM Review',
-          pm_approved: 'PM Approved',
-          pending_client_review: 'Awaiting Your Review',
-          client_approved: 'Approved',
-          changes_requested_by_pm: 'Changes Requested',
-          changes_requested_by_client: 'Changes Requested',
-          cancelled: 'Cancelled',
-        };
-        const STATUS_COLORS = {
-          draft: '#888',
-          pending_pm_review: '#f0b849',
-          pm_approved: '#f0b849',
-          pending_client_review: '#f0b849',
-          client_approved: '#00a32a',
-          changes_requested_by_pm: '#d63638',
-          changes_requested_by_client: '#d63638',
-          cancelled: '#888',
-        };
-
         const result = reviews.map((r) => ({
           id: r.id,
           projectId: r.projectId,
@@ -986,7 +938,7 @@ export async function clientProjectsRoutes(app) {
           postTitle: r.postTitle,
           wpPostStatus: '',
           status: r.status,
-          statusLabel: STATUS_LABELS[r.status] || r.status,
+          statusLabel: CLIENT_STATUS_LABELS[r.status] || r.status,
           submittedByName: r.submittedByName,
           submittedById: r.submittedById,
           pmMemberName: r.pmMemberName,
@@ -1002,19 +954,9 @@ export async function clientProjectsRoutes(app) {
           revisionNumber: r.revisionNumber,
           createdAt: r.createdAt?.toISOString() || null,
           updatedAt: r.updatedAt?.toISOString() || null,
-          history: (r.events || []).map((e) => ({
-            revisionNumber: e.revisionNumber,
-            status: e.status,
-            statusLabel: STATUS_LABELS[e.status] || e.status,
-            statusColor: STATUS_COLORS[e.status] || '#888',
-            pmComment: e.pmComment,
-            clientComment: e.clientComment,
-            workerNote: e.workerNote,
-            pmReviewedAt: e.pmReviewedAt,
-            clientReviewedAt: e.clientReviewedAt,
-            createdAt: e.createdAt?.toISOString() || null,
-            updatedAt: e.createdAt?.toISOString() || null,
-          })),
+          history: (r.events || [])
+            .filter((e) => e.eventType !== 'pipeline_resend_notification')
+            .map((e) => formatHistoryEvent(e, CLIENT_STATUS_LABELS)),
         }));
 
         return reply.send(result);

@@ -2,6 +2,7 @@ import { prisma } from '../lib/prisma.js';
 import { maybeGenerateSummary, autoSyncSitemap } from '../lib/wpSync.js';
 import { notify, notifyTest } from '../lib/notificationService.js';
 import { publish as publishRealtime } from '../lib/realtimeBus.js';
+import { commentsForEventType } from '../lib/pipelineFormat.js';
 
 export async function wpWebhookRoutes(app) {
   app.post('/wp-content-change', async (request, reply) => {
@@ -410,25 +411,36 @@ export async function wpWebhookRoutes(app) {
       }
     }
 
-    // Create immutable event log entry
-    try {
-      await prisma.wpContentReviewEvent.create({
-        data: {
-          contentReviewId: review.id,
-          eventType,
-          status,
-          revisionNumber,
+    // Create immutable event log entry.
+    // Skip resend-notification — it re-fires the same status/comments and
+    // floods the timeline with duplicate rows at the same timestamp.
+    if (eventType !== 'pipeline_resend_notification') {
+      try {
+        const scoped = commentsForEventType(eventType, {
           workerNote,
           pmComment,
-          pmDecision,
           clientComment,
+          pmDecision,
           clientDecision,
-          pmReviewedAt: body.pmReviewedAt ? String(body.pmReviewedAt).slice(0, 50) : null,
-          clientReviewedAt: body.clientReviewedAt ? String(body.clientReviewedAt).slice(0, 50) : null,
-        },
-      });
-    } catch {
-      // Don't fail the webhook if event creation fails
+        });
+        await prisma.wpContentReviewEvent.create({
+          data: {
+            contentReviewId: review.id,
+            eventType,
+            status,
+            revisionNumber,
+            workerNote: scoped.workerNote,
+            pmComment: scoped.pmComment,
+            pmDecision: scoped.pmDecision,
+            clientComment: scoped.clientComment,
+            clientDecision: scoped.clientDecision,
+            pmReviewedAt: body.pmReviewedAt ? String(body.pmReviewedAt).slice(0, 50) : null,
+            clientReviewedAt: body.clientReviewedAt ? String(body.clientReviewedAt).slice(0, 50) : null,
+          },
+        });
+      } catch {
+        // Don't fail the webhook if event creation fails
+      }
     }
 
     // Push realtime update to any subscribers of this project (PM / client portals).

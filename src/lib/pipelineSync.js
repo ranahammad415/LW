@@ -1,4 +1,8 @@
 import { prisma } from './prisma.js';
+import {
+  commentsForStatus,
+  parseWpDate,
+} from './pipelineFormat.js';
 
 /** Build WP agent headers. */
 function wpHeaders(apiKey) {
@@ -8,30 +12,6 @@ function wpHeaders(apiKey) {
     'User-Agent': 'Localwaves-AgencyOS/1.0 (+https://localwaves; pipeline sync)',
   };
 }
-
-/** Status label map */
-const STATUS_LABELS = {
-  draft: 'Draft',
-  pending_pm_review: 'Pending PM Review',
-  pm_approved: 'PM Approved',
-  pending_client_review: 'Pending Client',
-  client_approved: 'Approved',
-  changes_requested_by_pm: 'Changes (PM)',
-  changes_requested_by_client: 'Changes (Client)',
-  cancelled: 'Cancelled',
-};
-
-/** Status color map */
-const STATUS_COLORS = {
-  draft: '#888',
-  pending_pm_review: '#f0b849',
-  pm_approved: '#f0b849',
-  pending_client_review: '#f0b849',
-  client_approved: '#00a32a',
-  changes_requested_by_pm: '#d63638',
-  changes_requested_by_client: '#d63638',
-  cancelled: '#888',
-};
 
 /**
  * Sync pipeline data from all WP sites into local WpContentReview + WpContentReviewEvent tables.
@@ -91,46 +71,67 @@ export async function syncPipelineFromWp() {
             create: { projectId: project.id, wpPipelineId, ...data },
           });
 
-          // Sync history entries from WP as events (if not already stored)
-          const history = Array.isArray(p.history) ? p.history : [];
-          if (history.length > 0) {
-            // Check how many events we already have
-            const existingCount = await prisma.wpContentReviewEvent.count({
-              where: { contentReviewId: review.id },
-            });
+          // Only backfill when this review has no events yet. WP's `history`
+          // array is post-wide (all pipeline rows for the post), so importing
+          // it onto every review duplicated comments across timelines and
+          // stamped every row with the sync clock.
+          const existingCount = await prisma.wpContentReviewEvent.count({
+            where: { contentReviewId: review.id },
+          });
 
-            // If WP has more history entries than we have events, backfill missing ones
-            if (history.length > existingCount) {
-              // Get existing events to avoid duplicates
-              const existing = await prisma.wpContentReviewEvent.findMany({
-                where: { contentReviewId: review.id },
-                select: { revisionNumber: true, eventType: true, status: true },
+          if (existingCount === 0) {
+            const history = Array.isArray(p.history) ? p.history : [];
+            // Prefer the history entry for THIS pipeline id when WP provides it.
+            const own = history.filter((h) => Number(h.id) === wpPipelineId);
+            const snapshots = own.length > 0
+              ? own
+              : [{
+                  id: wpPipelineId,
+                  revisionNumber: data.revisionNumber,
+                  status: data.status,
+                  workerNote: data.workerNote,
+                  pmComment: data.pmComment,
+                  pmDecision: data.pmDecision,
+                  clientComment: data.clientComment,
+                  clientDecision: data.clientDecision,
+                  pmReviewedAt: data.pmReviewedAt,
+                  clientReviewedAt: data.clientReviewedAt,
+                  createdAt: p.createdAt,
+                  updatedAt: p.updatedAt,
+                }];
+
+            for (const h of snapshots) {
+              const status = String(h.status || data.status || '').slice(0, 50);
+              const scoped = commentsForStatus(status, {
+                workerNote: h.workerNote || null,
+                pmComment: h.pmComment || null,
+                pmDecision: h.pmDecision || null,
+                clientComment: h.clientComment || null,
+                clientDecision: h.clientDecision || null,
               });
+              const at =
+                parseWpDate(h.updatedAt) ||
+                parseWpDate(h.createdAt) ||
+                parseWpDate(h.clientReviewedAt) ||
+                parseWpDate(h.pmReviewedAt) ||
+                new Date();
 
-              const existingKeys = new Set(
-                existing.map((e) => `${e.revisionNumber}_${e.status}`)
-              );
-
-              for (const h of history) {
-                const key = `${h.revisionNumber}_${h.status}`;
-                if (existingKeys.has(key)) continue;
-
-                await prisma.wpContentReviewEvent.create({
-                  data: {
-                    contentReviewId: review.id,
-                    eventType: `sync_${h.status}`,
-                    status: h.status || '',
-                    revisionNumber: h.revisionNumber || 1,
-                    workerNote: h.workerNote || null,
-                    pmComment: h.pmComment || null,
-                    pmDecision: h.pmDecision || null,
-                    clientComment: h.clientComment || null,
-                    clientDecision: h.clientDecision || null,
-                    pmReviewedAt: h.pmReviewedAt || null,
-                    clientReviewedAt: h.clientReviewedAt || null,
-                  },
-                });
-              }
+              await prisma.wpContentReviewEvent.create({
+                data: {
+                  contentReviewId: review.id,
+                  eventType: `sync_${status}`,
+                  status,
+                  revisionNumber: Number(h.revisionNumber) || data.revisionNumber || 1,
+                  workerNote: scoped.workerNote,
+                  pmComment: scoped.pmComment,
+                  pmDecision: scoped.pmDecision,
+                  clientComment: scoped.clientComment,
+                  clientDecision: scoped.clientDecision,
+                  pmReviewedAt: h.pmReviewedAt || null,
+                  clientReviewedAt: h.clientReviewedAt || null,
+                  createdAt: at,
+                },
+              });
             }
           }
 
