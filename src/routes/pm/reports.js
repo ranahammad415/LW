@@ -1,37 +1,13 @@
-import { generateChat, isAiConfigured } from '../../lib/ai.js';
 import { z } from 'zod';
 import { prisma } from '../../lib/prisma.js';
 import { notify } from '../../lib/notificationService.js';
+import { generateClientReport } from '../../lib/monthlyReport/generateForCycle.js';
 
 const generateBodySchema = z.object({
   clientId: z.string().uuid(),
   month: z.number().int().min(1).max(12),
   year: z.number().int().min(2020).max(2100),
 });
-
-const AI_CONTENT_STRUCTURE = {
-  executiveSummary: '',
-  seoPerformance: '',
-};
-
-const SYSTEM_PROMPT = `
-You are a Senior SEO Account Manager at a premium digital growth agency. 
-Your job is to write the monthly performance report for our client. 
-Your tone must be consultative, professional, and confidence-inspiring. Focus on the value delivered, not just a dry list of technical tasks.
-
-Avoid generic AI filler words like "delve into," "testament," or "robust." Use crisp, business-focused language.
-
-You will be provided with:
-1. The Client's Name
-2. The Reporting Month & Year
-3. A raw list of tasks our team completed this month.
-
-You must output a strictly valid JSON object with exactly two keys:
-{
-  "executiveSummary": "A 2-3 paragraph high-level overview of the month's progress. Frame the completed work as strategic wins moving the client closer to their growth goals.",
-  "seoPerformance": "A 2-3 paragraph breakdown of the specific SEO, Technical, or Content work completed this month. Translate the technical tasks into business value (e.g., instead of 'fixed 404s', say 'improved site health and crawlability to protect search rankings')."
-}
-`;
 
 export async function pmReportRoutes(app) {
   app.get(
@@ -209,88 +185,20 @@ export async function pmReportRoutes(app) {
         }
       }
 
-      const startDate = new Date(Date.UTC(year, month - 1, 1));
-      const endDate = new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
+      // Unified rich report generation (tasks + content + keyword wins +
+      // AI-search visibility + search KPIs), keyed to the month's work cycle.
+      const cycle = await prisma.workCycle
+        .findUnique({ where: { month_year: { month, year } } })
+        .catch(() => null);
 
-      const completedTasks = await prisma.task.findMany({
-        where: {
-          project: { clientId },
-          status: 'COMPLETED',
-          updatedAt: { gte: startDate, lte: endDate },
-        },
-        include: { project: { select: { name: true } } },
-        orderBy: { updatedAt: 'desc' },
+      const report = await generateClientReport({
+        clientId,
+        month,
+        year,
+        workCycleId: cycle?.id ?? null,
+        log: request.log,
       });
 
-      const userMessage = `
-Client Name: ${client.agencyName}
-Reporting Period: ${month}/${year}
-
-Completed Tasks this month:
-${completedTasks.length === 0 ? 'No completed tasks recorded for this month.' : completedTasks.map((t) => `- [${t.taskType}] ${t.title}`).join('\n')}
-`;
-
-      let aiContent = { ...AI_CONTENT_STRUCTURE };
-      if (isAiConfigured()) {
-        try {
-          const { text, parsed } = await generateChat({
-            system: SYSTEM_PROMPT,
-            user: userMessage,
-            json: true,
-            temperature: 0.7,
-            maxTokens: 1024,
-            feature: 'monthly_report',
-            userId: request.user?.id || null,
-            clientId,
-          });
-          const raw = text;
-          if (raw) {
-            const parsedContent = parsed || (() => { try { return JSON.parse(raw); } catch { return null; } })();
-            if (parsedContent) {
-              aiContent = {
-                executiveSummary:
-                  parsedContent.executiveSummary ?? 'No summary generated.',
-                seoPerformance:
-                  parsedContent.seoPerformance ?? 'No SEO summary generated.',
-              };
-            }
-          }
-        } catch (err) {
-          request.log.warn({ err }, 'AI report generation failed, using fallback');
-          aiContent = {
-            executiveSummary: `This month we completed ${completedTasks.length} task(s) for ${client.agencyName}. Key deliverables are reflected in your project activity.`,
-            seoPerformance: `SEO activity for ${month}/${year} included the completed tasks above. Add specific performance notes as needed.`,
-          };
-        }
-      } else {
-        aiContent = {
-          executiveSummary: `Monthly summary for ${client.agencyName} (${month}/${year}). ${completedTasks.length} task(s) completed. Configure ANTHROPIC_API_KEY for AI-generated content.`,
-          seoPerformance: `SEO performance summary for ${month}/${year}. Configure ANTHROPIC_API_KEY for AI-generated content.`,
-        };
-      }
-
-      const existing = await prisma.monthlyReport.findUnique({
-        where: {
-          clientId_month_year: { clientId, month, year },
-        },
-      });
-      if (existing) {
-        const updated = await prisma.monthlyReport.update({
-          where: { id: existing.id },
-          data: { aiContent, status: 'DRAFT' },
-        });
-        return reply.status(201).send(updated);
-      }
-
-      const report = await prisma.monthlyReport.create({
-        data: {
-          clientId,
-          month,
-          year,
-          status: 'DRAFT',
-          aiContent,
-        },
-      });
       return reply.status(201).send(report);
     }
   );

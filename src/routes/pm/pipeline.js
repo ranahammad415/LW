@@ -152,6 +152,48 @@ export async function pmPipelineRoutes(app) {
     }
   );
 
+  // POST /api/pm/pipeline/:projectId/refresh — self-heal one project's rows by
+  // re-pulling from WP (refreshes expired preview URLs), then return the fresh
+  // reviews for that project.
+  app.post(
+    '/pipeline/:projectId/refresh',
+    { onRequest: [app.verifyJwt, requirePmOrOwner] },
+    async (request, reply) => {
+      try {
+        const { projectId } = request.params;
+
+        if (request.user.role === 'PM') {
+          const project = await prisma.project.findUnique({
+            where: { id: projectId },
+            select: { leadPmId: true },
+          });
+          if (!project) return reply.status(404).send({ message: 'Project not found' });
+          if (project.leadPmId !== request.user.id) {
+            return reply.status(403).send({ message: 'Access denied' });
+          }
+        }
+
+        await syncPipelineFromWp({ projectId });
+
+        const where = { projectId };
+        if (request.user.role === 'PM') where.project = { leadPmId: request.user.id };
+
+        const reviews = await prisma.wpContentReview.findMany({
+          where,
+          include: {
+            events: { orderBy: { createdAt: 'desc' } },
+            project: { select: { name: true, client: { select: { agencyName: true } } } },
+          },
+          orderBy: { updatedAt: 'desc' },
+        });
+        return reply.send(reviews.map(formatReview));
+      } catch (err) {
+        request.log.error(err);
+        return reply.status(500).send({ message: 'Failed to refresh pipeline' });
+      }
+    }
+  );
+
   // POST /api/pm/pipeline/:projectId/:wpPipelineId/review
   app.post(
     '/pipeline/:projectId/:wpPipelineId/review',

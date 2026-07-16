@@ -67,6 +67,31 @@ export async function fetchSearchAnalytics(siteUrl, startDate, endDate) {
 }
 
 /**
+ * Fetch daily search analytics (time-series) from GSC.
+ * @param {string} siteUrl - The GSC property URL
+ * @param {string} startDate - YYYY-MM-DD
+ * @param {string} endDate - YYYY-MM-DD
+ * @returns {Array<{keys: string[], clicks, impressions, ctr, position}>} one row per date
+ */
+export async function fetchDailySearchAnalytics(siteUrl, startDate, endDate) {
+  if (!searchConsole) {
+    throw new Error('GSC client not initialized');
+  }
+
+  const res = await searchConsole.searchanalytics.query({
+    siteUrl,
+    requestBody: {
+      startDate,
+      endDate,
+      dimensions: ['date'],
+      rowLimit: 1000,
+    },
+  });
+
+  return res.data.rows ?? [];
+}
+
+/**
  * Verify that the service account has access to a given GSC property.
  * @param {string} siteUrl - The GSC property URL
  * @returns {boolean}

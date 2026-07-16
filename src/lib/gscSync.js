@@ -4,14 +4,57 @@
  * ClientMetricSnapshot records for the associated client.
  */
 import { prisma } from './prisma.js';
-import { isGscEnabled, fetchSearchAnalytics } from './gscClient.js';
+import { isGscEnabled, fetchSearchAnalytics, fetchDailySearchAnalytics } from './gscClient.js';
 import { calculateMetrics } from './gscMetrics.js';
+
+// How many days of daily time-series to keep fresh on each sync.
+const DAILY_SERIES_DAYS = 30;
 
 /**
  * Format a Date as YYYY-MM-DD.
  */
 function fmt(d) {
   return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Fetch the last N days of daily GSC metrics and upsert them as a time-series.
+ */
+async function syncDailySeries(project) {
+  const now = new Date();
+  const end = new Date(now);
+  end.setDate(end.getDate() - 2); // GSC ~2-day delay
+  const start = new Date(end);
+  start.setDate(start.getDate() - (DAILY_SERIES_DAYS - 1));
+
+  const rows = await fetchDailySearchAnalytics(project.gscSiteUrl, fmt(start), fmt(end));
+
+  let upserts = 0;
+  for (const row of rows) {
+    const dateStr = row.keys?.[0];
+    if (!dateStr) continue;
+    const date = new Date(`${dateStr}T00:00:00.000Z`);
+    if (Number.isNaN(date.getTime())) continue;
+    await prisma.gscDailyMetric.upsert({
+      where: { projectId_date: { projectId: project.id, date } },
+      create: {
+        projectId: project.id,
+        date,
+        clicks: Math.round(row.clicks || 0),
+        impressions: Math.round(row.impressions || 0),
+        ctr: row.ctr || 0,
+        position: row.position || 0,
+      },
+      update: {
+        clicks: Math.round(row.clicks || 0),
+        impressions: Math.round(row.impressions || 0),
+        ctr: row.ctr || 0,
+        position: row.position || 0,
+      },
+    });
+    upserts++;
+  }
+  return upserts;
 }
 
 /**
@@ -61,13 +104,22 @@ export async function syncProject(project) {
       })),
     });
 
+    // Persist daily time-series (best-effort — don't fail the KPI sync on it)
+    let dailyPoints = 0;
+    try {
+      dailyPoints = await syncDailySeries(project);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`[gscSync] Daily series sync failed for ${project.id}: ${err.message}`);
+    }
+
     // Update last synced timestamp
     await prisma.project.update({
       where: { id: project.id },
       data: { gscLastSyncedAt: new Date() },
     });
 
-    return { projectId: project.id, status: 'ok', metricsCount: metrics.length };
+    return { projectId: project.id, status: 'ok', metricsCount: metrics.length, dailyPoints };
   } catch (err) {
     return { projectId: project.id, status: 'error', error: err.message };
   }

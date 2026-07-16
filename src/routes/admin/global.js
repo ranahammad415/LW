@@ -2,6 +2,13 @@ import { prisma } from '../../lib/prisma.js';
 import { createMeetingBodySchema } from '../../schemas/admin.js';
 import { notify } from '../../lib/notificationService.js';
 import { extractMentionedUserIds } from '../../lib/mentionParser.js';
+import { resolveCycle } from '../../lib/workCycle.js';
+
+async function buildCycleWhere(query = {}) {
+  if (query.cycle === 'all') return {};
+  const cycle = await resolveCycle({ cycleId: query.cycle, month: query.month, year: query.year });
+  return cycle ? { workCycleId: cycle.id } : {};
+}
 
 const ACTIVE_TASK_STATUSES = ['IN_PROGRESS', 'TO_DO', 'NEEDS_REVIEW'];
 const TEAM_ROLES = ['PM', 'TEAM_MEMBER', 'CONTRACTOR'];
@@ -60,8 +67,11 @@ export async function adminGlobalRoutes(app) {
       const limit = Math.min(100, Math.max(1, parseInt(request.query.limit) || 50));
       const skip = (page - 1) * limit;
 
+      const cycleWhere = await buildCycleWhere(request.query);
+
       const [tasks, total] = await Promise.all([
         prisma.task.findMany({
+          where: cycleWhere,
           orderBy: [{ dueDate: 'asc' }, { createdAt: 'desc' }],
           include: {
             project: {
@@ -74,7 +84,7 @@ export async function adminGlobalRoutes(app) {
           skip,
           take: limit,
         }),
-        prisma.task.count(),
+        prisma.task.count({ where: cycleWhere }),
       ]);
 
       return reply.send({

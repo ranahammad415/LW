@@ -1,4 +1,6 @@
 import { prisma } from '../../lib/prisma.js';
+import { resolveCycle } from '../../lib/workCycle.js';
+import { buildClientAnalytics } from '../../lib/analytics/freezeSnapshot.js';
 
 const MOCK_LOOKER_EMBEDS = [
   { id: 'mock-1', label: 'SEO Dashboard', url: 'https://lookerstudio.google.com/embed/reporting/placeholder', sortOrder: 0 },
@@ -97,6 +99,53 @@ export async function clientAnalyticsRoutes(app) {
           sortOrder: e.sortOrder,
         }))
       );
+    }
+  );
+
+  // Native, cycle-aware analytics (replaces Looker embeds). Returns chart-ready
+  // series from our own data (GSC time-series, tracked-keyword rankings, AI
+  // visibility). Current session = live; past sessions = frozen snapshot.
+  app.get(
+    '/analytics/native',
+    { onRequest: [app.verifyJwt, app.requireClient] },
+    async (request, reply) => {
+      const clientIds = request.clientAccountIds;
+      if (!clientIds?.length) {
+        return reply.send({ cycle: null, data: null, source: 'none' });
+      }
+      // Primary client account drives the charts (most clients have one).
+      const clientId = clientIds[0];
+
+      const { cycle: cycleId, month, year } = request.query ?? {};
+      const cycle = await resolveCycle({ cycleId, month, year });
+      if (!cycle) {
+        return reply.status(404).send({ message: 'Work cycle not found' });
+      }
+
+      const cycleMeta = {
+        id: cycle.id,
+        month: cycle.month,
+        year: cycle.year,
+        label: cycle.label,
+        status: cycle.status,
+      };
+
+      // Past (closed) cycle → serve the frozen snapshot if one exists.
+      if (cycle.status === 'CLOSED') {
+        const snapshot = await prisma.workCycleAnalyticsSnapshot.findUnique({
+          where: { workCycleId_clientId: { workCycleId: cycle.id, clientId } },
+        });
+        if (snapshot) {
+          return reply.send({ cycle: cycleMeta, data: snapshot.data, source: 'frozen' });
+        }
+        // No snapshot was frozen — compute historical figures on the fly.
+        const data = await buildClientAnalytics(clientId, cycle);
+        return reply.send({ cycle: cycleMeta, data, source: 'computed' });
+      }
+
+      // Current (open) cycle → live figures.
+      const data = await buildClientAnalytics(clientId, cycle);
+      return reply.send({ cycle: cycleMeta, data, source: 'live' });
     }
   );
 }

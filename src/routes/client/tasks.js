@@ -1,5 +1,12 @@
 import { prisma } from '../../lib/prisma.js';
 import { notify } from '../../lib/notificationService.js';
+import { resolveCycle } from '../../lib/workCycle.js';
+
+async function buildCycleWhere(query = {}) {
+  if (query.cycle === 'all') return {};
+  const cycle = await resolveCycle({ cycleId: query.cycle, month: query.month, year: query.year });
+  return cycle ? { workCycleId: cycle.id } : {};
+}
 
 export async function clientTasksRoutes(app) {
   app.get(
@@ -189,11 +196,14 @@ export async function clientTasksRoutes(app) {
       const userId = request.user.id;
       const clientIds = request.clientAccountIds;
 
+      const cycleWhere = await buildCycleWhere(request.query);
+
       const tasks = await prisma.task.findMany({
         where: {
           project: { clientId: { in: clientIds } },
           clientVisible: true,
           parentTaskId: null,
+          ...cycleWhere,
         },
         orderBy: { dueDate: 'asc' },
         include: {
@@ -215,6 +225,7 @@ export async function clientTasksRoutes(app) {
           taskType: t.taskType,
           status: t.status,
           dueDate: t.dueDate?.toISOString() ?? null,
+          updatedAt: t.updatedAt?.toISOString() ?? null,
           requiresClientInput: t.requiresClientInput,
           clientRequestNote: t.clientRequestNote,
           clientProvidedInput: t.clientProvidedInput,

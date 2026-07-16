@@ -85,6 +85,18 @@ export async function runSinglePrompt(promptLogId) {
     },
   });
 
+  // 3b. Mirror the citation result onto the parent PromptLog so client-facing
+  //     summaries and monthly reports (which read PromptLog.cited) reflect the
+  //     latest automated sweep instead of showing stale/empty data.
+  try {
+    await prisma.promptLog.update({
+      where: { id: promptLogId },
+      data: { cited: wasCited },
+    });
+  } catch (err) {
+    console.error(`[AeoRunner] Failed to update PromptLog.cited for ${promptLogId}:`, err.message);
+  }
+
   // 4. Extract competitors from the response & save on the parent log
   let competitors = [];
   try {

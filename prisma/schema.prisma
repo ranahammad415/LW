@@ -79,6 +79,7 @@ model User {
   pmUpdatesAuthored           ClientPMUpdate[]         @relation("PMUpdateAuthor")
   htmlReportsUploaded         ProjectHtmlReport[]      @relation("HtmlReportUploader")
   passwordResetTokens         PasswordResetToken[]
+  openedWorkCycles            WorkCycle[]              @relation("WorkCycleOpener")
 
   @@map("user")
 }
@@ -262,6 +263,7 @@ model ClientAccount {
   pmUpdates            ClientPMUpdate[]
   activityLogs         ClientActivityLog[]
   analyticsEmails      ClientAnalyticsEmail[]
+  workCycleSnapshots   WorkCycleAnalyticsSnapshot[]
 
   @@map("clientaccount")
 }
@@ -437,6 +439,7 @@ model Project {
   contractRecords     ContractRecord[]
   onboardingChecklist OnboardingChecklist? @relation("ProjectOnboardingChecklist")
   htmlReports         ProjectHtmlReport[]
+  gscDailyMetrics     GscDailyMetric[]
 
   @@map("project")
 }
@@ -552,9 +555,11 @@ model Task {
 
   parentTaskId     String?
   wpAccessPresetId String?
+  workCycleId      String?
   parentTask       Task?           @relation("SubTasks", fields: [parentTaskId], references: [id], onDelete: SetNull)
   subTasks         Task[]          @relation("SubTasks")
   wpAccessPreset   WpAccessPreset? @relation(fields: [wpAccessPresetId], references: [id], onDelete: SetNull)
+  workCycle        WorkCycle?      @relation(fields: [workCycleId], references: [id], onDelete: SetNull)
 
   milestone String? @db.VarChar(100)
 
@@ -575,6 +580,7 @@ model Task {
   wpPages             WpPage[]
   clientInputRequests ClientInputRequest[]
 
+  @@index([workCycleId])
   @@map("task")
 }
 
@@ -675,18 +681,66 @@ enum ReportStatus {
 }
 
 model MonthlyReport {
-  id        String       @id @default(uuid())
-  clientId  String
-  month     Int
-  year      Int
-  status    ReportStatus @default(DRAFT)
-  aiContent Json?
-  createdAt DateTime     @default(now())
+  id          String       @id @default(uuid())
+  clientId    String
+  month       Int
+  year        Int
+  status      ReportStatus @default(DRAFT)
+  aiContent   Json?
+  workCycleId String?
+  createdAt   DateTime     @default(now())
 
-  client ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  client    ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  workCycle WorkCycle?    @relation(fields: [workCycleId], references: [id], onDelete: SetNull)
 
   @@unique([clientId, month, year])
+  @@index([workCycleId])
   @@map("monthlyreport")
+}
+
+// ── Monthly work session (agency-wide cycle) ──────────────────────────────
+// A single OPEN row is the "current month" every portal focuses on. Opening the
+// next cycle closes the current one, carries incomplete tasks forward, and
+// triggers per-client report drafts + frozen analytics snapshots.
+enum WorkCycleStatus {
+  OPEN
+  CLOSED
+}
+
+model WorkCycle {
+  id         String          @id @default(uuid())
+  month      Int
+  year       Int
+  status     WorkCycleStatus @default(OPEN)
+  label      String?         @db.VarChar(100)
+  openedAt   DateTime        @default(now())
+  closedAt   DateTime?
+  openedById String?
+
+  openedBy  User?                        @relation("WorkCycleOpener", fields: [openedById], references: [id])
+  tasks     Task[]
+  reports   MonthlyReport[]
+  snapshots WorkCycleAnalyticsSnapshot[]
+
+  @@unique([month, year])
+  @@index([status])
+  @@map("workcycle")
+}
+
+// Frozen analytics figures for a client at the moment a cycle is closed, so that
+// browsing a past month shows the numbers as they were then.
+model WorkCycleAnalyticsSnapshot {
+  id          String   @id @default(uuid())
+  workCycleId String
+  clientId    String
+  data        Json
+  createdAt   DateTime @default(now())
+
+  workCycle WorkCycle     @relation(fields: [workCycleId], references: [id], onDelete: Cascade)
+  client    ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@unique([workCycleId, clientId])
+  @@map("workcycleanalyticssnapshot")
 }
 
 model ClientAsset {
@@ -963,6 +1017,24 @@ model ClientMetricSnapshot {
 
   @@index([clientId, metricType, createdAt])
   @@map("clientmetricsnapshot")
+}
+
+// Daily Search Console time-series for native traffic/ranking charts.
+model GscDailyMetric {
+  id          String   @id @default(uuid())
+  projectId   String
+  date        DateTime @db.Date
+  clicks      Int      @default(0)
+  impressions Int      @default(0)
+  ctr         Float    @default(0)
+  position    Float    @default(0)
+  createdAt   DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, date])
+  @@index([projectId, date])
+  @@map("gscdailymetric")
 }
 
 model ClientROIConfig {

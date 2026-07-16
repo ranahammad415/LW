@@ -1,6 +1,7 @@
 import { prisma } from '../prisma.js';
 import { findProjectByMatch } from './resolveProject.js';
 import { resolveTeamRoster, resolveAssignee } from './resolveTeam.js';
+import { ensureCurrentCycle } from '../workCycle.js';
 import {
   TASKTYPE_TO_PRESET,
   VALID_TASK_TYPES,
@@ -64,6 +65,17 @@ export async function importAgencyData(data, options = {}) {
   const { dryRun = false, skipProjects = [] } = options;
   const importMode = data?.meta?.importMode || 'plan_with_progress';
 
+  // Newly imported tasks join the current monthly session. In dry-run we only
+  // read the current cycle (never bootstrap one).
+  let workCycleId = null;
+  if (!dryRun) {
+    const cycle = await ensureCurrentCycle();
+    workCycleId = cycle.id;
+  } else {
+    const cycle = await prisma.workCycle.findFirst({ where: { status: 'OPEN' } });
+    workCycleId = cycle?.id ?? null;
+  }
+
   const presets = await prisma.wpAccessPreset.findMany({ select: { id: true, name: true } });
   const presetIdByName = Object.fromEntries(presets.map((p) => [p.name, p.id]));
   const resolvePresetId = (taskType) => {
@@ -118,12 +130,52 @@ export async function importAgencyData(data, options = {}) {
       select: { id: true, title: true, parentTaskId: true },
     });
     const taskTree = existingTasks;
-    const existingMilestoneTitles = new Set(
-      existingTasks.filter((t) => !t.parentTaskId).map((t) => t.title),
+
+    // Lookup structures for incremental (add-missing) imports.
+    const mainByTitle = new Map(
+      existingTasks.filter((t) => !t.parentTaskId).map((t) => [t.title, t]),
     );
+    const childrenByParent = new Map();
+    for (const t of existingTasks) {
+      if (!t.parentTaskId) continue;
+      if (!childrenByParent.has(t.parentTaskId)) childrenByParent.set(t.parentTaskId, []);
+      childrenByParent.get(t.parentTaskId).push(t);
+    }
 
     if (importMode === 'sync_progress') {
       buildRefMapFromExisting(projEntry, existingTasks, refToTaskId, taskTree);
+    }
+
+    // Create a single step task under an existing/just-created sub-task.
+    async function createStep(subTaskId, step, taskType, assignees, milestone, clientVisible) {
+      const stepAssignees = step.assigneeKey
+        ? resolveAssigneeKeys({ assigneeKey: step.assigneeKey }, team, assignees[0])
+        : assignees;
+      const stepStatus = statusFromProgress(step.progress, importMode);
+
+      let stepTask;
+      if (!dryRun) {
+        stepTask = await prisma.task.create({
+          data: {
+            projectId: project.id,
+            parentTaskId: subTaskId,
+            title: step.title,
+            taskType,
+            priority: 'MEDIUM',
+            status: stepStatus,
+            workCycleId,
+            milestone: milestone !== '(Unspecified)' ? milestone : null,
+            clientVisible,
+            createdById,
+            wpAccessPresetId: resolvePresetId(taskType),
+            assignees: { connect: stepAssignees.map((u) => ({ id: u.id })) },
+          },
+        });
+      } else {
+        stepTask = { id: `dry-step-${step.ref}` };
+      }
+      refToTaskId.set(step.ref, stepTask.id);
+      projectResult.steps++;
     }
 
     if (importMode !== 'sync_progress') {
@@ -131,60 +183,72 @@ export async function importAgencyData(data, options = {}) {
         const milestone = group.milestone || '(Unspecified)';
         const groupRef = group.ref || slugRef('grp', milestone);
         const tasks = group.tasks || [];
+        if (!tasks.length) continue;
 
-        if (existingMilestoneTitles.has(milestone)) {
-          projectResult.skipped++;
-          buildRefMapFromExisting(
-            { taskGroups: [group] },
-            existingTasks,
-            refToTaskId,
-            taskTree,
-          );
-          continue;
-        }
+        const mainTaskType = VALID_TASK_TYPES.has(tasks[0].taskType) ? tasks[0].taskType : 'reporting';
 
-        const firstSub = tasks[0];
-        if (!firstSub) continue;
+        // Reuse an existing milestone (main task) instead of skipping the whole
+        // group — this is what lets re-imports pick up newly added sheet rows.
+        let mainTask = mainByTitle.get(milestone) || null;
+        if (!mainTask) {
+          const firstAssignees = resolveAssigneeKeys(tasks[0], team, project.leadPm || fallbackPm);
+          if (!firstAssignees.length) continue;
+          const mainPriority = VALID_PRIORITIES.has(tasks[0].priority) ? tasks[0].priority : 'HIGH';
 
-        const firstAssignees = resolveAssigneeKeys(
-          firstSub,
-          team,
-          project.leadPm || fallbackPm,
-        );
-        if (!firstAssignees.length) continue;
-
-        const mainTaskType = VALID_TASK_TYPES.has(firstSub.taskType) ? firstSub.taskType : 'reporting';
-        const mainPriority = VALID_PRIORITIES.has(firstSub.priority) ? firstSub.priority : 'HIGH';
-
-        let mainTask;
-        if (!dryRun) {
-          mainTask = await prisma.task.create({
-            data: {
-              projectId: project.id,
-              title: milestone,
-              taskType: mainTaskType,
-              priority: mainPriority,
-              status: 'TO_DO',
-              description: buildMainDescription(tasks),
-              clientVisible: true,
-              createdById,
-              wpAccessPresetId: resolvePresetId(mainTaskType),
-              assignees: { connect: firstAssignees.map((u) => ({ id: u.id })) },
-            },
-          });
-        } else {
-          mainTask = { id: `dry-main-${groupRef}` };
+          if (!dryRun) {
+            mainTask = await prisma.task.create({
+              data: {
+                projectId: project.id,
+                title: milestone,
+                taskType: mainTaskType,
+                priority: mainPriority,
+                status: 'TO_DO',
+                workCycleId,
+                description: buildMainDescription(tasks),
+                clientVisible: true,
+                createdById,
+                wpAccessPresetId: resolvePresetId(mainTaskType),
+                assignees: { connect: firstAssignees.map((u) => ({ id: u.id })) },
+              },
+            });
+          } else {
+            mainTask = { id: `dry-main-${groupRef}` };
+          }
+          mainByTitle.set(milestone, mainTask);
+          projectResult.mains++;
         }
 
         refToTaskId.set(groupRef, mainTask.id);
-        projectResult.mains++;
+
+        const existingSubs = childrenByParent.get(mainTask.id) || [];
+        const subByTitle = new Map(existingSubs.map((s) => [s.title, s]));
 
         for (const task of tasks) {
           const taskRef = task.ref || slugRef('task', task.title);
           const assignees = resolveAssigneeKeys(task, team, project.leadPm || fallbackPm);
+          const clientVisible = task.clientVisible !== false;
+          const taskType = VALID_TASK_TYPES.has(task.taskType) ? task.taskType : mainTaskType;
+          const normSteps = (task.steps || []).map(normalizeStep).filter(Boolean);
+
+          const existingSub = subByTitle.get(task.title);
+          if (existingSub) {
+            // Sub-task already imported — only add any newly added steps.
+            refToTaskId.set(taskRef, existingSub.id);
+            const existingSteps = childrenByParent.get(existingSub.id) || [];
+            const stepTitles = new Set(existingSteps.map((s) => s.title));
+            for (const step of normSteps) {
+              if (stepTitles.has(step.title)) {
+                const row = existingSteps.find((s) => s.title === step.title);
+                if (row) refToTaskId.set(step.ref, row.id);
+                continue;
+              }
+              if (assignees.length) await createStep(existingSub.id, step, taskType, assignees, milestone, clientVisible);
+            }
+            continue;
+          }
+
           if (!assignees.length) continue;
 
-          const taskType = VALID_TASK_TYPES.has(task.taskType) ? task.taskType : mainTaskType;
           const priority = VALID_PRIORITIES.has(task.priority) ? task.priority : 'MEDIUM';
           const subStatus = statusFromProgress(task.progress, importMode);
 
@@ -198,10 +262,11 @@ export async function importAgencyData(data, options = {}) {
                 taskType,
                 priority,
                 status: subStatus,
+                workCycleId,
                 milestone: milestone !== '(Unspecified)' ? milestone : null,
                 description: buildDescription(task),
                 dueDate: parseDate(task.dueDate),
-                clientVisible: task.clientVisible !== false,
+                clientVisible,
                 createdById,
                 wpAccessPresetId: resolvePresetId(taskType),
                 requiresClientInput: Boolean(task.clientInput?.required),
@@ -214,38 +279,11 @@ export async function importAgencyData(data, options = {}) {
           }
 
           refToTaskId.set(taskRef, subTask.id);
+          subByTitle.set(task.title, subTask);
           projectResult.subs++;
 
-          const steps = (task.steps || []).map(normalizeStep).filter(Boolean);
-          for (const step of steps) {
-            const stepAssignees = step.assigneeKey
-              ? resolveAssigneeKeys({ assigneeKey: step.assigneeKey }, team, assignees[0])
-              : assignees;
-            const stepStatus = statusFromProgress(step.progress, importMode);
-
-            let stepTask;
-            if (!dryRun) {
-              stepTask = await prisma.task.create({
-                data: {
-                  projectId: project.id,
-                  parentTaskId: subTask.id,
-                  title: step.title,
-                  taskType,
-                  priority: 'MEDIUM',
-                  status: stepStatus,
-                  milestone: milestone !== '(Unspecified)' ? milestone : null,
-                  clientVisible: task.clientVisible !== false,
-                  createdById,
-                  wpAccessPresetId: resolvePresetId(taskType),
-                  assignees: { connect: stepAssignees.map((u) => ({ id: u.id })) },
-                },
-              });
-            } else {
-              stepTask = { id: `dry-step-${step.ref}` };
-            }
-
-            refToTaskId.set(step.ref, stepTask.id);
-            projectResult.steps++;
+          for (const step of normSteps) {
+            await createStep(subTask.id, step, taskType, assignees, milestone, clientVisible);
           }
 
           if (!dryRun) {
@@ -383,14 +421,21 @@ async function applyProjectUpdates(updates, refToTaskId, team, fallbackUserId, d
       const newStatus = statusFromCompletion(tu.completion);
 
       if (!dryRun) {
-        await prisma.taskComment.create({
-          data: {
-            taskId,
-            userId: author.id,
-            content: tu.update,
-            createdAt: parseDate(tu.postedAt || period.reportedAt) || new Date(),
-          },
+        // Idempotent: don't re-post an identical comment on repeated syncs.
+        const duplicate = await prisma.taskComment.findFirst({
+          where: { taskId, content: tu.update },
+          select: { id: true },
         });
+        if (!duplicate) {
+          await prisma.taskComment.create({
+            data: {
+              taskId,
+              userId: author.id,
+              content: tu.update,
+              createdAt: parseDate(tu.postedAt || period.reportedAt) || new Date(),
+            },
+          });
+        }
 
         if (newStatus && VALID_STATUSES.has(newStatus)) {
           await prisma.task.update({

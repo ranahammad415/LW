@@ -9,6 +9,19 @@ import { randomUUID } from 'crypto';
 import { notify } from '../lib/notificationService.js';
 import { extractMentionedUserIds } from '../lib/mentionParser.js';
 import { resolveUploadBaseUrl, validateUpload, sanitizeUploadFilename, MAX_UPLOAD_SIZE_BYTES } from '../lib/uploadUrl.js';
+import { resolveCycle, ensureCurrentCycle } from '../lib/workCycle.js';
+
+/**
+ * Resolve a `workCycleId` where-clause from request query params.
+ * - cycle=all → no cycle filter (whole history)
+ * - cycle=<id> or month+year → that specific session
+ * - nothing → the current (OPEN) session
+ */
+async function buildCycleWhere(query = {}) {
+  if (query.cycle === 'all') return {};
+  const cycle = await resolveCycle({ cycleId: query.cycle, month: query.month, year: query.year });
+  return cycle ? { workCycleId: cycle.id } : {};
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -75,8 +88,10 @@ export async function taskRoutes(app) {
         return reply.status(403).send({ message: 'Forbidden' });
       }
 
+      const cycleWhere = await buildCycleWhere(request.query);
+
       const tasks = await prisma.task.findMany({
-        where: { ...where, parentTaskId: null },
+        where: { ...where, ...cycleWhere, parentTaskId: null },
         orderBy: [{ status: 'asc' }, { dueDate: 'asc' }],
         include: {
           project: {
@@ -240,6 +255,20 @@ export async function taskRoutes(app) {
         ? assigneeIds
         : (assignedTo ? [assignedTo] : []);
 
+      // Sub-tasks inherit their parent's session; top-level tasks join the current one.
+      let workCycleId = null;
+      if (parentTaskId) {
+        const parent = await prisma.task.findUnique({
+          where: { id: parentTaskId },
+          select: { workCycleId: true },
+        });
+        workCycleId = parent?.workCycleId ?? null;
+      }
+      if (!workCycleId) {
+        const currentCycle = await ensureCurrentCycle({ userId: user.id });
+        workCycleId = currentCycle.id;
+      }
+
       const task = await prisma.task.create({
         data: {
           projectId,
@@ -251,6 +280,7 @@ export async function taskRoutes(app) {
           createdById: user.id,
           status: 'TO_DO',
           parentTaskId: parentTaskId || null,
+          workCycleId,
           milestone: milestone ? String(milestone).slice(0, 100) : null,
           assignees: assigneeIdList.length
             ? { connect: assigneeIdList.map((id) => ({ id })) }

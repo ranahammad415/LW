@@ -14,12 +14,18 @@ function wpHeaders(apiKey) {
 }
 
 /**
- * Sync pipeline data from all WP sites into local WpContentReview + WpContentReviewEvent tables.
+ * Sync pipeline data from WP sites into local WpContentReview + WpContentReviewEvent tables.
+ * Pass `{ projectId }` to self-heal / refresh a single project's rows (e.g. to
+ * pull fresh preview URLs after one expires); omit it for the full sweep.
  * Returns { synced: number, errors: number }
  */
-export async function syncPipelineFromWp() {
+export async function syncPipelineFromWp({ projectId } = {}) {
   const projects = await prisma.project.findMany({
-    where: { wpUrl: { not: null }, wpApiKey: { not: null } },
+    where: {
+      wpUrl: { not: null },
+      wpApiKey: { not: null },
+      ...(projectId ? { id: projectId } : {}),
+    },
     select: { id: true, name: true, wpUrl: true, wpApiKey: true },
   });
 
@@ -156,9 +162,12 @@ let syncIntervalId = null;
  * @param {object} logger - Fastify logger instance
  */
 export function startPipelineSyncInterval(logger) {
-  const ms = Number(process.env.PIPELINE_SYNC_INTERVAL_MS) || 0;
+  // Default the safety-net polling ON (5 min) so missed webhooks self-correct.
+  // Set PIPELINE_SYNC_INTERVAL_MS=0 to explicitly disable it.
+  const raw = process.env.PIPELINE_SYNC_INTERVAL_MS;
+  const ms = raw === undefined || raw === '' ? 5 * 60 * 1000 : Number(raw) || 0;
   if (ms <= 0) {
-    logger.info('Pipeline sync interval disabled (PIPELINE_SYNC_INTERVAL_MS=0 or unset)');
+    logger.info('Pipeline sync interval disabled (PIPELINE_SYNC_INTERVAL_MS=0)');
     return;
   }
 

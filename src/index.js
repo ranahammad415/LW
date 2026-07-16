@@ -27,6 +27,8 @@ import { adminActivityReportRoutes } from './routes/admin/activity-reports.js';
 import { adminProjectHtmlReportRoutes } from './routes/admin/project-html-reports.js';
 import { adminGoogleExtractRoutes } from './routes/admin/googleExtract.js';
 import { adminAgencyImportRoutes } from './routes/admin/agencyImport.js';
+import { adminWorkCycleRoutes } from './routes/admin/workCycles.js';
+import { workCycleRoutes } from './routes/workCycles.js';
 import { projectRoutes } from './routes/projects.js';
 import { taskRoutes } from './routes/tasks.js';
 import { clientDashboardRoutes } from './routes/client/dashboard.js';
@@ -69,6 +71,7 @@ import { initGscClient } from './lib/gscClient.js';
 import { runGscSync } from './lib/gscSync.js';
 import { initSentry } from './lib/sentry.js';
 import { runWeeklyClientDigest } from './lib/weeklyDigest.js';
+import { runScheduledTaskSync } from './lib/dataImport/scheduledSync.js';
 
 // ── Startup secret validation (fail-fast) ─────────────────────────────────
 const REQUIRED_SECRETS = ['JWT_ACCESS_SECRET', 'JWT_REFRESH_SECRET', 'COOKIE_SECRET'];
@@ -169,6 +172,7 @@ app.register(adminActivityReportRoutes, { prefix: '/api/admin' });
 app.register(adminProjectHtmlReportRoutes, { prefix: '/api/admin' });
 app.register(adminGoogleExtractRoutes, { prefix: '/api/admin' });
 app.register(adminAgencyImportRoutes, { prefix: '/api/admin' });
+app.register(adminWorkCycleRoutes, { prefix: '/api/admin' });
 app.register(adminAiUsageRoutes, { prefix: '/api/admin' });
 app.register(projectRoutes, { prefix: '/api/projects' });
 app.register(taskRoutes, { prefix: '/api/tasks' });
@@ -196,11 +200,18 @@ app.register(pmDigestRoutes, { prefix: '/api/pm' });
 app.register(pmClientDashboardRoutes, { prefix: '/api/pm' });
 app.register(pmInputRequestRoutes, { prefix: '/api/pm' });
 app.register(modalityRoutes, { prefix: '/api' });
+app.register(workCycleRoutes, { prefix: '/api/work-cycles' });
 app.register(publicIssuesRoutes, { prefix: '/api/public' });
 app.register(wpWebhookRoutes, { prefix: '/api/webhooks' });
 app.register(realtimeRoutes, { prefix: '/api/realtime' });
 app.register(toolRoutes, { prefix: '/api/tool' });
-app.register(omniSearchRoutes, { prefix: '/api/omni-search' });
+// OmniSearch is a large, self-contained sub-app kept hidden by default to reduce
+// product surface. Enable explicitly with OMNISEARCH_ENABLED=true.
+const OMNISEARCH_ENABLED = String(process.env.OMNISEARCH_ENABLED || '').toLowerCase() === 'true';
+if (OMNISEARCH_ENABLED) {
+  app.register(omniSearchRoutes, { prefix: '/api/omni-search' });
+  app.log.info('OmniSearch routes enabled');
+}
 
 app.get('/health', async (req, reply) => {
   req.log.info('Health check hit');
@@ -248,6 +259,22 @@ try {
 
   // Pipeline sync — configurable interval from .env
   startPipelineSyncInterval(app.log);
+
+  // Scheduled sheet → OS task sync (keeps task status/comments fresh for the
+  // current monthly session). Opt-in via TASK_SYNC_ENABLED=true.
+  if (String(process.env.TASK_SYNC_ENABLED || '').toLowerCase() === 'true') {
+    const taskSyncCron = process.env.TASK_SYNC_CRON || '0 2 * * *';
+    cron.schedule(taskSyncCron, async () => {
+      app.log.info('Starting scheduled task sync from sheets...');
+      try {
+        const summary = await runScheduledTaskSync({ log: app.log });
+        app.log.info({ totals: summary.totals }, 'Scheduled task sync complete');
+      } catch (err) {
+        app.log.error({ err }, 'Scheduled task sync failed');
+      }
+    });
+    app.log.info({ taskSyncCron }, 'Scheduled task sync enabled');
+  }
 
   // GSC metrics sync — runs daily at 05:00 UTC
   cron.schedule('0 5 * * *', async () => {
