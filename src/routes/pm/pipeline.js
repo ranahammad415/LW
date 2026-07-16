@@ -1,6 +1,6 @@
 import { prisma } from '../../lib/prisma.js';
 import { syncPipelineFromWp } from '../../lib/pipelineSync.js';
-import { STATUS_LABELS, formatHistoryEvent } from '../../lib/pipelineFormat.js';
+import { STATUS_LABELS, formatHistoryEvent, reviewDisplayUpdatedAt, parseWpDate } from '../../lib/pipelineFormat.js';
 
 const PM_ROLES = ['PM', 'OWNER'];
 
@@ -20,6 +20,7 @@ function wpHeaders(apiKey) {
 }
 
 function formatReview(r) {
+  const activityAt = reviewDisplayUpdatedAt(r);
   return {
     id: r.id,
     projectId: r.projectId,
@@ -44,8 +45,14 @@ function formatReview(r) {
     clientComment: r.clientComment,
     clientReviewedAt: r.clientReviewedAt || null,
     revisionNumber: r.revisionNumber,
-    createdAt: r.createdAt?.toISOString() || null,
-    updatedAt: r.updatedAt?.toISOString() || null,
+    createdAt:
+      (r.wpCreatedAt instanceof Date
+        ? r.wpCreatedAt
+        : parseWpDate(r.wpCreatedAt)
+      )?.toISOString() ||
+      r.createdAt?.toISOString() ||
+      null,
+    updatedAt: activityAt?.toISOString() || null,
     history: (r.events || [])
       .filter((e) => e.eventType !== 'pipeline_resend_notification')
       .map((e) => formatHistoryEvent(e)),
@@ -93,7 +100,7 @@ export async function pmPipelineRoutes(app) {
               },
             },
           },
-          orderBy: { updatedAt: 'desc' },
+          orderBy: [{ wpUpdatedAt: 'desc' }, { updatedAt: 'desc' }],
         });
 
         return reply.send(reviews.map(formatReview));
@@ -126,7 +133,7 @@ export async function pmPipelineRoutes(app) {
               },
             },
           },
-          orderBy: { updatedAt: 'desc' },
+          orderBy: [{ wpUpdatedAt: 'desc' }, { updatedAt: 'desc' }],
         });
 
         return reply.send(reviews.map(formatReview));
@@ -184,7 +191,7 @@ export async function pmPipelineRoutes(app) {
             events: { orderBy: { createdAt: 'desc' } },
             project: { select: { name: true, client: { select: { agencyName: true } } } },
           },
-          orderBy: { updatedAt: 'desc' },
+          orderBy: [{ wpUpdatedAt: 'desc' }, { updatedAt: 'desc' }],
         });
         return reply.send(reviews.map(formatReview));
       } catch (err) {

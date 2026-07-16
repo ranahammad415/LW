@@ -978,6 +978,10 @@ model WpContentReview {
   aiSummary        String?   @db.Text
   isPublished      Boolean   @default(false)
   publishedAt      DateTime?
+  /// WordPress pipeline row createdAt (when the review was initiated/drafted).
+  wpCreatedAt      DateTime?
+  /// WordPress pipeline row updatedAt (last meaningful WP change — not OS sync).
+  wpUpdatedAt      DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @default(now()) @updatedAt
 

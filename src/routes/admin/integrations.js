@@ -15,12 +15,6 @@ import {
 const accessSecret = process.env.JWT_ACCESS_SECRET;
 const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
 
-function requireOwner(request, reply) {
-  if (request.user?.role !== 'OWNER') {
-    return reply.status(403).send({ message: 'Owner access required' });
-  }
-}
-
 function domainFromUrl(url) {
   if (!url) return '';
   return String(url)
@@ -32,6 +26,8 @@ function domainFromUrl(url) {
 }
 
 export async function adminIntegrationsRoutes(app) {
+  const requireOwner = app.requireOwner;
+
   // ── Agency Google connection status ────────────────────────────────────
   app.get(
     '/integrations/google/status',

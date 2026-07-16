@@ -2,7 +2,7 @@ import { prisma } from '../lib/prisma.js';
 import { maybeGenerateSummary, autoSyncSitemap } from '../lib/wpSync.js';
 import { notify, notifyTest } from '../lib/notificationService.js';
 import { publish as publishRealtime } from '../lib/realtimeBus.js';
-import { commentsForEventType } from '../lib/pipelineFormat.js';
+import { commentsForEventType, parseWpDate } from '../lib/pipelineFormat.js';
 
 export async function wpWebhookRoutes(app) {
   app.post('/wp-content-change', async (request, reply) => {
@@ -317,6 +317,8 @@ export async function wpWebhookRoutes(app) {
     const workerNote = body.workerNote ? String(body.workerNote).slice(0, 10000) : null;
     const pmReviewedAt = body.pmReviewedAt ? String(body.pmReviewedAt).slice(0, 50) : null;
     const clientReviewedAt = body.clientReviewedAt ? String(body.clientReviewedAt).slice(0, 50) : null;
+    const wpCreatedAt = parseWpDate(body.createdAt);
+    const wpUpdatedAt = parseWpDate(body.updatedAt) || new Date();
 
     // Determine published/cancelled flags
     const isPublishEvent = eventType === 'pipeline_published';
@@ -362,6 +364,8 @@ export async function wpWebhookRoutes(app) {
         clientReviewedAt,
         revisionNumber,
         lastEventType: eventType,
+        wpUpdatedAt,
+        ...(wpCreatedAt ? { wpCreatedAt } : {}),
         ...(isPublishEvent || isCancelEvent ? { isPublished: true, publishedAt: new Date() } : {}),
       },
       create: {
@@ -385,6 +389,8 @@ export async function wpWebhookRoutes(app) {
         clientReviewedAt,
         revisionNumber,
         lastEventType: eventType,
+        wpCreatedAt: wpCreatedAt || new Date(),
+        wpUpdatedAt,
         ...(isPublishEvent || isCancelEvent ? { isPublished: true, publishedAt: new Date() } : {}),
       },
     });

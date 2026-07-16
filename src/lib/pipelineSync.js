@@ -68,6 +68,8 @@ export async function syncPipelineFromWp({ projectId } = {}) {
           pmReviewedAt: p.pmReviewedAt ? String(p.pmReviewedAt).slice(0, 50) : null,
           clientReviewedAt: p.clientReviewedAt ? String(p.clientReviewedAt).slice(0, 50) : null,
           revisionNumber: Number(p.revisionNumber) || 1,
+          ...(parseWpDate(p.createdAt) ? { wpCreatedAt: parseWpDate(p.createdAt) } : {}),
+          ...(parseWpDate(p.updatedAt) ? { wpUpdatedAt: parseWpDate(p.updatedAt) } : {}),
         };
 
         try {

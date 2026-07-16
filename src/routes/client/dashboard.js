@@ -1,4 +1,6 @@
 import { prisma } from '../../lib/prisma.js';
+import { ensureCurrentCycle } from '../../lib/workCycle.js';
+import { reviewDisplayUpdatedAt } from '../../lib/pipelineFormat.js';
 
 export async function clientDashboardRoutes(app) {
   app.get(
@@ -39,6 +41,17 @@ export async function clientDashboardRoutes(app) {
                     label: { type: 'string', nullable: true },
                     change: { type: 'string', nullable: true },
                   },
+                },
+              },
+              currentCycle: {
+                type: 'object',
+                nullable: true,
+                properties: {
+                  id: { type: 'string' },
+                  month: { type: 'integer' },
+                  year: { type: 'integer' },
+                  label: { type: 'string', nullable: true },
+                  status: { type: 'string' },
                 },
               },
               activeTasks: {
@@ -111,11 +124,15 @@ export async function clientDashboardRoutes(app) {
         return reply.status(404).send({ message: 'No client account linked to this user' });
       }
 
-      // Fetch active tasks (main tasks only, exclude subtasks)
+      // Scope home stats / active tasks to the agency's OPEN work session
+      const currentCycle = await ensureCurrentCycle();
+
+      // Fetch active tasks (main tasks only, exclude subtasks) for current cycle
       const activeTasks = await prisma.task.findMany({
         where: {
           project: { clientId: { in: clientIds } },
           clientVisible: true,
+          workCycleId: currentCycle.id,
           status: { notIn: ['COMPLETED', 'CANCELLED'] },
           parentTaskId: null,
         },
@@ -132,7 +149,7 @@ export async function clientDashboardRoutes(app) {
           isPublished: false,
           status: { in: ['pending_client_review'] },
         },
-        orderBy: { updatedAt: 'desc' },
+        orderBy: [{ wpUpdatedAt: 'desc' }, { updatedAt: 'desc' }],
         include: {
           project: { select: { id: true, name: true } },
         },
@@ -194,6 +211,13 @@ export async function clientDashboardRoutes(app) {
           onboardingStep: primaryClient.onboardingStep,
         },
         setupProjects,
+        currentCycle: {
+          id: currentCycle.id,
+          month: currentCycle.month,
+          year: currentCycle.year,
+          label: currentCycle.label,
+          status: currentCycle.status,
+        },
         pmUpdate: latestPmUpdate
           ? {
               message: latestPmUpdate.message,
@@ -209,7 +233,7 @@ export async function clientDashboardRoutes(app) {
           projectId: r.project?.id || '',
           projectName: r.project?.name || '',
           clientPreviewUrl: r.clientPreviewUrl,
-          updatedAt: r.updatedAt?.toISOString() || null,
+          updatedAt: reviewDisplayUpdatedAt(r)?.toISOString() || null,
         })),
         activeTasks: activeTasks.map((t) => ({
           id: t.id,

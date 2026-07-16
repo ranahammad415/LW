@@ -324,7 +324,13 @@ export async function buildGa4View(clientIds, view, query) {
 
   const viewData =
     view === 'channels'
-      ? { channels: data.channels, series: data.series, kpis: data.kpis }
+      ? {
+          channels: data.channels,
+          devices: data.devices,
+          countries: data.countries,
+          series: data.series,
+          kpis: data.kpis,
+        }
       : view === 'content'
         ? { landingPages: data.landingPages, series: data.series, kpis: data.kpis }
         : view === 'conversions'

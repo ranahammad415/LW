@@ -3,7 +3,20 @@ import { notify } from '../../lib/notificationService.js';
 import {
   CLIENT_STATUS_LABELS,
   formatHistoryEvent,
+  reviewDisplayUpdatedAt,
+  parseWpDate,
 } from '../../lib/pipelineFormat.js';
+import { resolveCycle } from '../../lib/workCycle.js';
+
+async function buildCycleWhere(query = {}) {
+  if (query.cycle === 'all') return {};
+  const cycle = await resolveCycle({
+    cycleId: query.cycle,
+    month: query.month,
+    year: query.year,
+  });
+  return cycle ? { workCycleId: cycle.id } : {};
+}
 
 export async function clientProjectsRoutes(app) {
   app.get(
@@ -17,6 +30,8 @@ export async function clientProjectsRoutes(app) {
         return reply.status(404).send({ message: 'No client account linked to this user' });
       }
 
+      const cycleWhere = await buildCycleWhere(request.query || {});
+
       const projects = await prisma.project.findMany({
         where: { clientId: { in: clientIds } },
         include: {
@@ -27,7 +42,7 @@ export async function clientProjectsRoutes(app) {
             select: { id: true, name: true, avatarUrl: true },
           },
           tasks: {
-            where: { clientVisible: true },
+            where: { clientVisible: true, ...cycleWhere },
             select: { id: true, status: true },
           },
           trackedKeywords: {
@@ -851,7 +866,7 @@ export async function clientProjectsRoutes(app) {
           include: {
             events: { orderBy: { createdAt: 'desc' } },
           },
-          orderBy: { updatedAt: 'desc' },
+          orderBy: [{ wpUpdatedAt: 'desc' }, { updatedAt: 'desc' }],
         });
 
         const result = reviews.map((r) => ({
@@ -878,8 +893,14 @@ export async function clientProjectsRoutes(app) {
           clientComment: r.clientComment,
           clientReviewedAt: r.clientReviewedAt || null,
           revisionNumber: r.revisionNumber,
-          createdAt: r.createdAt?.toISOString() || null,
-          updatedAt: r.updatedAt?.toISOString() || null,
+          createdAt:
+            (r.wpCreatedAt instanceof Date
+              ? r.wpCreatedAt
+              : parseWpDate(r.wpCreatedAt)
+            )?.toISOString() ||
+            r.createdAt?.toISOString() ||
+            null,
+          updatedAt: reviewDisplayUpdatedAt(r)?.toISOString() || null,
           history: (r.events || [])
             .filter((e) => e.eventType !== 'pipeline_resend_notification')
             .map((e) => formatHistoryEvent(e, CLIENT_STATUS_LABELS)),
@@ -925,7 +946,7 @@ export async function clientProjectsRoutes(app) {
             events: { orderBy: { createdAt: 'desc' } },
             project: { select: { id: true, name: true } },
           },
-          orderBy: { updatedAt: 'desc' },
+          orderBy: [{ wpUpdatedAt: 'desc' }, { updatedAt: 'desc' }],
         });
 
         const result = reviews.map((r) => ({
@@ -952,8 +973,14 @@ export async function clientProjectsRoutes(app) {
           clientComment: r.clientComment,
           clientReviewedAt: r.clientReviewedAt || null,
           revisionNumber: r.revisionNumber,
-          createdAt: r.createdAt?.toISOString() || null,
-          updatedAt: r.updatedAt?.toISOString() || null,
+          createdAt:
+            (r.wpCreatedAt instanceof Date
+              ? r.wpCreatedAt
+              : parseWpDate(r.wpCreatedAt)
+            )?.toISOString() ||
+            r.createdAt?.toISOString() ||
+            null,
+          updatedAt: reviewDisplayUpdatedAt(r)?.toISOString() || null,
           history: (r.events || [])
             .filter((e) => e.eventType !== 'pipeline_resend_notification')
             .map((e) => formatHistoryEvent(e, CLIENT_STATUS_LABELS)),

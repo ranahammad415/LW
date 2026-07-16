@@ -152,6 +152,27 @@ export function parseWpDate(value) {
 }
 
 /**
+ * Best "Updated" / activity time for a content review row.
+ * Prefer WordPress / reviewer action times — never the OS pipeline-sync clock
+ * (Prisma `updatedAt`), which is identical across every row after a bulk sync.
+ */
+export function reviewDisplayUpdatedAt(r) {
+  const fromEvents = (r.events || [])
+    .map((e) => eventDisplayAt(e))
+    .filter(Boolean)
+    .sort((a, b) => b.getTime() - a.getTime())[0];
+
+  return (
+    parseWpDate(r.clientReviewedAt) ||
+    parseWpDate(r.pmReviewedAt) ||
+    (r.wpUpdatedAt instanceof Date ? r.wpUpdatedAt : parseWpDate(r.wpUpdatedAt)) ||
+    (r.wpCreatedAt instanceof Date ? r.wpCreatedAt : parseWpDate(r.wpCreatedAt)) ||
+    fromEvents ||
+    (r.createdAt instanceof Date ? r.createdAt : parseWpDate(r.createdAt))
+  );
+}
+
+/**
  * Best display timestamp for an event: prefer reviewer action time, then
  * stored createdAt.
  */
