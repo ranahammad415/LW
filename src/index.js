@@ -58,6 +58,7 @@ import { realtimeRoutes } from './routes/realtime.js';
 import { toolRoutes } from './routes/tool.js';
 import omniSearchRoutes from './routes/omniSearch/index.js';
 import { adminAiUsageRoutes } from './routes/admin/ai-usage.js';
+import { adminIntegrationsRoutes } from './routes/admin/integrations.js';
 import { pmInputRequestRoutes } from './routes/pm/inputRequests.js';
 import { modalityRoutes } from './routes/modalityRoutes.js';
 import { publicIssuesRoutes } from './routes/publicIssues.js';
@@ -69,6 +70,7 @@ import { prisma } from './lib/prisma.js';
 import { sendEmail, smtpConfigured } from './lib/mailer.js';
 import { initGscClient } from './lib/gscClient.js';
 import { runGscSync } from './lib/gscSync.js';
+import { runNativeAnalyticsSync } from './lib/analytics/runNativeSync.js';
 import { initSentry } from './lib/sentry.js';
 import { runWeeklyClientDigest } from './lib/weeklyDigest.js';
 import { runScheduledTaskSync } from './lib/dataImport/scheduledSync.js';
@@ -174,6 +176,7 @@ app.register(adminGoogleExtractRoutes, { prefix: '/api/admin' });
 app.register(adminAgencyImportRoutes, { prefix: '/api/admin' });
 app.register(adminWorkCycleRoutes, { prefix: '/api/admin' });
 app.register(adminAiUsageRoutes, { prefix: '/api/admin' });
+app.register(adminIntegrationsRoutes, { prefix: '/api/admin' });
 app.register(projectRoutes, { prefix: '/api/projects' });
 app.register(taskRoutes, { prefix: '/api/tasks' });
 app.register(clientDashboardRoutes, { prefix: '/api/client' });
@@ -284,6 +287,17 @@ try {
       app.log.info({ result }, 'Daily GSC metrics sync complete');
     } catch (err) {
       app.log.error({ err }, 'Daily GSC metrics sync failed');
+    }
+  });
+
+  // GA4 + GMB + DataForSEO sync — runs daily at 05:30 UTC
+  cron.schedule('30 5 * * *', async () => {
+    app.log.info('Starting native analytics sync (GA4/GMB/DataForSEO)...');
+    try {
+      const result = await runNativeAnalyticsSync(app.log);
+      app.log.info({ result }, 'Native analytics sync complete');
+    } catch (err) {
+      app.log.error({ err }, 'Native analytics sync failed');
     }
   });
 

@@ -87,6 +87,51 @@ export async function buildClientAnalytics(clientId, cycle) {
     platforms: [...new Set(platformRows.map((p) => p.platform).filter(Boolean))],
   };
 
+  // GA4 + GMB rollups for the cycle month
+  const ga4Rows = projectIds.length
+    ? await prisma.ga4DailyMetric.findMany({
+        where: { projectId: { in: projectIds }, date: { gte: start, lte: end } },
+      })
+    : [];
+  const ga4 = {
+    sessions: ga4Rows.reduce((s, r) => s + r.sessions, 0),
+    users: ga4Rows.reduce((s, r) => s + r.totalUsers, 0),
+    conversions: ga4Rows.reduce((s, r) => s + r.conversions, 0),
+    pageViews: ga4Rows.reduce((s, r) => s + r.pageViews, 0),
+    series: aggregateByDate(ga4Rows, ['sessions', 'totalUsers', 'conversions', 'pageViews']),
+  };
+
+  const gmbRows = projectIds.length
+    ? await prisma.gmbDailyMetric.findMany({
+        where: { projectId: { in: projectIds }, date: { gte: start, lte: end } },
+      })
+    : [];
+  const gmb = {
+    impressions: gmbRows.reduce((s, r) => s + r.impressions, 0),
+    directions: gmbRows.reduce((s, r) => s + r.directions, 0),
+    websiteClicks: gmbRows.reduce((s, r) => s + r.websiteClicks, 0),
+    calls: gmbRows.reduce((s, r) => s + r.calls, 0),
+    series: aggregateByDate(gmbRows, [
+      'impressions',
+      'impressionsSearch',
+      'impressionsMaps',
+      'websiteClicks',
+      'directions',
+      'calls',
+    ]),
+  };
+
+  const links = await prisma.project.findMany({
+    where: { clientId },
+    select: {
+      id: true,
+      gscSiteUrl: true,
+      ga4PropertyId: true,
+      gmbLocationId: true,
+      dataforseoDomain: true,
+    },
+  });
+
   return {
     frozenAt: new Date().toISOString(),
     cycle: { month: cycle.month, year: cycle.year },
@@ -95,7 +140,28 @@ export async function buildClientAnalytics(clientId, cycle) {
     metrics: Object.fromEntries(latestByType),
     rankings: rankingSummary,
     aiVisibility,
+    ga4,
+    gmb,
+    links: {
+      gsc: links.some((l) => !!l.gscSiteUrl),
+      ga4: links.some((l) => !!l.ga4PropertyId),
+      gmb: links.some((l) => !!l.gmbLocationId),
+      seo: links.some((l) => !!l.dataforseoDomain),
+    },
   };
+}
+
+function aggregateByDate(rows, fields) {
+  const map = new Map();
+  for (const r of rows) {
+    const key = r.date.toISOString().slice(0, 10);
+    const acc = map.get(key) || { date: key };
+    for (const f of fields) {
+      acc[f] = (acc[f] || 0) + (r[f] || 0);
+    }
+    map.set(key, acc);
+  }
+  return [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
 }
 
 /**
@@ -110,7 +176,7 @@ export async function freezeAnalyticsForCycle(cycle, opts = {}) {
   const log = opts.log;
   const clients = await prisma.clientAccount.findMany({
     where: { isActive: true },
-    select: { id: true, name: true },
+    select: { id: true, agencyName: true },
   });
 
   let created = 0;

@@ -4,7 +4,7 @@
  * ClientMetricSnapshot records for the associated client.
  */
 import { prisma } from './prisma.js';
-import { isGscEnabled, fetchSearchAnalytics, fetchDailySearchAnalytics } from './gscClient.js';
+import { isGscEnabled, isGscAvailable, fetchSearchAnalytics, fetchDailySearchAnalytics } from './gscClient.js';
 import { calculateMetrics } from './gscMetrics.js';
 
 // How many days of daily time-series to keep fresh on each sync.
@@ -40,6 +40,38 @@ async function syncDailySeries(project) {
       create: {
         projectId: project.id,
         date,
+        clicks: Math.round(row.clicks || 0),
+        impressions: Math.round(row.impressions || 0),
+        ctr: row.ctr || 0,
+        position: row.position || 0,
+      },
+      update: {
+        clicks: Math.round(row.clicks || 0),
+        impressions: Math.round(row.impressions || 0),
+        ctr: row.ctr || 0,
+        position: row.position || 0,
+      },
+    });
+    upserts++;
+  }
+  return upserts;
+}
+
+/**
+ * Store top queries for the sync period under the period end date.
+ */
+async function syncQuerySnapshot(project, rows, endDate) {
+  const date = new Date(`${fmt(endDate)}T00:00:00.000Z`);
+  let upserts = 0;
+  for (const row of (rows || []).slice(0, 500)) {
+    const query = String(row.keys?.[0] || '').slice(0, 500);
+    if (!query) continue;
+    await prisma.gscQueryMetric.upsert({
+      where: { projectId_date_query: { projectId: project.id, date, query } },
+      create: {
+        projectId: project.id,
+        date,
+        query,
         clicks: Math.round(row.clicks || 0),
         impressions: Math.round(row.impressions || 0),
         ctr: row.ctr || 0,
@@ -113,13 +145,22 @@ export async function syncProject(project) {
       console.warn(`[gscSync] Daily series sync failed for ${project.id}: ${err.message}`);
     }
 
+    // Persist recent query rows for brand/generic + rankings pages (snapshot of last 7 days as one day key)
+    let queryPoints = 0;
+    try {
+      queryPoints = await syncQuerySnapshot(project, currentRows, currentEnd);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`[gscSync] Query snapshot failed for ${project.id}: ${err.message}`);
+    }
+
     // Update last synced timestamp
     await prisma.project.update({
       where: { id: project.id },
       data: { gscLastSyncedAt: new Date() },
     });
 
-    return { projectId: project.id, status: 'ok', metricsCount: metrics.length, dailyPoints };
+    return { projectId: project.id, status: 'ok', metricsCount: metrics.length, dailyPoints, queryPoints };
   } catch (err) {
     return { projectId: project.id, status: 'error', error: err.message };
   }
@@ -130,7 +171,10 @@ export async function syncProject(project) {
  * Called by the daily cron job.
  */
 export async function runGscSync() {
-  if (!isGscEnabled()) {
+  const available = typeof isGscAvailable === 'function'
+    ? await isGscAvailable()
+    : isGscEnabled();
+  if (!available) {
     return { skipped: true, reason: 'GSC not configured' };
   }
 

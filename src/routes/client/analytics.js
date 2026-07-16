@@ -1,6 +1,14 @@
 import { prisma } from '../../lib/prisma.js';
 import { resolveCycle } from '../../lib/workCycle.js';
 import { buildClientAnalytics } from '../../lib/analytics/freezeSnapshot.js';
+import {
+  buildOverview,
+  buildGscView,
+  buildGa4View,
+  buildGmbView,
+  buildSeoView,
+  buildLlmView,
+} from '../../lib/analytics/sectionBuilders.js';
 
 const MOCK_LOOKER_EMBEDS = [
   { id: 'mock-1', label: 'SEO Dashboard', url: 'https://lookerstudio.google.com/embed/reporting/placeholder', sortOrder: 0 },
@@ -148,4 +156,47 @@ export async function clientAnalyticsRoutes(app) {
       return reply.send({ cycle: cycleMeta, data, source: 'live' });
     }
   );
+
+  async function sendSection(reply, result) {
+    if (result?.status && result?.message) {
+      return reply.status(result.status).send({ message: result.message });
+    }
+    return reply.send(result);
+  }
+
+  app.get('/analytics/overview', { onRequest: [app.verifyJwt, app.requireClient] }, async (request, reply) => {
+    const clientIds = request.clientAccountIds;
+    if (!clientIds?.length) return reply.send({ linked: false, data: null, source: 'none' });
+    return sendSection(reply, await buildOverview(clientIds, request.query));
+  });
+
+  app.get('/analytics/gsc/:view', { onRequest: [app.verifyJwt, app.requireClient] }, async (request, reply) => {
+    const clientIds = request.clientAccountIds;
+    if (!clientIds?.length) return reply.send({ linked: false, data: null, source: 'none' });
+    return sendSection(reply, await buildGscView(clientIds, request.params.view, request.query));
+  });
+
+  app.get('/analytics/ga4/:view', { onRequest: [app.verifyJwt, app.requireClient] }, async (request, reply) => {
+    const clientIds = request.clientAccountIds;
+    if (!clientIds?.length) return reply.send({ linked: false, data: null, source: 'none' });
+    return sendSection(reply, await buildGa4View(clientIds, request.params.view, request.query));
+  });
+
+  app.get('/analytics/gmb/:view', { onRequest: [app.verifyJwt, app.requireClient] }, async (request, reply) => {
+    const clientIds = request.clientAccountIds;
+    if (!clientIds?.length) return reply.send({ linked: false, data: null, source: 'none' });
+    return sendSection(reply, await buildGmbView(clientIds, request.params.view, request.query));
+  });
+
+  app.get('/analytics/seo/:view', { onRequest: [app.verifyJwt, app.requireClient] }, async (request, reply) => {
+    const clientIds = request.clientAccountIds;
+    if (!clientIds?.length) return reply.send({ linked: false, data: null, source: 'none' });
+    return sendSection(reply, await buildSeoView(clientIds, request.params.view, request.query));
+  });
+
+  app.get('/analytics/llm/:view', { onRequest: [app.verifyJwt, app.requireClient] }, async (request, reply) => {
+    const clientIds = request.clientAccountIds;
+    if (!clientIds?.length) return reply.send({ linked: false, data: null, source: 'none' });
+    return sendSection(reply, await buildLlmView(clientIds, request.params.view, request.query));
+  });
 }

@@ -80,8 +80,26 @@ model User {
   htmlReportsUploaded         ProjectHtmlReport[]      @relation("HtmlReportUploader")
   passwordResetTokens         PasswordResetToken[]
   openedWorkCycles            WorkCycle[]              @relation("WorkCycleOpener")
+  agencyGoogleConnections     AgencyGoogleConnection[] @relation("AgencyGoogleConnector")
 
   @@map("user")
+}
+
+// Singleton-style agency Google OAuth (OWNER connects once; used to list/bind GA4/GSC/GMB).
+model AgencyGoogleConnection {
+  id              String    @id @default(uuid())
+  googleEmail     String    @db.VarChar(255)
+  refreshTokenEnc String    @db.Text
+  scopes          String    @db.Text
+  status          String    @default("ACTIVE") @db.VarChar(20)
+  connectedById   String?
+  connectedAt     DateTime  @default(now())
+  updatedAt       DateTime  @default(now()) @updatedAt
+  lastError       String?   @db.VarChar(500)
+
+  connectedBy User? @relation("AgencyGoogleConnector", fields: [connectedById], references: [id], onDelete: SetNull)
+
+  @@map("agencygoogleconnection")
 }
 
 model PasswordResetToken {
@@ -420,6 +438,14 @@ model Project {
   wpSiteInfoSyncedAt DateTime?
   gscSiteUrl         String?       @db.VarChar(500)
   gscLastSyncedAt    DateTime?
+  ga4PropertyId      String?       @db.VarChar(100)
+  ga4PropertyName    String?       @db.VarChar(255)
+  ga4LastSyncedAt    DateTime?
+  gmbAccountId       String?       @db.VarChar(100)
+  gmbLocationId      String?       @db.VarChar(200)
+  gmbLocationName    String?       @db.VarChar(255)
+  gmbLastSyncedAt    DateTime?
+  dataforseoDomain   String?       @db.VarChar(255)
   createdAt          DateTime      @default(now())
   updatedAt          DateTime      @default(now()) @updatedAt
 
@@ -440,6 +466,10 @@ model Project {
   onboardingChecklist OnboardingChecklist? @relation("ProjectOnboardingChecklist")
   htmlReports         ProjectHtmlReport[]
   gscDailyMetrics     GscDailyMetric[]
+  gscQueryMetrics     GscQueryMetric[]
+  ga4DailyMetrics     Ga4DailyMetric[]
+  gmbDailyMetrics     GmbDailyMetric[]
+  gmbReviews          GmbReview[]
 
   @@map("project")
 }
@@ -1035,6 +1065,87 @@ model GscDailyMetric {
   @@unique([projectId, date])
   @@index([projectId, date])
   @@map("gscdailymetric")
+}
+
+// GSC query (keyword) rollups for brand/generic + rankings pages.
+model GscQueryMetric {
+  id          String   @id @default(uuid())
+  projectId   String
+  date        DateTime @db.Date
+  query       String   @db.VarChar(500)
+  clicks      Int      @default(0)
+  impressions Int      @default(0)
+  ctr         Float    @default(0)
+  position    Float    @default(0)
+  createdAt   DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, date, query])
+  @@index([projectId, date])
+  @@map("gscquerymetric")
+}
+
+// GA4 daily aggregates (site-level).
+model Ga4DailyMetric {
+  id              String   @id @default(uuid())
+  projectId       String
+  date            DateTime @db.Date
+  sessions        Int      @default(0)
+  totalUsers      Int      @default(0)
+  bounceRate      Float    @default(0)
+  avgEngagementSec Float   @default(0)
+  conversions     Int      @default(0)
+  conversionRate  Float    @default(0)
+  pageViews       Int      @default(0)
+  // Optional JSON breakdowns: channels, devices, countries, landingPages, llmReferrers
+  breakdowns      Json?
+  createdAt       DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, date])
+  @@index([projectId, date])
+  @@map("ga4dailymetric")
+}
+
+// Google Business Profile daily metrics.
+model GmbDailyMetric {
+  id             String   @id @default(uuid())
+  projectId      String
+  date           DateTime @db.Date
+  impressions    Int      @default(0)
+  impressionsSearch Int   @default(0)
+  impressionsMaps Int     @default(0)
+  websiteClicks  Int      @default(0)
+  directions     Int      @default(0)
+  calls          Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, date])
+  @@index([projectId, date])
+  @@map("gmbdailymetric")
+}
+
+model GmbReview {
+  id            String    @id @default(uuid())
+  projectId     String
+  reviewId      String    @db.VarChar(200)
+  reviewerName  String?   @db.VarChar(255)
+  starRating    Int
+  comment       String?   @db.LongText
+  replyComment  String?   @db.LongText
+  createTime    DateTime?
+  updateTime    DateTime?
+  createdAt     DateTime  @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, reviewId])
+  @@index([projectId, createTime])
+  @@map("gmbreview")
 }
 
 model ClientROIConfig {
