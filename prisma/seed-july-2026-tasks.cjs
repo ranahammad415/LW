@@ -1,27 +1,36 @@
 /**
  * seed-july-2026-tasks.cjs
  *
- * Seeds the July 2026 monthly SEO task plan into ALL SEO_CAMPAIGN projects.
- * Source: July Task 2026.xlsx (25 tasks across On-Page / Technical / Off-Page / Local).
+ * Seeds the July 2026 monthly SEO task plan.
+ *
+ * Templates:
+ *   - JULY_TASKS            → all SEO_CAMPAIGN projects except Wilhelmina
+ *                             (from July Task 2026.xlsx — 25 monthly tasks)
+ *   - WILHELMINA_JULY_TASKS → Wilhelmina only
+ *                             (from Wilhelmina Ballons Working Strategy.xlsx)
  *
  * Hierarchy:
- *   Main Task  = Category (On-Page SEO, Technical SEO, Off-Page SEO, Local SEO)
- *   Sub Task   = each spreadsheet row (title + instructions)
- *
- * Tasks are attached to the July 2026 WorkCycle (created if missing).
- * Assignee defaults to "Haider" when found; otherwise the project lead PM / fallback PM.
+ *   Main Task  = milestone / Category
+ *   Sub Task   = each template row
+ *   Step Task  = each steps[] item (Wilhelmina strategy only)
  *
  * Usage:
  *   node prisma/seed-july-2026-tasks.cjs
  *   node prisma/seed-july-2026-tasks.cjs --dry-run
+ *   node prisma/seed-july-2026-tasks.cjs --wilhelmina-only
+ *   node prisma/seed-july-2026-tasks.cjs --wilhelmina-only --replace
+ *       (--replace deletes existing July-cycle tasks for matched projects first)
  */
 require('dotenv').config();
 const { PrismaClient } = require('@prisma/client');
 
 const prisma = new PrismaClient();
 const JULY_TASKS = require('./tasks-july-2026/july-tasks.cjs');
+const WILHELMINA_JULY_TASKS = require('./tasks-july-2026/wilhelmina-july-tasks.cjs');
 
 const DRY_RUN = process.argv.includes('--dry-run');
+const WILHELMINA_ONLY = process.argv.includes('--wilhelmina-only');
+const REPLACE = process.argv.includes('--replace');
 const CYCLE_MONTH = 7;
 const CYCLE_YEAR = 2026;
 
@@ -63,10 +72,32 @@ function buildMainDescription(groupTasks) {
   for (const t of groupTasks) {
     const parts = [`### ${t.title}`];
     if (t.section) parts.push(`**Section:** ${t.section}`);
-    if (t.description) parts.push(t.description.trim());
+    if (t.goal) parts.push(`**Goal:** ${t.goal}`);
+    if (t.description) parts.push(String(t.description).trim());
+    const steps = Array.isArray(t.steps)
+      ? t.steps.map((s) => String(s || '').trim()).filter(Boolean)
+      : [];
+    if (steps.length) {
+      parts.push('**Steps:**');
+      parts.push(steps.map((s) => `- ${s}`).join('\n'));
+    }
     blocks.push(parts.join('\n\n'));
   }
   return blocks.length ? blocks.join('\n\n---\n\n') : null;
+}
+
+function buildDescription(task) {
+  const goal = (task.goal || '').trim();
+  const desc = (task.description || '').trim();
+  if (goal && desc) return `**Goal:** ${goal}\n\n${desc}`;
+  if (goal) return `**Goal:** ${goal}`;
+  if (desc) return desc;
+  return null;
+}
+
+function isWilhelminaProject(project) {
+  const hay = `${project.name || ''} ${project.client?.agencyName || ''}`.toLowerCase();
+  return hay.includes('wilhelmina');
 }
 
 async function ensureJulyCycle() {
@@ -77,7 +108,12 @@ async function ensureJulyCycle() {
 
   if (DRY_RUN) {
     console.log(`  [dry-run] would create WorkCycle ${monthLabel(CYCLE_MONTH, CYCLE_YEAR)}`);
-    return { id: 'dry-run-cycle', month: CYCLE_MONTH, year: CYCLE_YEAR, label: monthLabel(CYCLE_MONTH, CYCLE_YEAR) };
+    return {
+      id: 'dry-run-cycle',
+      month: CYCLE_MONTH,
+      year: CYCLE_YEAR,
+      label: monthLabel(CYCLE_MONTH, CYCLE_YEAR),
+    };
   }
 
   return prisma.workCycle.create({
@@ -90,12 +126,48 @@ async function ensureJulyCycle() {
   });
 }
 
+async function deleteJulyTasksForProject(projectId, cycleId) {
+  // Delete children first (steps → subs → mains) to satisfy parentTaskId FKs.
+  const tasks = await prisma.task.findMany({
+    where: { projectId, workCycleId: cycleId },
+    select: { id: true, parentTaskId: true },
+  });
+  if (!tasks.length) return 0;
+
+  const ids = new Set(tasks.map((t) => t.id));
+  const steps = tasks.filter((t) => t.parentTaskId && ids.has(t.parentTaskId));
+  // Rough depth: delete deepest first by repeatedly deleting leaves.
+  let deleted = 0;
+  let remaining = [...tasks];
+  while (remaining.length) {
+    const remainingIds = new Set(remaining.map((t) => t.id));
+    const parentsOfRemaining = new Set(
+      remaining.map((t) => t.parentTaskId).filter((id) => id && remainingIds.has(id)),
+    );
+    const leaves = remaining.filter((t) => !parentsOfRemaining.has(t.id));
+    const leafIds = leaves.map((t) => t.id);
+    if (!leafIds.length) {
+      // Safety: delete whatever is left
+      await prisma.task.deleteMany({ where: { id: { in: remaining.map((t) => t.id) } } });
+      deleted += remaining.length;
+      break;
+    }
+    await prisma.task.deleteMany({ where: { id: { in: leafIds } } });
+    deleted += leafIds.length;
+    const leafSet = new Set(leafIds);
+    remaining = remaining.filter((t) => !leafSet.has(t.id));
+  }
+  return deleted;
+}
+
 async function main() {
   console.log('');
   console.log('╔══════════════════════════════════════════════════════════════╗');
   console.log('║              July 2026 Task Plan Seeder                      ║');
   console.log('╚══════════════════════════════════════════════════════════════╝');
   if (DRY_RUN) console.log('  MODE: dry-run (no writes)');
+  if (WILHELMINA_ONLY) console.log('  SCOPE: Wilhelmina only');
+  if (REPLACE) console.log('  REPLACE: wipe existing July-cycle tasks before seed');
   console.log('');
 
   if (!prisma.workCycle) {
@@ -105,7 +177,6 @@ async function main() {
     return;
   }
 
-  // ─── WP presets ─────────────────────────────────────────────────────────────
   const presets = await prisma.wpAccessPreset.findMany({ select: { id: true, name: true } });
   const presetIdByName = Object.fromEntries(presets.map((p) => [p.name, p.id]));
   const resolvePresetId = (taskType) => {
@@ -114,13 +185,11 @@ async function main() {
   };
   console.log(`  ✓ WP presets loaded: ${presets.length}`);
 
-  // ─── July work cycle ────────────────────────────────────────────────────────
   console.log('→ Ensuring July 2026 work cycle...');
   const cycle = await ensureJulyCycle();
   console.log(`  ✓ cycle → ${cycle.label} (${cycle.id})`);
   console.log('');
 
-  // ─── Assignee (Haider) + fallback PM ────────────────────────────────────────
   console.log('→ Resolving assignees...');
   const haider = await findUserByNameKey('haider');
   if (haider) {
@@ -140,44 +209,66 @@ async function main() {
   console.log(`  ✓ fallbackPM → ${fallbackPm.name} <${fallbackPm.email}>`);
   console.log('');
 
-  // ─── All SEO campaign projects ──────────────────────────────────────────────
   console.log('→ Loading SEO_CAMPAIGN projects...');
-  const projects = await prisma.project.findMany({
+  let projects = await prisma.project.findMany({
     where: { projectType: 'SEO_CAMPAIGN' },
     include: { client: true, leadPm: true },
     orderBy: { name: 'asc' },
   });
+  if (WILHELMINA_ONLY) {
+    projects = projects.filter(isWilhelminaProject);
+  }
   console.log(`  ✓ found ${projects.length} project(s)`);
   console.log('');
 
   if (projects.length === 0) {
-    console.error('✗ No SEO_CAMPAIGN projects in DB. Aborting.');
+    console.error('✗ No matching SEO_CAMPAIGN projects. Aborting.');
     process.exitCode = 1;
     return;
-  }
-
-  // Group flat tasks by Category (milestone) → Main Task
-  const groups = new Map();
-  for (const t of JULY_TASKS) {
-    const key = t.milestone || '(Unspecified)';
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(t);
   }
 
   const summary = [];
 
   for (const project of projects) {
+    const useWilhelmina = isWilhelminaProject(project);
+    const tasks = useWilhelmina ? WILHELMINA_JULY_TASKS : JULY_TASKS;
+    const templateLabel = useWilhelmina ? 'WILHELMINA' : 'JULY';
+
+    if (WILHELMINA_ONLY && !useWilhelmina) continue;
+
     const createdById = project.leadPmId || fallbackPm.id;
     const defaultAssignee = haider || project.leadPm || fallbackPm;
 
-    const existing = await prisma.task.findMany({
-      where: { projectId: project.id, workCycleId: cycle.id },
-      select: { title: true },
-    });
+    if (REPLACE) {
+      if (DRY_RUN) {
+        const count = await prisma.task.count({
+          where: { projectId: project.id, workCycleId: cycle.id },
+        });
+        console.log(`  [dry-run] would delete ${count} July tasks for ${project.name}`);
+      } else {
+        const deleted = await deleteJulyTasksForProject(project.id, cycle.id);
+        console.log(`  ✎ replaced: deleted ${deleted} prior July tasks for ${project.name}`);
+      }
+    }
+
+    const existing = DRY_RUN && REPLACE
+      ? []
+      : await prisma.task.findMany({
+          where: { projectId: project.id, workCycleId: cycle.id },
+          select: { title: true },
+        });
     const existingTitles = new Set(existing.map((t) => t.title));
+
+    const groups = new Map();
+    for (const t of tasks) {
+      const key = t.milestone || '(Unspecified)';
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(t);
+    }
 
     let mainCreated = 0;
     let subCreated = 0;
+    let stepCreated = 0;
     let skipped = 0;
 
     for (const [mainTitle, groupTasks] of groups) {
@@ -191,6 +282,9 @@ async function main() {
       if (DRY_RUN) {
         mainCreated++;
         subCreated += groupTasks.length;
+        for (const task of groupTasks) {
+          stepCreated += Array.isArray(task.steps) ? task.steps.filter(Boolean).length : 0;
+        }
         continue;
       }
 
@@ -213,7 +307,7 @@ async function main() {
       mainCreated++;
 
       for (const task of groupTasks) {
-        await prisma.task.create({
+        const subTask = await prisma.task.create({
           data: {
             projectId: project.id,
             parentTaskId: mainTask.id,
@@ -222,7 +316,7 @@ async function main() {
             priority: task.priority || 'MEDIUM',
             status: 'TO_DO',
             milestone: task.milestone || null,
-            description: task.description || null,
+            description: buildDescription(task),
             clientVisible: true,
             createdById,
             workCycleId: cycle.id,
@@ -231,18 +325,42 @@ async function main() {
           },
         });
         subCreated++;
+
+        const steps = Array.isArray(task.steps) ? task.steps : [];
+        for (const stepText of steps) {
+          const trimmed = String(stepText || '').trim();
+          if (!trimmed) continue;
+          await prisma.task.create({
+            data: {
+              projectId: project.id,
+              parentTaskId: subTask.id,
+              title: trimmed,
+              taskType: task.taskType,
+              priority: 'MEDIUM',
+              status: 'TO_DO',
+              milestone: task.milestone || null,
+              clientVisible: true,
+              createdById,
+              workCycleId: cycle.id,
+              wpAccessPresetId: resolvePresetId(task.taskType),
+              assignees: { connect: [{ id: defaultAssignee.id }] },
+            },
+          });
+          stepCreated++;
+        }
       }
     }
 
     summary.push({
       project: project.name,
-      client: project.client?.agencyName || '—',
+      template: templateLabel,
       mains: mainCreated,
       subs: subCreated,
+      steps: stepCreated,
       skipped,
     });
     console.log(
-      `  ✓ ${project.name.padEnd(36)} — ${mainCreated} mains, ${subCreated} subs${
+      `  ✓ ${project.name.padEnd(36)} [${templateLabel}] — ${mainCreated} mains, ${subCreated} subs, ${stepCreated} steps${
         skipped ? `, ${skipped} skipped` : ''
       }`,
     );
@@ -252,18 +370,21 @@ async function main() {
   console.log('═══════════════════════ SEED SUMMARY ═══════════════════════');
   let totalMains = 0;
   let totalSubs = 0;
+  let totalSteps = 0;
   for (const s of summary) {
     totalMains += s.mains;
     totalSubs += s.subs;
+    totalSteps += s.steps;
     console.log(
-      `  ${s.project.padEnd(36)} mains=${s.mains}  subs=${s.subs}  skipped=${s.skipped}`,
+      `  ${s.project.padEnd(36)} [${s.template}]  mains=${s.mains}  subs=${s.subs}  steps=${s.steps}  skipped=${s.skipped}`,
     );
   }
   console.log('─'.repeat(60));
   console.log(`  Projects touched:     ${summary.length}`);
   console.log(`  Main tasks created:   ${totalMains}`);
   console.log(`  Sub tasks created:    ${totalSubs}`);
-  console.log(`  Total tasks created:  ${totalMains + totalSubs}`);
+  console.log(`  Step tasks created:   ${totalSteps}`);
+  console.log(`  Total tasks created:  ${totalMains + totalSubs + totalSteps}`);
   console.log('');
   console.log(DRY_RUN ? 'Dry run complete (no DB writes).' : 'Done.');
 }

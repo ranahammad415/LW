@@ -1,0 +1,475 @@
+/**
+ * wilhelmina-july-tasks.cjs
+ *
+ * July 2026 plan for Wilhelmina Balloons, derived from
+ * "Wilhelmina Ballons Working Strategy.xlsx":
+ *   - Keyword Entities Gap
+ *   - Existing Pages Content Need To
+ *   - Local Coverage
+ *   - Blog Coverage
+ *   - Backlinks Strategy
+ *
+ * Shape: { title, taskType, priority, milestone, assigneeKey, goal, description, steps[] }
+ */
+module.exports = [
+  // ═══ Service Page Content Enhancement (6 existing pages) ═══
+  {
+    title: 'Enhance Corporate Events page — NLP, entities & GEO/AEO',
+    taskType: 'on-page-seo',
+    priority: 'HIGH',
+    milestone: 'Service Page Content Enhancement',
+    assigneeKey: 'haider',
+    goal: 'Upgrade corporate-balloon-installations page with NLP, answerable entities, and GEO/AEO-ready content.',
+    description:
+      'Page: https://wilhelminaballoons.com/corporate-balloon-installations/\nMissing: Content Enhancement, NLP, SEO Entities.\nApply latest SEO fundamentals: NLP, answerable entities, GEO/AEO optimization, and related SEO entities from the Keyword Entities Gap sheet (Corporate Events column).',
+    steps: [
+      'Audit current page for entity/NLP gaps vs Corporate Events entity list',
+      'Rewrite sections to cover missing entities and answerable FAQs',
+      'Add GEO/AEO-friendly Q&A and structured headings',
+      'Internal-link to related service + local pages',
+      'Publish and request indexing in GSC',
+    ],
+  },
+  {
+    title: 'Enhance Brand Promotions page — EEAT, NLP & decorations entities',
+    taskType: 'on-page-seo',
+    priority: 'HIGH',
+    milestone: 'Service Page Content Enhancement',
+    assigneeKey: 'haider',
+    goal: 'Strengthen EEAT and decorations entity coverage on brand promotions page.',
+    description:
+      'Page: https://wilhelminaballoons.com/corporate-balloon-installations/brand-promotions-and-retail-events/\nMissing: EEAT Improvement, NLP, Decorations Entities.\nMap Brand Promotion Entities from the strategy sheet into on-page copy.',
+    steps: [
+      'Gap-check against Brand Promotions entity column',
+      'Add EEAT signals (expertise, process, credentials, case examples)',
+      'Integrate decorations/installation entities naturally',
+      'Optimize for retail & brand-activation search intent',
+      'Publish and verify in GSC',
+    ],
+  },
+  {
+    title: 'Enhance Grand Openings page — topical authority & trust signals',
+    taskType: 'on-page-seo',
+    priority: 'HIGH',
+    milestone: 'Service Page Content Enhancement',
+    assigneeKey: 'haider',
+    goal: 'Build topical authority and trust signals for grand-opening balloon installs.',
+    description:
+      'Page: https://wilhelminaballoons.com/corporate-balloon-installations/grand-opening-balloon-installation/\nMissing: Topical Authority Coverage, Trust Signal, SEO Major Entities.',
+    steps: [
+      'Cover Grand Opening entity clusters (ribbon cutting, store opening, franchise opening, etc.)',
+      'Add trust signals: process, timelines, photos, testimonials',
+      'Expand topical depth (business types, venues, marketing angles)',
+      'Publish and monitor impressions/CTR',
+    ],
+  },
+  {
+    title: 'Enhance Weddings & Showers page — topic coverage, entities & NLP',
+    taskType: 'on-page-seo',
+    priority: 'HIGH',
+    milestone: 'Service Page Content Enhancement',
+    assigneeKey: 'haider',
+    goal: 'Close topic/entity/NLP gaps on wedding & shower balloon installs.',
+    description:
+      'Page: https://wilhelminaballoons.com/private-event-balloon-installations/wedding-balloon-installations/\nMissing: Topic Coverage, Entities and NLP.\nUse Wedding Event Entities column from Keyword Entities Gap.',
+    steps: [
+      'Map wedding décor entities (arch, garland, backdrop, aisle, etc.) into sections',
+      'Add missing topic coverage (ceremony vs reception, color palettes, venue types)',
+      'Write NLP-friendly FAQs for wedding planners & couples',
+      'Publish and internal-link from related blogs/local pages',
+    ],
+  },
+  {
+    title: 'Enhance Graduations page — entities, NLP & EEAT',
+    taskType: 'on-page-seo',
+    priority: 'HIGH',
+    milestone: 'Service Page Content Enhancement',
+    assigneeKey: 'haider',
+    goal: 'Improve graduation page entity coverage, NLP, and EEAT signals.',
+    description:
+      'Page: https://wilhelminaballoons.com/private-event-balloon-installations/graduation-balloon-installations/\nMissing: Improvement Entities, NLP, EEAT Signal.\nUse Graduation Event Entities column.',
+    steps: [
+      'Integrate graduation décor + school/education entities',
+      'Add EEAT (experience with schools, color matching, photo backdrops)',
+      'Optimize for Class of / graduation party intent',
+      'Publish and track rankings for graduation balloon queries',
+    ],
+  },
+  {
+    title: 'Enhance Employee & Company Celebrations page — authority & NLP',
+    taskType: 'on-page-seo',
+    priority: 'HIGH',
+    milestone: 'Service Page Content Enhancement',
+    assigneeKey: 'haider',
+    goal: 'Raise authority and SEO/NLP entity coverage for employee celebration installs.',
+    description:
+      'Page: https://wilhelminaballoons.com/corporate-balloon-installations/employee-celebration-balloon-installations/\nMissing: Authority Coverage, SEO Entities, NLP.\nUse Employee Celebration Entities column.',
+    steps: [
+      'Cover HR/culture entities (appreciation, anniversaries, recognition)',
+      'Add workplace venue + branding entity language',
+      'Strengthen authority with process + portfolio proof',
+      'Publish and link from corporate hub page',
+    ],
+  },
+
+  // ═══ Keyword & Entity Gap Mapping ═══
+  {
+    title: 'Build page→entity mapping sheet for all 6 service pages',
+    taskType: 'keyword-research',
+    priority: 'HIGH',
+    milestone: 'Keyword & Entity Gap Mapping',
+    assigneeKey: 'haider',
+    goal: 'Turn the Keyword Entities Gap sheet into an actionable page→entity map for July.',
+    description:
+      'Source sheet columns: Corporate Events, Brand Promotions, Grand Openings, Weddings & Showers, Graduations, Employee Celebrations (500+ entities total). Prioritize high-intent entities for on-page integration this month.',
+    steps: [
+      'Export/clean entity lists per service page from the strategy XLSX',
+      'Tag each entity: must-have / nice-to-have / blog-only',
+      'Assign owners and target sections per page',
+      'Share mapping with content writer before page rewrites',
+    ],
+  },
+  {
+    title: 'Competitor entity gap pass vs top balloon-decor SERPs',
+    taskType: 'content-audit',
+    priority: 'MEDIUM',
+    milestone: 'Keyword & Entity Gap Mapping',
+    assigneeKey: 'haider',
+    goal: 'Find entities competitors rank for that Wilhelmina pages still miss.',
+    description:
+      'Cross-check strategy entity lists against top-ranking competitor pages for each of the 6 service intents; flag gaps for July content passes.',
+    steps: [
+      'Pull top-5 SERP pages per primary service keyword',
+      'Diff entities vs Wilhelmina page content',
+      'Add net-new high-value entities to the mapping sheet',
+      'Feed gaps into the matching page enhancement task',
+    ],
+  },
+
+  // ═══ Local Coverage (7 counties / metro WI) ═══
+  {
+    title: 'Local landing strategy — Milwaukee County cities',
+    taskType: 'local-seo',
+    priority: 'HIGH',
+    milestone: 'Local Coverage',
+    assigneeKey: 'haider',
+    goal: 'Plan/optimize balloon-decor local coverage across Milwaukee County cities.',
+    description:
+      'Cities: Milwaukee, Wauwatosa, West Allis, Greenfield, Oak Creek, Franklin, South Milwaukee, St. Francis, Cudahy, Glendale, Whitefish Bay, Shorewood, Brown Deer, Bayside, Fox Point, River Hills.\nCreate or optimize “Balloon Decor in {City}” pages with geo keywords, NAP, local schema, and internal links.',
+    steps: [
+      'Inventory existing local/city pages vs city list',
+      'Prioritize top 5 cities by search demand / service volume',
+      'Draft or refresh pages with unique local content + schema',
+      'Interlink from service pages and GBP',
+    ],
+  },
+  {
+    title: 'Local landing strategy — Waukesha County cities',
+    taskType: 'local-seo',
+    priority: 'HIGH',
+    milestone: 'Local Coverage',
+    assigneeKey: 'haider',
+    goal: 'Expand local balloon-decor coverage across Waukesha County.',
+    description:
+      'Cities: Brookfield, New Berlin, Pewaukee, Waukesha, Menomonee Falls, Muskego, Hartland, Delafield, Oconomowoc, Sussex, Elm Grove.',
+    steps: [
+      'Gap-check existing pages vs Waukesha city list',
+      'Prioritize Brookfield / Waukesha / Menomonee Falls first',
+      'Publish or refresh city pages with unique copy',
+      'Add LocalBusiness / Service schema where missing',
+    ],
+  },
+  {
+    title: 'Local landing strategy — Ozaukee & Washington Counties',
+    taskType: 'local-seo',
+    priority: 'MEDIUM',
+    milestone: 'Local Coverage',
+    assigneeKey: 'haider',
+    goal: 'Cover Ozaukee + Washington County target cities.',
+    description:
+      'Ozaukee: Mequon, Cedarburg, Grafton, Port Washington, Thiensville, Saukville, Belgium, Fredonia.\nWashington: Germantown, West Bend, Hartford, Jackson, Richfield, Slinger.',
+    steps: [
+      'Prioritize Mequon, Cedarburg, Germantown, West Bend',
+      'Create/optimize city pages with geo + service entities',
+      'Build citations consistency for these cities',
+    ],
+  },
+  {
+    title: 'Local landing strategy — Racine, Kenosha & Sheboygan Counties',
+    taskType: 'local-seo',
+    priority: 'MEDIUM',
+    milestone: 'Local Coverage',
+    assigneeKey: 'haider',
+    goal: 'Extend southern/northern WI county coverage from the Local Coverage sheet.',
+    description:
+      'Racine: Racine, Mount Pleasant, Caledonia, Burlington.\nKenosha: Kenosha, Pleasant Prairie, Twin Lakes.\nSheboygan: Sheboygan, Sheboygan Falls, Plymouth, Kohler.',
+    steps: [
+      'Prioritize Racine, Kenosha, Sheboygan city pages',
+      'Publish unique local content + internal links',
+      'Submit new URLs to GSC sitemap',
+    ],
+  },
+  {
+    title: 'Local schema + GBP alignment for metro coverage',
+    taskType: 'schema',
+    priority: 'HIGH',
+    milestone: 'Local Coverage',
+    assigneeKey: 'haider',
+    goal: 'Align LocalBusiness/Service schema and GBP with July local page rollout.',
+    description:
+      'Ensure structured data and Google Business Profile categories/services match the county/city expansion plan.',
+    steps: [
+      'Audit LocalBusiness / Service / FAQ schema on hub + city pages',
+      'Sync GBP services and service areas with priority cities',
+      'Fix NAP inconsistencies across citations',
+      'Validate rich-result eligibility',
+    ],
+  },
+
+  // ═══ Blog Coverage (14 informative topics) ═══
+  {
+    title: 'Blog: How Long Do Balloon Garlands Last',
+    taskType: 'content-writing',
+    priority: 'HIGH',
+    milestone: 'Blog Coverage',
+    assigneeKey: 'haider',
+    goal: 'Publish an informative blog targeting garland longevity queries.',
+    description: 'From Informative Blog Coverage list. Optimize with entities, NLP, internal links to service pages.',
+    steps: [
+      'Keyword + intent research',
+      'Outline with FAQs for AEO/GEO',
+      'Write, edit, add entities from strategy sheet',
+      'Publish + internal link from relevant service pages',
+    ],
+  },
+  {
+    title: 'Blog: How Much Does Balloon Decor Cost',
+    taskType: 'content-writing',
+    priority: 'HIGH',
+    milestone: 'Blog Coverage',
+    assigneeKey: 'haider',
+    goal: 'Capture commercial-investigation traffic on balloon decor pricing.',
+    description: 'Cost guide blog from strategy Blog Coverage sheet.',
+    steps: [
+      'Research pricing ranges by install type',
+      'Write transparent cost ranges + what affects price',
+      'CTA to quote / service pages',
+      'Publish and track GSC queries',
+    ],
+  },
+  {
+    title: 'Blog: Balloon Arch vs Balloon Garland',
+    taskType: 'content-writing',
+    priority: 'HIGH',
+    milestone: 'Blog Coverage',
+    assigneeKey: 'haider',
+    goal: 'Rank for comparison intent between arch and garland installs.',
+    description: 'Comparison article from Blog Coverage list.',
+    steps: [
+      'Outline pros/cons, use cases, pricing cues',
+      'Add decision guide + photos placeholders',
+      'Internal-link to wedding/corporate/graduation pages',
+      'Publish',
+    ],
+  },
+  {
+    title: 'Blog: Organic Balloons vs Latex Balloons',
+    taskType: 'content-writing',
+    priority: 'MEDIUM',
+    milestone: 'Blog Coverage',
+    assigneeKey: 'haider',
+    goal: 'Educate on organic vs latex balloon styles and use cases.',
+    description: 'From Blog Coverage list.',
+    steps: ['Research + outline', 'Write with style entities', 'Publish + interlink'],
+  },
+  {
+    title: 'Blog: Balloon Decoration Ideas',
+    taskType: 'content-writing',
+    priority: 'MEDIUM',
+    milestone: 'Blog Coverage',
+    assigneeKey: 'haider',
+    goal: 'Pillar ideas post covering popular balloon décor concepts.',
+    description: 'From Blog Coverage list.',
+    steps: ['Cluster ideas by event type', 'Write + image plan', 'Publish'],
+  },
+  {
+    title: 'Blog: Balloon Garland Ideas',
+    taskType: 'content-writing',
+    priority: 'MEDIUM',
+    milestone: 'Blog Coverage',
+    assigneeKey: 'haider',
+    goal: 'Ideas post targeting balloon garland inspiration queries.',
+    description: 'From Blog Coverage list.',
+    steps: ['Outline styles/venues', 'Write', 'Publish + link to pricing/cost posts'],
+  },
+  {
+    title: 'Blog: Balloon Wall Ideas',
+    taskType: 'content-writing',
+    priority: 'MEDIUM',
+    milestone: 'Blog Coverage',
+    assigneeKey: 'haider',
+    goal: 'Ideas post for balloon wall installs and photo backdrops.',
+    description: 'From Blog Coverage list.',
+    steps: ['Outline', 'Write with photo-booth entities', 'Publish'],
+  },
+  {
+    title: 'Blog: Corporate Balloon Decoration Ideas',
+    taskType: 'content-writing',
+    priority: 'HIGH',
+    milestone: 'Blog Coverage',
+    assigneeKey: 'haider',
+    goal: 'Support corporate service pages with idea-led content.',
+    description: 'From Blog Coverage list. Link heavily to corporate installs hub.',
+    steps: ['Align with Corporate Events entities', 'Write', 'Publish + hub link'],
+  },
+  {
+    title: 'Blog: Wedding Balloon Decoration Ideas',
+    taskType: 'content-writing',
+    priority: 'HIGH',
+    milestone: 'Blog Coverage',
+    assigneeKey: 'haider',
+    goal: 'Support wedding service page with inspiration content.',
+    description: 'From Blog Coverage list.',
+    steps: ['Align with wedding décor entities', 'Write', 'Publish + wedding page link'],
+  },
+  {
+    title: 'Blog: Birthday Balloon Decoration Ideas',
+    taskType: 'content-writing',
+    priority: 'MEDIUM',
+    milestone: 'Blog Coverage',
+    assigneeKey: 'haider',
+    goal: 'Capture birthday décor inspiration searches.',
+    description: 'From Blog Coverage list.',
+    steps: ['Outline age/theme clusters', 'Write', 'Publish'],
+  },
+  {
+    title: 'Blog: Balloon Color Combinations',
+    taskType: 'content-writing',
+    priority: 'MEDIUM',
+    milestone: 'Blog Coverage',
+    assigneeKey: 'haider',
+    goal: 'Rank for color-palette / combination queries.',
+    description: 'From Blog Coverage list.',
+    steps: ['Compile palettes by event type', 'Write', 'Publish'],
+  },
+  {
+    title: 'Blog: Balloon Decoration Trends',
+    taskType: 'content-writing',
+    priority: 'MEDIUM',
+    milestone: 'Blog Coverage',
+    assigneeKey: 'haider',
+    goal: 'Timely trends piece for 2026 balloon décor.',
+    description: 'From Blog Coverage list.',
+    steps: ['Research current trends', 'Write', 'Publish'],
+  },
+  {
+    title: 'Blog: Outdoor Balloon Decoration Tips',
+    taskType: 'content-writing',
+    priority: 'MEDIUM',
+    milestone: 'Blog Coverage',
+    assigneeKey: 'haider',
+    goal: 'Practical outdoor install tips content.',
+    description: 'From Blog Coverage list.',
+    steps: ['Cover weather, materials, longevity', 'Write', 'Publish'],
+  },
+  {
+    title: 'Blog: Indoor Balloon Decoration Ideas',
+    taskType: 'content-writing',
+    priority: 'MEDIUM',
+    milestone: 'Blog Coverage',
+    assigneeKey: 'haider',
+    goal: 'Indoor décor ideas supporting venue-based queries.',
+    description: 'From Blog Coverage list.',
+    steps: ['Cover venues (lobby, ballroom, retail)', 'Write', 'Publish'],
+  },
+
+  // ═══ Backlinks Strategy (quantities from sheet) ═══
+  {
+    title: 'Profile Creation — 10 backlinks',
+    taskType: 'link-building',
+    priority: 'MEDIUM',
+    milestone: 'Backlinks Strategy',
+    assigneeKey: 'haider',
+    goal: 'Acquire 10 quality profile backlinks via white-hat sources.',
+    description:
+      'From Backlinks Strategy sheet: Profile Creation × 10.\nManually research and build high-quality white-hat profile links.',
+    steps: [
+      'Shortlist relevant directories/profiles',
+      'Create/claim 10 profiles with consistent NAP + link',
+      'Log URLs and live status',
+    ],
+  },
+  {
+    title: 'Image Submission — 5 backlinks',
+    taskType: 'link-building',
+    priority: 'MEDIUM',
+    milestone: 'Backlinks Strategy',
+    assigneeKey: 'haider',
+    goal: 'Earn 5 image-submission backlinks.',
+    description: 'From Backlinks Strategy sheet: Image Submission × 5.',
+    steps: [
+      'Select portfolio images with alt text + branding',
+      'Submit to 5 quality image/share platforms',
+      'Verify live links',
+    ],
+  },
+  {
+    title: 'Guest Posting — 10 placements',
+    taskType: 'link-building',
+    priority: 'HIGH',
+    milestone: 'Backlinks Strategy',
+    assigneeKey: 'haider',
+    goal: 'Secure 10 niche-relevant guest post backlinks.',
+    description:
+      'From Backlinks Strategy sheet: Guest Posting × 10.\nWhite-hat outreach only; prefer wedding, event, local business, and décor publishers.',
+    steps: [
+      'Build prospect list (DR/relevance filter)',
+      'Pitch + write/place content',
+      'Confirm 10 live contextual links',
+      'Report anchors + target URLs',
+    ],
+  },
+  {
+    title: 'Niche Edit Outreach — 2 placements',
+    taskType: 'link-building',
+    priority: 'HIGH',
+    milestone: 'Backlinks Strategy',
+    assigneeKey: 'haider',
+    goal: 'Land 2 niche-edit (link insert) placements on indexed articles.',
+    description: 'From Backlinks Strategy sheet: Niche Edit Outreach × 2.',
+    steps: [
+      'Find relevant indexed articles missing a Wilhelmina mention',
+      'Outreach for contextual insert',
+      'Confirm 2 live niche edits',
+    ],
+  },
+  {
+    title: 'Map Citations — 10 listings',
+    taskType: 'local-seo',
+    priority: 'HIGH',
+    milestone: 'Backlinks Strategy',
+    assigneeKey: 'haider',
+    goal: 'Build/optimize 10 map/citation listings with consistent NAP.',
+    description: 'From Backlinks Strategy sheet: Map Citations × 10.',
+    steps: [
+      'Audit existing citations',
+      'Create/claim 10 high-authority local/map listings',
+      'Ensure NAP consistency with GBP',
+      'Log listing URLs',
+    ],
+  },
+  {
+    title: 'Forums Profile Links — 5 backlinks',
+    taskType: 'link-building',
+    priority: 'LOW',
+    milestone: 'Backlinks Strategy',
+    assigneeKey: 'haider',
+    goal: 'Acquire 5 relevant forum profile links.',
+    description: 'From Backlinks Strategy sheet: Forums Profile Links × 5.',
+    steps: [
+      'Identify event/wedding/local business forums',
+      'Create 5 profiles with natural contributions + link',
+      'Log and verify',
+    ],
+  },
+];
