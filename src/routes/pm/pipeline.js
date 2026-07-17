@@ -41,6 +41,8 @@ function formatReview(r) {
     statusLabel: STATUS_LABELS[effectiveStatus] || effectiveStatus,
     contentType: r.contentType || null,
     contentTypeLabel: contentTypeLabel(r.contentType),
+    parentWpPostId: r.parentWpPostId ?? null,
+    updateMode: r.parentWpPostId != null,
     isPublished: !!r.isPublished,
     publishedAt: r.publishedAt?.toISOString() || null,
     submittedByName: r.submittedByName,

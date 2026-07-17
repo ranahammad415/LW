@@ -38,6 +38,7 @@ export const CLIENT_STATUS_LABELS = {
 export const CONTENT_TYPE_LABELS = {
   landing_page: 'Landing Page',
   pillar_page: 'Pillar Page',
+  cluster_page: 'Cluster Page',
   article: 'Article / Blog Page',
   service_page: 'Service Page',
   location_page: 'Location Page',
@@ -227,6 +228,7 @@ export function formatHistoryEvent(e, labels = STATUS_LABELS) {
     status: e.status,
     statusLabel: labels[e.status] || e.status,
     statusColor: STATUS_COLORS[e.status] || '#888',
+    message: e.message || null,
     pmComment: e.pmComment,
     clientComment: e.clientComment,
     workerNote: e.workerNote,

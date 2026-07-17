@@ -298,6 +298,12 @@ export async function wpWebhookRoutes(app) {
     const postType = body.postType ? String(body.postType).slice(0, 50) : 'Page';
     // Worker-selected content/page type (landing_page, pillar_page, article, ...).
     const contentType = body.contentType ? String(body.contentType).slice(0, 50) : null;
+    // "Update Content" workflow: the live parent page a review draft was cloned
+    // from, and a generic human-readable log line (e.g. content-type change).
+    const parentWpPostId = Number.isInteger(Number(body.parentPostId)) && Number(body.parentPostId) > 0
+      ? Number(body.parentPostId)
+      : null;
+    const logMessage = body.logMessage ? String(body.logMessage).slice(0, 500) : null;
     const status = String(body.status || '').slice(0, 50);
     const revisionNumber = Number(body.revisionNumber) || 1;
     const pmPreviewUrl = String(body.pmPreviewUrl || '').slice(0, 1000) || null;
@@ -368,6 +374,9 @@ export async function wpWebhookRoutes(app) {
         // Don't wipe a previously stored content type if WP omits it on a
         // later event (only submit/resubmit reliably carry it).
         ...(contentType ? { contentType } : {}),
+        // Persist the parent-page link for update-mode reviews (don't wipe if a
+        // later event omits it).
+        ...(parentWpPostId ? { parentWpPostId } : {}),
         pmReviewedAt,
         clientReviewedAt,
         revisionNumber,
@@ -397,6 +406,7 @@ export async function wpWebhookRoutes(app) {
         clientComment,
         workerNote,
         contentType,
+        parentWpPostId,
         pmReviewedAt,
         clientReviewedAt,
         revisionNumber,
@@ -463,6 +473,7 @@ export async function wpWebhookRoutes(app) {
               // lingering pipeline status (e.g. client_approved).
               status: isPublishEvent ? 'published' : status,
               revisionNumber,
+              message: logMessage,
               workerNote: scoped.workerNote,
               pmComment: scoped.pmComment,
               pmDecision: scoped.pmDecision,

@@ -980,6 +980,8 @@ model WpContentReview {
   aiSummary        String?   @db.Text
   isPublished      Boolean   @default(false)
   publishedAt      DateTime?
+  /// For "Update Content" reviews: the live parent page the draft was cloned from.
+  parentWpPostId   Int?
   /// WordPress pipeline row createdAt (when the review was initiated/drafted).
   wpCreatedAt      DateTime?
   /// WordPress pipeline row updatedAt (last meaningful WP change — not OS sync).
@@ -1000,6 +1002,8 @@ model WpContentReviewEvent {
   eventType        String   @db.VarChar(100)
   status           String   @db.VarChar(50)
   revisionNumber   Int      @default(1)
+  /// Generic human-readable log line (e.g. "Content type changed from X to Y").
+  message          String?  @db.VarChar(500)
   workerNote       String?  @db.LongText
   pmComment        String?  @db.LongText
   pmDecision       String?  @db.VarChar(50)

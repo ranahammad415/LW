@@ -62,7 +62,11 @@ export async function syncPipelineFromWp({ projectId } = {}) {
 
         const data = {
           wpPostId: Number(p.postId) || 0,
-          postTitle: String(p.postTitle || '').slice(0, 500),
+          // Don't overwrite a stored title with an empty string (can happen for a
+          // deleted update-mode draft before the parent fallback resolves).
+          ...(p.postTitle ? { postTitle: String(p.postTitle).slice(0, 500) } : {}),
+          // "Update Content" reviews: keep the parent-page link.
+          ...(p.parentPostId ? { parentWpPostId: Number(p.parentPostId) } : {}),
           status: isPublished ? 'published' : String(p.status || '').slice(0, 50),
           submittedByName: p.submittedBy?.name ? String(p.submittedBy.name).slice(0, 200) : null,
           submittedById: p.submittedBy?.memberId ? String(p.submittedBy.memberId).slice(0, 100) : null,
@@ -95,7 +99,14 @@ export async function syncPipelineFromWp({ projectId } = {}) {
           const review = await prisma.wpContentReview.upsert({
             where: { projectId_wpPipelineId: { projectId: project.id, wpPipelineId } },
             update: data,
-            create: { projectId: project.id, wpPipelineId, ...data },
+            create: {
+              projectId: project.id,
+              wpPipelineId,
+              // postTitle is required on create; data may omit it when WP sent an
+              // empty title, so provide a fallback.
+              postTitle: String(p.postTitle || 'Untitled').slice(0, 500),
+              ...data,
+            },
           });
 
           // Only backfill when this review has no events yet. WP's `history`

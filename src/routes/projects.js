@@ -859,6 +859,68 @@ export async function projectRoutes(app) {
       return reply.send({ id: updated.id, taskId: updated.taskId, taskTitle });
     }
   );
+
+  // ── WP Pages: start an "Update Content" cycle (clone live page to a draft) ──
+  app.post(
+    '/:id/wp-pages/:wpPostId/update-content',
+    { onRequest: [app.verifyJwt] },
+    async (request, reply) => {
+      const { user } = request;
+      const { id, wpPostId } = request.params;
+      if (user.role !== 'OWNER' && user.role !== 'PM') {
+        return reply.status(403).send({ message: 'Only Owner or PM can start an update' });
+      }
+
+      const project = await prisma.project.findUnique({
+        where: { id },
+        include: { client: { select: { leadPmId: true, secondaryPmId: true } } },
+      });
+      if (!project) return reply.status(404).send({ message: 'Project not found' });
+      const canAccess = await ensureProjectAccess(project, user);
+      if (!canAccess) return reply.status(403).send({ message: 'Access denied' });
+      if (!project.wpUrl || !project.wpApiKey) {
+        return reply.status(400).send({ message: 'WP connection not configured' });
+      }
+
+      const postId = Number(wpPostId);
+      if (!Number.isInteger(postId) || postId <= 0) {
+        return reply.status(400).send({ message: 'Invalid post id' });
+      }
+
+      const baseUrl = project.wpUrl.replace(/\/$/, '');
+      const url = `${baseUrl}/wp-json/lwa/v1/pages/${postId}/create-update-draft`;
+
+      let res;
+      try {
+        res = await fetch(url, {
+          method: 'POST',
+          headers: { 'X-LWA-API-Key': project.wpApiKey, 'Content-Type': 'application/json' },
+          signal: AbortSignal.timeout(20000),
+        });
+      } catch (fetchErr) {
+        request.log.error({ err: fetchErr, url }, 'WP update-content fetch failed');
+        const isTimeout = fetchErr?.name === 'TimeoutError' || fetchErr?.name === 'AbortError';
+        return reply.status(502).send({
+          message: isTimeout
+            ? 'WordPress did not respond in time. Please try again.'
+            : 'Unable to reach WordPress site.',
+        });
+      }
+
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return reply.status(res.status).send({ message: json.message || 'WP API error' });
+      }
+
+      return reply.send({
+        draftId: json.draftId ?? null,
+        parentId: json.parentId ?? postId,
+        editUrl: json.editUrl ?? null,
+        reused: !!json.reused,
+      });
+    }
+  );
+
   app.post(
     '/:id/suggest-tasks',
     {
