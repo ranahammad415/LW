@@ -1,6 +1,7 @@
 import { prisma } from '../../lib/prisma.js';
+import { notify } from '../../lib/notificationService.js';
 import { syncPipelineFromWp } from '../../lib/pipelineSync.js';
-import { STATUS_LABELS, formatHistoryEvent, reviewDisplayUpdatedAt, parseWpDate } from '../../lib/pipelineFormat.js';
+import { STATUS_LABELS, formatHistoryEvent, reviewDisplayUpdatedAt, parseWpDate, contentTypeLabel } from '../../lib/pipelineFormat.js';
 
 const PM_ROLES = ['PM', 'OWNER'];
 
@@ -21,6 +22,12 @@ function wpHeaders(apiKey) {
 
 function formatReview(r) {
   const activityAt = reviewDisplayUpdatedAt(r);
+  // Once published, present a distinct "Published" state regardless of the raw
+  // WP pipeline status (which can linger at client_approved). Cancelled rows
+  // also carry isPublished=true (to hide them from active queues) but must
+  // keep their "Cancelled" label.
+  const isCancelled = r.status === 'cancelled' || r.lastEventType === 'pipeline_cancelled';
+  const effectiveStatus = r.isPublished && !isCancelled ? 'published' : r.status;
   return {
     id: r.id,
     projectId: r.projectId,
@@ -30,8 +37,12 @@ function formatReview(r) {
     wpPostId: r.wpPostId,
     postTitle: r.postTitle,
     wpPostStatus: '',
-    status: r.status,
-    statusLabel: STATUS_LABELS[r.status] || r.status,
+    status: effectiveStatus,
+    statusLabel: STATUS_LABELS[effectiveStatus] || effectiveStatus,
+    contentType: r.contentType || null,
+    contentTypeLabel: contentTypeLabel(r.contentType),
+    isPublished: !!r.isPublished,
+    publishedAt: r.publishedAt?.toISOString() || null,
     submittedByName: r.submittedByName,
     submittedById: r.submittedById,
     pmMemberName: r.pmMemberName,
@@ -292,7 +303,7 @@ export async function pmPipelineRoutes(app) {
 
         const project = await prisma.project.findUnique({
           where: { id: projectId },
-          select: { wpUrl: true, wpApiKey: true, leadPmId: true },
+          select: { wpUrl: true, wpApiKey: true, leadPmId: true, name: true, clientId: true },
         });
         if (!project || !project.wpUrl || !project.wpApiKey) {
           return reply.status(404).send({ message: 'Project not found or no WP config' });
@@ -329,6 +340,79 @@ export async function pmPipelineRoutes(app) {
         const json = await res.json().catch(() => ({}));
         if (!res.ok) {
           return reply.status(res.status).send({ message: json.message || 'WP API error' });
+        }
+
+        // Mark the review published in the OS immediately so the state is
+        // correct even if the async WP webhook is dropped. Idempotent: skip if
+        // it is already published so we don't clobber the original publishedAt.
+        try {
+          const pipelineId = Number(wpPipelineId);
+          const existing = await prisma.wpContentReview.findUnique({
+            where: { projectId_wpPipelineId: { projectId, wpPipelineId: pipelineId } },
+            select: { id: true, isPublished: true, revisionNumber: true },
+          });
+          if (existing && !existing.isPublished) {
+            const updated = await prisma.wpContentReview.update({
+              where: { id: existing.id },
+              data: {
+                isPublished: true,
+                publishedAt: new Date(),
+                status: 'published',
+                lastEventType: 'pipeline_published',
+              },
+            });
+            await prisma.wpContentReviewEvent.create({
+              data: {
+                contentReviewId: existing.id,
+                eventType: 'pipeline_published',
+                status: 'published',
+                revisionNumber: existing.revisionNumber || 1,
+              },
+            });
+
+            // Best-effort content_published notification (Owners + Client
+            // users). The WP webhook guards on isPublished, so whichever path
+            // marks it published first is the single source of the notice.
+            try {
+              const uniq = (arr) => Array.from(new Set((arr || []).filter(Boolean)));
+              const owners = await prisma.user.findMany({
+                where: { role: 'OWNER', isActive: true },
+                select: { id: true },
+              });
+              let clientUserIds = [];
+              if (project.clientId) {
+                const clientUsers = await prisma.clientUser.findMany({
+                  where: { clientId: project.clientId },
+                  select: { userId: true },
+                });
+                clientUserIds = clientUsers.map((cu) => cu.userId);
+              }
+              const recipients = uniq([...owners.map((o) => o.id), ...clientUserIds]);
+              if (recipients.length > 0) {
+                const nowFormatted = new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+                notify({
+                  slug: 'content_published',
+                  recipientIds: recipients,
+                  variables: {
+                    postTitle: updated.postTitle,
+                    contentTitle: updated.postTitle,
+                    projectName: project.name || '',
+                    postType: contentTypeLabel(updated.contentType) || 'Page',
+                    submittedBy: updated.submittedByName || 'Team member',
+                    submittedAt: nowFormatted,
+                    aiSummary: updated.aiSummary || '',
+                  },
+                  actionUrl: updated.clientPreviewUrl || updated.pmPreviewUrl || `/portal/admin/projects/${projectId}?tab=content-reviews`,
+                  metadata: { contentReviewId: updated.id, projectId },
+                }).catch(() => {});
+              }
+            } catch (notifyErr) {
+              request.log.error({ err: notifyErr }, 'Publish notification failed');
+            }
+          }
+        } catch (dbErr) {
+          // Non-fatal: the WP webhook / periodic sync will reconcile.
+          request.log.error({ err: dbErr }, 'Local publish state update failed');
         }
 
         return reply.send(json);

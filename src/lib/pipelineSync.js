@@ -50,10 +50,20 @@ export async function syncPipelineFromWp({ projectId } = {}) {
         const wpPipelineId = Number(p.id);
         if (!wpPipelineId) continue;
 
+        // Detect a live WP post so a missed publish webhook self-corrects here.
+        const wpLive = String(p.wpPostStatus || '').toLowerCase() === 'publish';
+
+        // Preserve an already-published state; never let sync regress it.
+        const existing = await prisma.wpContentReview.findUnique({
+          where: { projectId_wpPipelineId: { projectId: project.id, wpPipelineId } },
+          select: { isPublished: true, publishedAt: true },
+        });
+        const isPublished = wpLive || existing?.isPublished || false;
+
         const data = {
           wpPostId: Number(p.postId) || 0,
           postTitle: String(p.postTitle || '').slice(0, 500),
-          status: String(p.status || '').slice(0, 50),
+          status: isPublished ? 'published' : String(p.status || '').slice(0, 50),
           submittedByName: p.submittedBy?.name ? String(p.submittedBy.name).slice(0, 200) : null,
           submittedById: p.submittedBy?.memberId ? String(p.submittedBy.memberId).slice(0, 100) : null,
           pmMemberName: p.pmAssigned?.name ? String(p.pmAssigned.name).slice(0, 200) : null,
@@ -65,11 +75,20 @@ export async function syncPipelineFromWp({ projectId } = {}) {
           clientDecision: p.clientDecision ? String(p.clientDecision).slice(0, 50) : null,
           clientComment: p.clientComment ? String(p.clientComment).slice(0, 10000) : null,
           workerNote: p.workerNote ? String(p.workerNote).slice(0, 10000) : null,
+          // Don't wipe a stored content type if WP omits it for legacy rows.
+          ...(p.contentType ? { contentType: String(p.contentType).slice(0, 50) } : {}),
           pmReviewedAt: p.pmReviewedAt ? String(p.pmReviewedAt).slice(0, 50) : null,
           clientReviewedAt: p.clientReviewedAt ? String(p.clientReviewedAt).slice(0, 50) : null,
           revisionNumber: Number(p.revisionNumber) || 1,
           ...(parseWpDate(p.createdAt) ? { wpCreatedAt: parseWpDate(p.createdAt) } : {}),
           ...(parseWpDate(p.updatedAt) ? { wpUpdatedAt: parseWpDate(p.updatedAt) } : {}),
+          // Preserve / set publish flags without ever clearing them.
+          ...(isPublished
+            ? {
+                isPublished: true,
+                ...(existing?.publishedAt ? {} : { publishedAt: new Date() }),
+              }
+            : {}),
         };
 
         try {

@@ -971,6 +971,8 @@ model WpContentReview {
   clientDecision   String?   @db.VarChar(50)
   clientComment    String?   @db.LongText
   workerNote       String?   @db.LongText
+  /// Worker-selected content/page type (e.g. landing_page, pillar_page, article).
+  contentType      String?   @db.VarChar(50)
   pmReviewedAt     String?   @db.VarChar(50)
   clientReviewedAt String?   @db.VarChar(50)
   revisionNumber   Int       @default(1)

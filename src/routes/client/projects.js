@@ -5,6 +5,7 @@ import {
   formatHistoryEvent,
   reviewDisplayUpdatedAt,
   parseWpDate,
+  contentTypeLabel,
 } from '../../lib/pipelineFormat.js';
 import { resolveCycle } from '../../lib/workCycle.js';
 
@@ -878,8 +879,18 @@ export async function clientProjectsRoutes(app) {
           wpPostId: r.wpPostId,
           postTitle: r.postTitle,
           wpPostStatus: '',
-          status: r.status,
-          statusLabel: CLIENT_STATUS_LABELS[r.status] || r.status,
+          status:
+            r.isPublished && r.status !== 'cancelled' && r.lastEventType !== 'pipeline_cancelled'
+              ? 'published'
+              : r.status,
+          statusLabel:
+            r.isPublished && r.status !== 'cancelled' && r.lastEventType !== 'pipeline_cancelled'
+              ? CLIENT_STATUS_LABELS.published
+              : CLIENT_STATUS_LABELS[r.status] || r.status,
+          contentType: r.contentType || null,
+          contentTypeLabel: contentTypeLabel(r.contentType),
+          isPublished: !!r.isPublished,
+          publishedAt: r.publishedAt?.toISOString() || null,
           submittedByName: r.submittedByName,
           submittedById: r.submittedById,
           pmMemberName: r.pmMemberName,
@@ -958,8 +969,18 @@ export async function clientProjectsRoutes(app) {
           wpPostId: r.wpPostId,
           postTitle: r.postTitle,
           wpPostStatus: '',
-          status: r.status,
-          statusLabel: CLIENT_STATUS_LABELS[r.status] || r.status,
+          status:
+            r.isPublished && r.status !== 'cancelled' && r.lastEventType !== 'pipeline_cancelled'
+              ? 'published'
+              : r.status,
+          statusLabel:
+            r.isPublished && r.status !== 'cancelled' && r.lastEventType !== 'pipeline_cancelled'
+              ? CLIENT_STATUS_LABELS.published
+              : CLIENT_STATUS_LABELS[r.status] || r.status,
+          contentType: r.contentType || null,
+          contentTypeLabel: contentTypeLabel(r.contentType),
+          isPublished: !!r.isPublished,
+          publishedAt: r.publishedAt?.toISOString() || null,
           submittedByName: r.submittedByName,
           submittedById: r.submittedById,
           pmMemberName: r.pmMemberName,

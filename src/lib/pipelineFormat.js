@@ -8,6 +8,10 @@ export const STATUS_LABELS = {
   changes_requested_by_pm: 'Changes Requested (PM)',
   changes_requested_by_client: 'Changes Requested (Client)',
   cancelled: 'Cancelled',
+  // Published is a first-class, derived state (see formatReview). `publish` is
+  // the raw WP post status that can arrive via the wp-content-change webhook.
+  published: 'Published',
+  publish: 'Published',
 };
 
 /** Distinct colors per workflow stage (match WP plugin). */
@@ -20,6 +24,8 @@ export const STATUS_COLORS = {
   changes_requested_by_pm: '#b32d2e',
   changes_requested_by_client: '#b32d2e',
   cancelled: '#646970',
+  published: '#2271b1',
+  publish: '#2271b1',
 };
 
 /** Client-facing labels (slightly different for pending_client_review). */
@@ -27,6 +33,23 @@ export const CLIENT_STATUS_LABELS = {
   ...STATUS_LABELS,
   pending_client_review: 'Awaiting Your Review',
 };
+
+/** Worker-selected content/page type labels (aligned with WP plugin). */
+export const CONTENT_TYPE_LABELS = {
+  landing_page: 'Landing Page',
+  pillar_page: 'Pillar Page',
+  article: 'Article / Blog Page',
+  service_page: 'Service Page',
+  location_page: 'Location Page',
+  home_page: 'Home Page',
+  product_page: 'Product Page',
+};
+
+/** Resolve a content-type value to a display label (null-safe). */
+export function contentTypeLabel(value) {
+  if (!value) return null;
+  return CONTENT_TYPE_LABELS[value] || value;
+}
 
 /**
  * Only persist comments that belong to this event type.
@@ -162,7 +185,14 @@ export function reviewDisplayUpdatedAt(r) {
     .filter(Boolean)
     .sort((a, b) => b.getTime() - a.getTime())[0];
 
+  // Once published, the publish time is the most recent meaningful activity.
+  const publishedAt =
+    r.isPublished && r.publishedAt
+      ? (r.publishedAt instanceof Date ? r.publishedAt : parseWpDate(r.publishedAt))
+      : null;
+
   return (
+    publishedAt ||
     parseWpDate(r.clientReviewedAt) ||
     parseWpDate(r.pmReviewedAt) ||
     (r.wpUpdatedAt instanceof Date ? r.wpUpdatedAt : parseWpDate(r.wpUpdatedAt)) ||

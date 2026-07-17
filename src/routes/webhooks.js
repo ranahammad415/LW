@@ -171,7 +171,7 @@ export async function wpWebhookRoutes(app) {
               isPublished: true,
               publishedAt: new Date(),
               lastEventType: 'pipeline_published',
-              status: 'publish',
+              status: 'published',
             },
           });
 
@@ -180,7 +180,7 @@ export async function wpWebhookRoutes(app) {
             data: {
               contentReviewId: review.id,
               eventType: 'pipeline_published',
-              status: 'publish',
+              status: 'published',
               revisionNumber: review.revisionNumber,
             },
           });
@@ -247,7 +247,7 @@ export async function wpWebhookRoutes(app) {
               wpPipelineId: review.wpPipelineId,
               wpPostId,
               postTitle: review.postTitle,
-              status: 'publish',
+              status: 'published',
               eventType: 'pipeline_published',
               revisionNumber: review.revisionNumber,
             });
@@ -296,6 +296,8 @@ export async function wpWebhookRoutes(app) {
     const wpPostId = Number(body.postId) || 0;
     const postTitle = String(body.postTitle || '').slice(0, 500);
     const postType = body.postType ? String(body.postType).slice(0, 50) : 'Page';
+    // Worker-selected content/page type (landing_page, pillar_page, article, ...).
+    const contentType = body.contentType ? String(body.contentType).slice(0, 50) : null;
     const status = String(body.status || '').slice(0, 50);
     const revisionNumber = Number(body.revisionNumber) || 1;
     const pmPreviewUrl = String(body.pmPreviewUrl || '').slice(0, 1000) || null;
@@ -343,7 +345,10 @@ export async function wpWebhookRoutes(app) {
       update: {
         wpPostId,
         postTitle,
-        status,
+        // Canonicalize to 'published' on the publish event, and never let a
+        // later (out-of-order) event regress an already-published row back to
+        // an approved/pending status.
+        status: isPublishEvent || alreadyPublished ? 'published' : status,
         submittedByName,
         submittedById,
         pmMemberName,
@@ -360,20 +365,26 @@ export async function wpWebhookRoutes(app) {
         clientDecision,
         clientComment,
         workerNote,
+        // Don't wipe a previously stored content type if WP omits it on a
+        // later event (only submit/resubmit reliably carry it).
+        ...(contentType ? { contentType } : {}),
         pmReviewedAt,
         clientReviewedAt,
         revisionNumber,
         lastEventType: eventType,
         wpUpdatedAt,
         ...(wpCreatedAt ? { wpCreatedAt } : {}),
-        ...(isPublishEvent || isCancelEvent ? { isPublished: true, publishedAt: new Date() } : {}),
+        // Never regress the published flag once set; only ever flip it true.
+        ...(isPublishEvent || isCancelEvent
+          ? { isPublished: true, ...(alreadyPublished ? {} : { publishedAt: new Date() }) }
+          : {}),
       },
       create: {
         projectId: project.id,
         wpPipelineId,
         wpPostId,
         postTitle,
-        status,
+        status: isPublishEvent ? 'published' : status,
         submittedByName,
         submittedById,
         pmMemberName,
@@ -385,6 +396,7 @@ export async function wpWebhookRoutes(app) {
         clientDecision,
         clientComment,
         workerNote,
+        contentType,
         pmReviewedAt,
         clientReviewedAt,
         revisionNumber,
@@ -422,28 +434,45 @@ export async function wpWebhookRoutes(app) {
     // floods the timeline with duplicate rows at the same timestamp.
     if (eventType !== 'pipeline_resend_notification') {
       try {
-        const scoped = commentsForEventType(eventType, {
-          workerNote,
-          pmComment,
-          clientComment,
-          pmDecision,
-          clientDecision,
-        });
-        await prisma.wpContentReviewEvent.create({
-          data: {
-            contentReviewId: review.id,
-            eventType,
-            status,
-            revisionNumber,
-            workerNote: scoped.workerNote,
-            pmComment: scoped.pmComment,
-            pmDecision: scoped.pmDecision,
-            clientComment: scoped.clientComment,
-            clientDecision: scoped.clientDecision,
-            pmReviewedAt: body.pmReviewedAt ? String(body.pmReviewedAt).slice(0, 50) : null,
-            clientReviewedAt: body.clientReviewedAt ? String(body.clientReviewedAt).slice(0, 50) : null,
-          },
-        });
+        // Dedupe the "Published" entry: the OS publish proxy, this
+        // pipeline_published webhook, and the wp-content-change webhook can all
+        // fire for a single publish. Only ever keep one published event.
+        let skipCreate = false;
+        if (isPublishEvent) {
+          const existingPublished = await prisma.wpContentReviewEvent.findFirst({
+            where: { contentReviewId: review.id, eventType: 'pipeline_published' },
+            select: { id: true },
+          });
+          if (existingPublished) skipCreate = true;
+        }
+
+        if (!skipCreate) {
+          const scoped = commentsForEventType(eventType, {
+            workerNote,
+            pmComment,
+            clientComment,
+            pmDecision,
+            clientDecision,
+          });
+          await prisma.wpContentReviewEvent.create({
+            data: {
+              contentReviewId: review.id,
+              eventType,
+              // Store the canonical 'published' status on publish events so the
+              // timeline label is correct even if a legacy plugin sends the
+              // lingering pipeline status (e.g. client_approved).
+              status: isPublishEvent ? 'published' : status,
+              revisionNumber,
+              workerNote: scoped.workerNote,
+              pmComment: scoped.pmComment,
+              pmDecision: scoped.pmDecision,
+              clientComment: scoped.clientComment,
+              clientDecision: scoped.clientDecision,
+              pmReviewedAt: body.pmReviewedAt ? String(body.pmReviewedAt).slice(0, 50) : null,
+              clientReviewedAt: body.clientReviewedAt ? String(body.clientReviewedAt).slice(0, 50) : null,
+            },
+          });
+        }
       } catch {
         // Don't fail the webhook if event creation fails
       }
