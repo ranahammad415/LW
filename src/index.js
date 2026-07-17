@@ -314,59 +314,10 @@ try {
     }
   });
 
-  // Daily notification digest — runs at 08:00 UTC
-  cron.schedule('0 8 * * *', async () => {
-    app.log.info('Starting daily notification digest...');
-    try {
-      if (!smtpConfigured) {
-        app.log.info('SMTP not configured — skipping digest');
-        return;
-      }
-      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
-      // Get users with unread notifications in the last 24h
-      const usersWithUnread = await prisma.notificationLog.groupBy({
-        by: ['recipientId'],
-        where: {
-          createdAt: { gte: yesterday },
-          isRead: false,
-        },
-        _count: { id: true },
-      });
-
-      let digestsSent = 0;
-      for (const group of usersWithUnread) {
-        if (group._count.id < 2) continue; // Only send digest if 2+ unread
-        const user = await prisma.user.findUnique({
-          where: { id: group.recipientId },
-          select: { id: true, email: true, name: true, isActive: true },
-        });
-        if (!user || !user.isActive) continue;
-
-        const logs = await prisma.notificationLog.findMany({
-          where: {
-            recipientId: user.id,
-            createdAt: { gte: yesterday },
-            isRead: false,
-          },
-          orderBy: { createdAt: 'desc' },
-          take: 20,
-        });
-
-        const listItems = logs.map((l) => `<li>${l.message}</li>`).join('');
-        const html = `<p>Hi ${user.name || 'there'},</p><p>You have ${group._count.id} unread notifications:</p><ul>${listItems}</ul><p>Log in to see details.</p>`;
-
-        await sendEmail({
-          to: user.email,
-          subject: `You have ${group._count.id} unread notifications`,
-          html,
-        });
-        digestsSent++;
-      }
-      app.log.info({ digestsSent }, 'Daily notification digest complete');
-    } catch (err) {
-      app.log.error({ err }, 'Daily notification digest failed');
-    }
-  });
+  // Daily notification digest ("You have N unread notifications" email) —
+  // DISABLED per request. These digest emails are no longer sent. The in-app
+  // notifications are unaffected; only the daily summary email is turned off.
+  // To re-enable, restore the cron.schedule('0 8 * * *', ...) block from history.
 } catch (err) {
   app.log.error(err);
   process.exit(1);

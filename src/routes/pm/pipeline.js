@@ -424,4 +424,92 @@ export async function pmPipelineRoutes(app) {
       }
     }
   );
+
+  // POST /api/pm/pipeline/:projectId/:wpPipelineId/content-type
+  // Change a review's content type standalone (no resubmit). Round-trips to
+  // WordPress (single source of truth); WP fires the pipeline_content_type_changed
+  // webhook which creates the timeline event, so we only optimistically mirror
+  // the contentType locally here for immediacy.
+  app.post(
+    '/pipeline/:projectId/:wpPipelineId/content-type',
+    { onRequest: [app.verifyJwt, requirePmOrOwner] },
+    async (request, reply) => {
+      try {
+        const { projectId, wpPipelineId } = request.params;
+        const contentType = String(request.body?.contentType || '').trim();
+        if (!contentType) {
+          return reply.status(400).send({ message: 'contentType is required' });
+        }
+
+        const project = await prisma.project.findUnique({
+          where: { id: projectId },
+          select: { wpUrl: true, wpApiKey: true, leadPmId: true },
+        });
+        if (!project || !project.wpUrl || !project.wpApiKey) {
+          return reply.status(404).send({ message: 'Project not found or no WP config' });
+        }
+
+        // Access check
+        if (request.user.role === 'PM' && project.leadPmId !== request.user.id) {
+          return reply.status(403).send({ message: 'Access denied' });
+        }
+
+        // Guard: only allow while the review is active (not published/cancelled).
+        const pipelineId = Number(wpPipelineId);
+        const existing = await prisma.wpContentReview.findUnique({
+          where: { projectId_wpPipelineId: { projectId, wpPipelineId: pipelineId } },
+          select: { id: true, isPublished: true, status: true },
+        });
+        if (existing && (existing.isPublished || existing.status === 'cancelled')) {
+          return reply.status(400).send({ message: 'Content type can only be changed while the review is active.' });
+        }
+
+        const baseUrl = project.wpUrl.replace(/\/$/, '');
+        const url = `${baseUrl}/wp-json/lwa/v1/pipeline/${wpPipelineId}/content-type`;
+
+        let res;
+        try {
+          res = await fetch(url, {
+            method: 'POST',
+            headers: {
+              ...wpHeaders(project.wpApiKey),
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ content_type: contentType, actor: request.user.name || '' }),
+            signal: AbortSignal.timeout(15000),
+          });
+        } catch (fetchErr) {
+          request.log.error({ err: fetchErr, url }, 'WP content-type fetch failed');
+          const isTimeout = fetchErr?.name === 'TimeoutError' || fetchErr?.name === 'AbortError';
+          return reply.status(502).send({
+            message: isTimeout
+              ? 'WordPress did not respond in time. Please try again.'
+              : 'Unable to reach WordPress site.',
+          });
+        }
+
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          return reply.status(res.status).send({ message: json.message || 'WP API error' });
+        }
+
+        // Optimistically mirror the new type locally (the webhook adds the event).
+        if (existing) {
+          try {
+            await prisma.wpContentReview.update({
+              where: { id: existing.id },
+              data: { contentType },
+            });
+          } catch (dbErr) {
+            request.log.error({ err: dbErr }, 'Local content-type update failed');
+          }
+        }
+
+        return reply.send(json);
+      } catch (err) {
+        request.log.error(err);
+        return reply.status(500).send({ message: 'Failed to change content type' });
+      }
+    }
+  );
 }
