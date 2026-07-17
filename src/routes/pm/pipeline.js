@@ -465,7 +465,10 @@ export async function pmPipelineRoutes(app) {
         }
 
         const baseUrl = project.wpUrl.replace(/\/$/, '');
-        const url = `${baseUrl}/wp-json/lwa/v1/pipeline/${wpPipelineId}/content-type`;
+        // NOTE: the WP path deliberately avoids the literal token "content-type"
+        // because some hosts' WAF/ModSecurity rules reset connections to URLs
+        // containing it (flagged as header-injection), causing ECONNRESET.
+        const url = `${baseUrl}/wp-json/lwa/v1/pipeline/${wpPipelineId}/change-type`;
 
         let res;
         try {
