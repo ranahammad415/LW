@@ -11,6 +11,8 @@ import {
   getGscAuth,
   isAgencyGoogleOAuthConfigured,
 } from '../../lib/analytics/googleAuth.js';
+import { runGscSync } from '../../lib/gscSync.js';
+import { runNativeAnalyticsSync } from '../../lib/analytics/runNativeSync.js';
 
 const accessSecret = process.env.JWT_ACCESS_SECRET;
 const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
@@ -101,6 +103,25 @@ export async function adminIntegrationsRoutes(app) {
     async (_request, reply) => {
       await disconnectAgencyConnection();
       return reply.send({ success: true });
+    }
+  );
+
+  // ── Trigger analytics sync on demand ───────────────────────────────────
+  // Runs GSC + GA4/GMB/DataForSEO syncs immediately (instead of waiting for the
+  // nightly cron) and returns per-project results so API errors surface.
+  app.post(
+    '/integrations/sync',
+    { onRequest: [app.verifyJwt, requireOwner] },
+    async (request, reply) => {
+      let gsc;
+      try {
+        gsc = await runGscSync();
+      } catch (err) {
+        request.log.error({ err }, 'Manual GSC sync failed');
+        gsc = { error: err.message };
+      }
+      const native = await runNativeAnalyticsSync(request.log);
+      return reply.send({ gsc, ...native });
     }
   );
 
