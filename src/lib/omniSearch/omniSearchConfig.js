@@ -23,6 +23,14 @@ export const KEYWORD_DATA_PROVIDER = (process.env.KEYWORD_DATA_PROVIDER || 'none
 // Allowed values: 'dataforseo' | 'majestic' | 'ahrefs' | 'none'
 export const BACKLINK_PROVIDER = (process.env.BACKLINK_PROVIDER || 'none').toLowerCase();
 
+// ─── Business Profile (GMB) data provider selection ─────────────────────────
+// Allowed values: 'google' | 'dataforseo' | 'auto' (default)
+// 'auto' picks per-project: native Google when a location is bound and works,
+// DataForSEO when only a manual identifier (gmbCid) is bound.
+export const BUSINESS_DATA_PROVIDER = (
+  process.env.BUSINESS_DATA_PROVIDER || 'auto'
+).toLowerCase();
+
 // ─── Helper: which dataSource label to stamp when falling back to Claude ────
 export const CLAUDE_ESTIMATED_SOURCE = 'claude_estimated';
 export const SIMULATED_GEO_SOURCE = 'simulated';
@@ -50,6 +58,10 @@ export function hasRealBacklinkProvider() {
   if (BACKLINK_PROVIDER === 'majestic') return Boolean(process.env.MAJESTIC_API_KEY);
   if (BACKLINK_PROVIDER === 'ahrefs') return Boolean(process.env.AHREFS_API_KEY);
   return false;
+}
+
+export function hasRealBusinessDataProvider() {
+  return Boolean(process.env.DATAFORSEO_LOGIN && process.env.DATAFORSEO_PASSWORD);
 }
 
 export function hasRealAiQueryProvider(platform) {

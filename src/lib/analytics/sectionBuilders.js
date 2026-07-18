@@ -31,6 +31,7 @@ async function clientProjects(clientId) {
       gscSiteUrl: true,
       ga4PropertyId: true,
       gmbLocationId: true,
+      gmbCid: true,
       dataforseoDomain: true,
       client: { select: { agencyName: true, websiteUrl: true } },
     },
@@ -50,7 +51,7 @@ async function resolveAnalyticsContext(clientIds, query) {
   const links = {
     gsc: projects.some((p) => !!p.gscSiteUrl),
     ga4: projects.some((p) => !!p.ga4PropertyId),
-    gmb: projects.some((p) => !!p.gmbLocationId),
+    gmb: projects.some((p) => !!p.gmbLocationId || !!p.gmbCid),
     seo: projects.some((p) => !!p.dataforseoDomain),
   };
   const range = cycleRange(cycle);

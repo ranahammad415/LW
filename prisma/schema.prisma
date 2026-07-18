@@ -444,6 +444,7 @@ model Project {
   gmbAccountId       String?       @db.VarChar(100)
   gmbLocationId      String?       @db.VarChar(200)
   gmbLocationName    String?       @db.VarChar(255)
+  gmbCid             String?       @db.VarChar(200)
   gmbLastSyncedAt    DateTime?
   dataforseoDomain   String?       @db.VarChar(255)
   createdAt          DateTime      @default(now())

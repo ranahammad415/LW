@@ -25,6 +25,16 @@ function domainFromUrl(url) {
     .split('/')[0];
 }
 
+// Turn a raw Google Business Profile API error into an actionable hint. A quota
+// of 0 (429 / RESOURCE_EXHAUSTED) is the common cause of an empty locations list.
+function quotaHint(message) {
+  const msg = message || 'Failed to list GMB locations';
+  if (/quota|429|RESOURCE_EXHAUSTED|rate limit/i.test(msg)) {
+    return 'Business Profile API quota is 0 (pending Google approval). Bind the business manually below; data is pulled via DataForSEO meanwhile.';
+  }
+  return msg;
+}
+
 export async function adminIntegrationsRoutes(app) {
   const requireOwner = app.requireOwner;
 
@@ -170,6 +180,8 @@ export async function adminIntegrationsRoutes(app) {
 
         // Business Information API for locations
         const bizInfo = google.mybusinessbusinessinformation({ version: 'v1', auth });
+        let lastError = null;
+        let failedAccounts = 0;
         for (const account of accounts) {
           const accountName = account.name; // accounts/123
           try {
@@ -192,13 +204,23 @@ export async function adminIntegrationsRoutes(app) {
               });
             }
           } catch (err) {
+            failedAccounts += 1;
+            lastError = err.message;
             request.log.warn({ err: err.message, accountName }, 'GMB locations list partial failure');
           }
         }
-        return reply.send({ locations });
+
+        // If accounts exist but every listing failed (typically the Business
+        // Profile API quota being 0), surface the reason instead of a silent
+        // empty list so the UI can explain it.
+        let warning = null;
+        if (locations.length === 0 && accounts.length > 0 && failedAccounts > 0) {
+          warning = quotaHint(lastError);
+        }
+        return reply.send({ locations, warning });
       } catch (err) {
         request.log.error({ err }, 'List GMB locations failed');
-        return reply.status(502).send({ message: err.message || 'Failed to list GMB locations' });
+        return reply.status(502).send({ message: quotaHint(err.message) });
       }
     }
   );
@@ -223,6 +245,7 @@ export async function adminIntegrationsRoutes(app) {
           gmbAccountId: true,
           gmbLocationId: true,
           gmbLocationName: true,
+          gmbCid: true,
           gmbLastSyncedAt: true,
           dataforseoDomain: true,
           client: { select: { agencyName: true, websiteUrl: true } },
@@ -260,6 +283,12 @@ export async function adminIntegrationsRoutes(app) {
         data.gmbAccountId = body.gmbAccountId || null;
         data.gmbLocationName = body.gmbLocationName || null;
       }
+      if (body.gmbCid !== undefined) {
+        data.gmbCid = body.gmbCid ? String(body.gmbCid).trim().slice(0, 200) : null;
+        if (body.gmbLocationName !== undefined) {
+          data.gmbLocationName = body.gmbLocationName || null;
+        }
+      }
       if (body.dataforseoDomain !== undefined) {
         data.dataforseoDomain = body.dataforseoDomain
           ? domainFromUrl(body.dataforseoDomain)
@@ -278,6 +307,7 @@ export async function adminIntegrationsRoutes(app) {
           gmbAccountId: true,
           gmbLocationId: true,
           gmbLocationName: true,
+          gmbCid: true,
           dataforseoDomain: true,
         },
       });
@@ -301,6 +331,7 @@ export async function adminIntegrationsRoutes(app) {
           ga4PropertyName: true,
           gmbLocationId: true,
           gmbLocationName: true,
+          gmbCid: true,
           dataforseoDomain: true,
           gscLastSyncedAt: true,
           ga4LastSyncedAt: true,
