@@ -16,6 +16,41 @@ function cycleRange(cycle) {
   return { start, end };
 }
 
+/** First/last day (UTC) of the calendar month before a cycle. */
+function previousCycleRange(cycle) {
+  const start = new Date(Date.UTC(cycle.year, cycle.month - 2, 1));
+  const end = new Date(Date.UTC(cycle.year, cycle.month - 1, 0));
+  return { start, end };
+}
+
+/** Percentage change; null when there is no comparable prior value. */
+function pctDelta(curr, prev) {
+  if (prev == null) return null;
+  if (prev === 0) return curr === 0 ? 0 : 100;
+  return Number((((curr - prev) / prev) * 100).toFixed(1));
+}
+
+/** Aggregate GSC query rows into a query -> impression-weighted position map. */
+function queryPositions(rows) {
+  const byQuery = new Map();
+  for (const r of rows) {
+    const acc = byQuery.get(r.query) || { impressions: 0, clicks: 0, posWeight: 0 };
+    acc.impressions += r.impressions;
+    acc.clicks += r.clicks;
+    acc.posWeight += r.position * (r.impressions || 1);
+    byQuery.set(r.query, acc);
+  }
+  const out = new Map();
+  for (const [q, v] of byQuery) {
+    out.set(q, {
+      position: v.impressions > 0 ? Number((v.posWeight / v.impressions).toFixed(1)) : 0,
+      impressions: v.impressions,
+      clicks: v.clicks,
+    });
+  }
+  return out;
+}
+
 /**
  * Gather the analytics figures worth freezing (or serving live) for one
  * client/cycle. Exported so the live analytics endpoint can reuse the exact
@@ -23,9 +58,20 @@ function cycleRange(cycle) {
  */
 export async function buildClientAnalytics(clientId, cycle) {
   const { start, end } = cycleRange(cycle);
+  const prev = previousCycleRange(cycle);
 
   // GSC daily traffic for the cycle month (aggregated across projects).
   const traffic = await getClientTrafficSeries(clientId, { start, end });
+  const prevTraffic = await getClientTrafficSeries(clientId, { start: prev.start, end: prev.end });
+  const hasPrevTraffic = (prevTraffic.series || []).length > 0;
+  const trafficDeltas = hasPrevTraffic
+    ? {
+        clicks: pctDelta(traffic.totals.clicks, prevTraffic.totals.clicks),
+        impressions: pctDelta(traffic.totals.impressions, prevTraffic.totals.impressions),
+        ctr: pctDelta(traffic.totals.ctr, prevTraffic.totals.ctr),
+        position: pctDelta(traffic.totals.position, prevTraffic.totals.position),
+      }
+    : null;
 
   // Latest KPI metric snapshots for the client.
   const metricSnapshots = await prisma.clientMetricSnapshot.findMany({
@@ -71,7 +117,7 @@ export async function buildClientAnalytics(clientId, cycle) {
   };
 
   // AI-search visibility ("AI chat results") for the cycle month.
-  const [promptsTested, cited, platformRows] = await Promise.all([
+  const [promptsTested, cited, platformRows, prevTested, prevCited] = await Promise.all([
     prisma.promptLog.count({ where: { project: { clientId }, createdAt: { gte: start, lte: end } } }),
     prisma.promptLog.count({ where: { project: { clientId }, createdAt: { gte: start, lte: end }, cited: true } }),
     prisma.promptLog.findMany({
@@ -79,38 +125,68 @@ export async function buildClientAnalytics(clientId, cycle) {
       select: { platform: true },
       take: 500,
     }),
+    prisma.promptLog.count({ where: { project: { clientId }, createdAt: { gte: prev.start, lte: prev.end } } }),
+    prisma.promptLog.count({
+      where: { project: { clientId }, createdAt: { gte: prev.start, lte: prev.end }, cited: true },
+    }),
   ]);
+  const citationRate = promptsTested > 0 ? Math.round((cited / promptsTested) * 100) : 0;
+  const prevCitationRate = prevTested > 0 ? Math.round((prevCited / prevTested) * 100) : 0;
   const aiVisibility = {
     promptsTested,
     cited,
-    citationRate: promptsTested > 0 ? Math.round((cited / promptsTested) * 100) : 0,
+    citationRate,
+    citationRateDelta: prevTested > 0 ? pctDelta(citationRate, prevCitationRate) : null,
     platforms: [...new Set(platformRows.map((p) => p.platform).filter(Boolean))],
   };
 
-  // GA4 + GMB rollups for the cycle month
-  const ga4Rows = projectIds.length
-    ? await prisma.ga4DailyMetric.findMany({
-        where: { projectId: { in: projectIds }, date: { gte: start, lte: end } },
-      })
-    : [];
+  // GA4 + GMB rollups for the cycle month (with previous month for deltas)
+  const [ga4Rows, prevGa4Rows, gmbRows, prevGmbRows] = await Promise.all([
+    projectIds.length
+      ? prisma.ga4DailyMetric.findMany({ where: { projectId: { in: projectIds }, date: { gte: start, lte: end } } })
+      : [],
+    projectIds.length
+      ? prisma.ga4DailyMetric.findMany({
+          where: { projectId: { in: projectIds }, date: { gte: prev.start, lte: prev.end } },
+        })
+      : [],
+    projectIds.length
+      ? prisma.gmbDailyMetric.findMany({ where: { projectId: { in: projectIds }, date: { gte: start, lte: end } } })
+      : [],
+    projectIds.length
+      ? prisma.gmbDailyMetric.findMany({
+          where: { projectId: { in: projectIds }, date: { gte: prev.start, lte: prev.end } },
+        })
+      : [],
+  ]);
+  const sumRows = (rows, f) => rows.reduce((s, r) => s + (r[f] || 0), 0);
+  const hasPrevGa4 = prevGa4Rows.length > 0;
   const ga4 = {
-    sessions: ga4Rows.reduce((s, r) => s + r.sessions, 0),
-    users: ga4Rows.reduce((s, r) => s + r.totalUsers, 0),
-    conversions: ga4Rows.reduce((s, r) => s + r.conversions, 0),
-    pageViews: ga4Rows.reduce((s, r) => s + r.pageViews, 0),
+    sessions: sumRows(ga4Rows, 'sessions'),
+    users: sumRows(ga4Rows, 'totalUsers'),
+    conversions: sumRows(ga4Rows, 'conversions'),
+    pageViews: sumRows(ga4Rows, 'pageViews'),
     series: aggregateByDate(ga4Rows, ['sessions', 'totalUsers', 'conversions', 'pageViews']),
+    deltas: hasPrevGa4
+      ? {
+          sessions: pctDelta(sumRows(ga4Rows, 'sessions'), sumRows(prevGa4Rows, 'sessions')),
+          users: pctDelta(sumRows(ga4Rows, 'totalUsers'), sumRows(prevGa4Rows, 'totalUsers')),
+          conversions: pctDelta(sumRows(ga4Rows, 'conversions'), sumRows(prevGa4Rows, 'conversions')),
+          pageViews: pctDelta(sumRows(ga4Rows, 'pageViews'), sumRows(prevGa4Rows, 'pageViews')),
+        }
+      : null,
   };
 
-  const gmbRows = projectIds.length
-    ? await prisma.gmbDailyMetric.findMany({
-        where: { projectId: { in: projectIds }, date: { gte: start, lte: end } },
-      })
-    : [];
+  const hasPrevGmb = prevGmbRows.length > 0;
+  const gmbActions = sumRows(gmbRows, 'websiteClicks') + sumRows(gmbRows, 'directions') + sumRows(gmbRows, 'calls');
+  const prevGmbActions =
+    sumRows(prevGmbRows, 'websiteClicks') + sumRows(prevGmbRows, 'directions') + sumRows(prevGmbRows, 'calls');
   const gmb = {
-    impressions: gmbRows.reduce((s, r) => s + r.impressions, 0),
-    directions: gmbRows.reduce((s, r) => s + r.directions, 0),
-    websiteClicks: gmbRows.reduce((s, r) => s + r.websiteClicks, 0),
-    calls: gmbRows.reduce((s, r) => s + r.calls, 0),
+    impressions: sumRows(gmbRows, 'impressions'),
+    directions: sumRows(gmbRows, 'directions'),
+    websiteClicks: sumRows(gmbRows, 'websiteClicks'),
+    calls: sumRows(gmbRows, 'calls'),
+    actions: gmbActions,
     series: aggregateByDate(gmbRows, [
       'impressions',
       'impressionsSearch',
@@ -119,6 +195,58 @@ export async function buildClientAnalytics(clientId, cycle) {
       'directions',
       'calls',
     ]),
+    deltas: hasPrevGmb
+      ? {
+          impressions: pctDelta(sumRows(gmbRows, 'impressions'), sumRows(prevGmbRows, 'impressions')),
+          actions: pctDelta(gmbActions, prevGmbActions),
+        }
+      : null,
+  };
+
+  // Rank movers: compare impression-weighted query positions vs previous month.
+  const [qCurr, qPrev] = projectIds.length
+    ? await Promise.all([
+        prisma.gscQueryMetric.findMany({
+          where: { projectId: { in: projectIds }, date: { gte: start, lte: end } },
+          orderBy: { impressions: 'desc' },
+          take: 1000,
+        }),
+        prisma.gscQueryMetric.findMany({
+          where: { projectId: { in: projectIds }, date: { gte: prev.start, lte: prev.end } },
+          orderBy: { impressions: 'desc' },
+          take: 1000,
+        }),
+      ])
+    : [[], []];
+  const posCurr = queryPositions(qCurr);
+  const posPrev = queryPositions(qPrev);
+  const moverRows = [];
+  for (const [query, cur] of posCurr) {
+    const before = posPrev.get(query);
+    if (!before || !before.position || !cur.position) continue;
+    moverRows.push({
+      query,
+      from: before.position,
+      to: cur.position,
+      change: Number((before.position - cur.position).toFixed(1)), // >0 means improved (moved up)
+      impressions: cur.impressions,
+    });
+  }
+  const improved = moverRows
+    .filter((m) => m.change > 0)
+    .sort((a, b) => b.change - a.change)
+    .slice(0, 5);
+  const declined = moverRows
+    .filter((m) => m.change < 0)
+    .sort((a, b) => a.change - b.change)
+    .slice(0, 5);
+  const movers = { improved, declined };
+
+  const funnel = {
+    impressions: traffic.totals.impressions,
+    clicks: traffic.totals.clicks,
+    sessions: ga4.sessions,
+    conversions: ga4.conversions,
   };
 
   const links = await prisma.project.findMany({
@@ -136,7 +264,9 @@ export async function buildClientAnalytics(clientId, cycle) {
     frozenAt: new Date().toISOString(),
     cycle: { month: cycle.month, year: cycle.year },
     range: { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) },
-    traffic: { series: traffic.series, totals: traffic.totals },
+    traffic: { series: traffic.series, totals: traffic.totals, deltas: trafficDeltas },
+    funnel,
+    movers,
     metrics: Object.fromEntries(latestByType),
     rankings: rankingSummary,
     aiVisibility,

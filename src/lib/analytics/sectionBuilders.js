@@ -17,6 +17,82 @@ function pctDelta(curr, prev) {
   return Number((((curr - prev) / prev) * 100).toFixed(1));
 }
 
+/** First/last day (UTC) of the calendar month before a cycle. */
+function previousCycleRange(cycle) {
+  const start = new Date(Date.UTC(cycle.year, cycle.month - 2, 1));
+  const end = new Date(Date.UTC(cycle.year, cycle.month - 1, 0));
+  return { start, end };
+}
+
+/**
+ * Merge a previous-period series into the current one by day-of-month index,
+ * adding `<key>Prev` fields so charts can overlay the prior period. Returns a
+ * new array; leaves rows untouched where no matching previous day exists.
+ */
+function attachPrevSeries(series, prevSeries, keys) {
+  const prevByDom = new Map();
+  for (const r of prevSeries) {
+    const dom = Number(String(r.date).slice(8, 10));
+    if (!Number.isNaN(dom)) prevByDom.set(dom, r);
+  }
+  return series.map((r) => {
+    const dom = Number(String(r.date).slice(8, 10));
+    const prev = prevByDom.get(dom);
+    if (!prev) return { ...r };
+    const out = { ...r };
+    for (const k of keys) out[`${k}Prev`] = prev[k] ?? 0;
+    return out;
+  });
+}
+
+/** Roll GA4 daily rows up into a per-day series + period totals. */
+function aggregateGa4Rows(rows) {
+  const seriesMap = new Map();
+  for (const r of rows) {
+    const key = r.date.toISOString().slice(0, 10);
+    const acc = seriesMap.get(key) || {
+      date: key,
+      sessions: 0,
+      totalUsers: 0,
+      conversions: 0,
+      pageViews: 0,
+      bounceRate: 0,
+      avgEngagementSec: 0,
+      _n: 0,
+    };
+    acc.sessions += r.sessions;
+    acc.totalUsers += r.totalUsers;
+    acc.conversions += r.conversions;
+    acc.pageViews += r.pageViews;
+    acc.bounceRate += r.bounceRate;
+    acc.avgEngagementSec += r.avgEngagementSec;
+    acc._n += 1;
+    seriesMap.set(key, acc);
+  }
+  const series = [...seriesMap.values()].map((r) => ({
+    date: r.date,
+    sessions: r.sessions,
+    totalUsers: r.totalUsers,
+    conversions: r.conversions,
+    pageViews: r.pageViews,
+    bounceRate: r._n ? Number((r.bounceRate / r._n).toFixed(2)) : 0,
+    avgEngagementSec: r._n ? Number((r.avgEngagementSec / r._n).toFixed(1)) : 0,
+  }));
+  const totals = series.reduce(
+    (a, r) => ({
+      sessions: a.sessions + r.sessions,
+      users: a.users + r.totalUsers,
+      conversions: a.conversions + r.conversions,
+      pageViews: a.pageViews + r.pageViews,
+    }),
+    { sessions: 0, users: 0, conversions: 0, pageViews: 0 }
+  );
+  const bounceRate = series.length
+    ? Number((series.reduce((s, r) => s + r.bounceRate, 0) / series.length).toFixed(2))
+    : 0;
+  return { series, totals, bounceRate };
+}
+
 function isBrandQuery(query, brandTokens) {
   const q = String(query || '').toLowerCase();
   return brandTokens.some((t) => t && q.includes(t));
@@ -251,52 +327,33 @@ export async function buildGa4View(clientIds, view, query) {
   }
 
   const { start, end } = ctx.range;
-  const rows = await prisma.ga4DailyMetric.findMany({
-    where: { projectId: { in: ctx.projectIds }, date: { gte: start, lte: end } },
-    orderBy: { date: 'asc' },
-  });
-
-  const seriesMap = new Map();
-  for (const r of rows) {
-    const key = r.date.toISOString().slice(0, 10);
-    const acc = seriesMap.get(key) || {
-      date: key,
-      sessions: 0,
-      totalUsers: 0,
-      conversions: 0,
-      pageViews: 0,
-      bounceRate: 0,
-      avgEngagementSec: 0,
-      _n: 0,
-    };
-    acc.sessions += r.sessions;
-    acc.totalUsers += r.totalUsers;
-    acc.conversions += r.conversions;
-    acc.pageViews += r.pageViews;
-    acc.bounceRate += r.bounceRate;
-    acc.avgEngagementSec += r.avgEngagementSec;
-    acc._n += 1;
-    seriesMap.set(key, acc);
-  }
-  const series = [...seriesMap.values()].map((r) => ({
-    date: r.date,
-    sessions: r.sessions,
-    totalUsers: r.totalUsers,
-    conversions: r.conversions,
-    pageViews: r.pageViews,
-    bounceRate: r._n ? Number((r.bounceRate / r._n).toFixed(2)) : 0,
-    avgEngagementSec: r._n ? Number((r.avgEngagementSec / r._n).toFixed(1)) : 0,
-  }));
-
-  const totals = series.reduce(
-    (a, r) => ({
-      sessions: a.sessions + r.sessions,
-      users: a.users + r.totalUsers,
-      conversions: a.conversions + r.conversions,
-      pageViews: a.pageViews + r.pageViews,
+  const prevRange = previousCycleRange(ctx.cycle);
+  const [rows, prevRows] = await Promise.all([
+    prisma.ga4DailyMetric.findMany({
+      where: { projectId: { in: ctx.projectIds }, date: { gte: start, lte: end } },
+      orderBy: { date: 'asc' },
     }),
-    { sessions: 0, users: 0, conversions: 0, pageViews: 0 }
-  );
+    prisma.ga4DailyMetric.findMany({
+      where: { projectId: { in: ctx.projectIds }, date: { gte: prevRange.start, lte: prevRange.end } },
+      orderBy: { date: 'asc' },
+    }),
+  ]);
+
+  const curr = aggregateGa4Rows(rows);
+  const prevAgg = aggregateGa4Rows(prevRows);
+  const hasPrev = prevRows.length > 0;
+  const series = attachPrevSeries(curr.series, prevAgg.series, [
+    'sessions',
+    'totalUsers',
+    'conversions',
+    'pageViews',
+  ]);
+  const totals = curr.totals;
+  const conversionRate = totals.sessions > 0 ? Number(((totals.conversions / totals.sessions) * 100).toFixed(2)) : 0;
+  const prevConversionRate =
+    prevAgg.totals.sessions > 0
+      ? Number(((prevAgg.totals.conversions / prevAgg.totals.sessions) * 100).toFixed(2))
+      : 0;
 
   // Latest breakdowns from most recent row that has them
   let breakdowns = {};
@@ -310,10 +367,14 @@ export async function buildGa4View(clientIds, view, query) {
   const data = {
     kpis: {
       ...totals,
-      bounceRate: series.length
-        ? Number((series.reduce((s, r) => s + r.bounceRate, 0) / series.length).toFixed(2))
-        : 0,
-      conversionRate: totals.sessions > 0 ? Number(((totals.conversions / totals.sessions) * 100).toFixed(2)) : 0,
+      bounceRate: curr.bounceRate,
+      conversionRate,
+      sessionsDelta: hasPrev ? pctDelta(totals.sessions, prevAgg.totals.sessions) : null,
+      usersDelta: hasPrev ? pctDelta(totals.users, prevAgg.totals.users) : null,
+      conversionsDelta: hasPrev ? pctDelta(totals.conversions, prevAgg.totals.conversions) : null,
+      pageViewsDelta: hasPrev ? pctDelta(totals.pageViews, prevAgg.totals.pageViews) : null,
+      bounceRateDelta: hasPrev ? pctDelta(curr.bounceRate, prevAgg.bounceRate) : null,
+      conversionRateDelta: hasPrev ? pctDelta(conversionRate, prevConversionRate) : null,
     },
     series,
     channels: breakdowns.channels || [],
@@ -359,32 +420,52 @@ export async function buildGmbView(clientIds, view, query) {
   }
 
   const { start, end } = ctx.range;
-  const rows = await prisma.gmbDailyMetric.findMany({
-    where: { projectId: { in: ctx.projectIds }, date: { gte: start, lte: end } },
-    orderBy: { date: 'asc' },
-  });
-  const seriesMap = new Map();
-  for (const r of rows) {
-    const key = r.date.toISOString().slice(0, 10);
-    const acc = seriesMap.get(key) || {
-      date: key,
-      impressions: 0,
-      impressionsSearch: 0,
-      impressionsMaps: 0,
-      websiteClicks: 0,
-      directions: 0,
-      calls: 0,
-    };
-    acc.impressions += r.impressions;
-    acc.impressionsSearch += r.impressionsSearch;
-    acc.impressionsMaps += r.impressionsMaps;
-    acc.websiteClicks += r.websiteClicks;
-    acc.directions += r.directions;
-    acc.calls += r.calls;
-    seriesMap.set(key, acc);
-  }
-  const series = [...seriesMap.values()];
+  const prevRange = previousCycleRange(ctx.cycle);
+  const [rows, prevRows] = await Promise.all([
+    prisma.gmbDailyMetric.findMany({
+      where: { projectId: { in: ctx.projectIds }, date: { gte: start, lte: end } },
+      orderBy: { date: 'asc' },
+    }),
+    prisma.gmbDailyMetric.findMany({
+      where: { projectId: { in: ctx.projectIds }, date: { gte: prevRange.start, lte: prevRange.end } },
+      orderBy: { date: 'asc' },
+    }),
+  ]);
+  const aggregateGmb = (rs) => {
+    const seriesMap = new Map();
+    for (const r of rs) {
+      const key = r.date.toISOString().slice(0, 10);
+      const acc = seriesMap.get(key) || {
+        date: key,
+        impressions: 0,
+        impressionsSearch: 0,
+        impressionsMaps: 0,
+        websiteClicks: 0,
+        directions: 0,
+        calls: 0,
+      };
+      acc.impressions += r.impressions;
+      acc.impressionsSearch += r.impressionsSearch;
+      acc.impressionsMaps += r.impressionsMaps;
+      acc.websiteClicks += r.websiteClicks;
+      acc.directions += r.directions;
+      acc.calls += r.calls;
+      seriesMap.set(key, acc);
+    }
+    return [...seriesMap.values()];
+  };
+  const prevSeries = aggregateGmb(prevRows);
+  const series = attachPrevSeries(aggregateGmb(rows), prevSeries, [
+    'impressions',
+    'impressionsSearch',
+    'impressionsMaps',
+    'websiteClicks',
+    'directions',
+    'calls',
+  ]);
+  const hasPrev = prevRows.length > 0;
   const sum = (k) => series.reduce((s, r) => s + r[k], 0);
+  const prevSum = (k) => prevSeries.reduce((s, r) => s + r[k], 0);
 
   const reviews = await prisma.gmbReview.findMany({
     where: { projectId: { in: ctx.projectIds } },
@@ -415,6 +496,10 @@ export async function buildGmbView(clientIds, view, query) {
         sum('impressions') > 0
           ? Number(((sum('impressionsMaps') / sum('impressions')) * 100).toFixed(1))
           : 0,
+      impressionsDelta: hasPrev ? pctDelta(sum('impressions'), prevSum('impressions')) : null,
+      directionsDelta: hasPrev ? pctDelta(sum('directions'), prevSum('directions')) : null,
+      websiteClicksDelta: hasPrev ? pctDelta(sum('websiteClicks'), prevSum('websiteClicks')) : null,
+      callsDelta: hasPrev ? pctDelta(sum('calls'), prevSum('calls')) : null,
     },
     series,
     reviews: reviews.map((r) => ({
@@ -440,12 +525,25 @@ export async function buildGmbView(clientIds, view, query) {
               directions: r.directions,
               calls: r.calls,
               total: r.websiteClicks + r.directions + r.calls,
+              totalPrev:
+                r.websiteClicksPrev != null || r.directionsPrev != null || r.callsPrev != null
+                  ? (r.websiteClicksPrev || 0) + (r.directionsPrev || 0) + (r.callsPrev || 0)
+                  : undefined,
             })),
             kpis: {
               websiteClicks: data.kpis.websiteClicks,
               directions: data.kpis.directions,
               calls: data.kpis.calls,
               total: data.kpis.websiteClicks + data.kpis.directions + data.kpis.calls,
+              websiteClicksDelta: data.kpis.websiteClicksDelta,
+              directionsDelta: data.kpis.directionsDelta,
+              callsDelta: data.kpis.callsDelta,
+              totalDelta: hasPrev
+                ? pctDelta(
+                    data.kpis.websiteClicks + data.kpis.directions + data.kpis.calls,
+                    prevSum('websiteClicks') + prevSum('directions') + prevSum('calls')
+                  )
+                : null,
             },
           }
         : { series: data.series, kpis: data.kpis };
@@ -500,7 +598,8 @@ export async function buildLlmView(clientIds, view, query) {
   if (ctx.error) return ctx.error;
 
   const { start, end } = ctx.range;
-  const [promptsTested, cited, platformRows] = await Promise.all([
+  const prevRange = previousCycleRange(ctx.cycle);
+  const [promptsTested, cited, platformRows, prevTested, prevCited] = await Promise.all([
     prisma.promptLog.count({ where: { project: { clientId: ctx.clientId }, createdAt: { gte: start, lte: end } } }),
     prisma.promptLog.count({
       where: { project: { clientId: ctx.clientId }, createdAt: { gte: start, lte: end }, cited: true },
@@ -511,7 +610,19 @@ export async function buildLlmView(clientIds, view, query) {
       take: 300,
       orderBy: { createdAt: 'desc' },
     }),
+    prisma.promptLog.count({
+      where: { project: { clientId: ctx.clientId }, createdAt: { gte: prevRange.start, lte: prevRange.end } },
+    }),
+    prisma.promptLog.count({
+      where: {
+        project: { clientId: ctx.clientId },
+        createdAt: { gte: prevRange.start, lte: prevRange.end },
+        cited: true,
+      },
+    }),
   ]);
+  const hasPrevLlm = prevTested > 0;
+  const prevCitationRate = prevTested > 0 ? Math.round((prevCited / prevTested) * 100) : 0;
 
   // LLM referrers from latest GA4 breakdown if available
   let llmReferrers = [];
@@ -543,6 +654,11 @@ export async function buildLlmView(clientIds, view, query) {
       cited,
       citationRate: promptsTested > 0 ? Math.round((cited / promptsTested) * 100) : 0,
       referrers: llmReferrers.length,
+      promptsTestedDelta: hasPrevLlm ? pctDelta(promptsTested, prevTested) : null,
+      citedDelta: hasPrevLlm ? pctDelta(cited, prevCited) : null,
+      citationRateDelta: hasPrevLlm
+        ? pctDelta(promptsTested > 0 ? Math.round((cited / promptsTested) * 100) : 0, prevCitationRate)
+        : null,
     },
     platforms: Object.values(byPlatform),
     llmReferrers,
