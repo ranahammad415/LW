@@ -56,14 +56,18 @@ function queryPositions(rows) {
  * client/cycle. Exported so the live analytics endpoint can reuse the exact
  * same shape as a frozen snapshot.
  */
-export async function buildClientAnalytics(clientId, cycle) {
-  const { start, end } = cycleRange(cycle);
-  const prev = previousCycleRange(cycle);
+export async function buildClientAnalytics(clientId, cycle, opts = {}) {
+  const { start, end } = opts.range || cycleRange(cycle);
+  // `prevRange` may be explicitly null (compare disabled); only fall back to the
+  // prior calendar month when the caller did not specify a comparison window.
+  const prev = 'prevRange' in opts ? opts.prevRange : previousCycleRange(cycle);
 
-  // GSC daily traffic for the cycle month (aggregated across projects).
+  // GSC daily traffic for the period (aggregated across projects).
   const traffic = await getClientTrafficSeries(clientId, { start, end });
-  const prevTraffic = await getClientTrafficSeries(clientId, { start: prev.start, end: prev.end });
-  const hasPrevTraffic = (prevTraffic.series || []).length > 0;
+  const prevTraffic = prev
+    ? await getClientTrafficSeries(clientId, { start: prev.start, end: prev.end })
+    : null;
+  const hasPrevTraffic = !!prevTraffic && (prevTraffic.series || []).length > 0;
   const trafficDeltas = hasPrevTraffic
     ? {
         clicks: pctDelta(traffic.totals.clicks, prevTraffic.totals.clicks),
@@ -125,10 +129,14 @@ export async function buildClientAnalytics(clientId, cycle) {
       select: { platform: true },
       take: 500,
     }),
-    prisma.promptLog.count({ where: { project: { clientId }, createdAt: { gte: prev.start, lte: prev.end } } }),
-    prisma.promptLog.count({
-      where: { project: { clientId }, createdAt: { gte: prev.start, lte: prev.end }, cited: true },
-    }),
+    prev
+      ? prisma.promptLog.count({ where: { project: { clientId }, createdAt: { gte: prev.start, lte: prev.end } } })
+      : Promise.resolve(0),
+    prev
+      ? prisma.promptLog.count({
+          where: { project: { clientId }, createdAt: { gte: prev.start, lte: prev.end }, cited: true },
+        })
+      : Promise.resolve(0),
   ]);
   const citationRate = promptsTested > 0 ? Math.round((cited / promptsTested) * 100) : 0;
   const prevCitationRate = prevTested > 0 ? Math.round((prevCited / prevTested) * 100) : 0;
@@ -145,7 +153,7 @@ export async function buildClientAnalytics(clientId, cycle) {
     projectIds.length
       ? prisma.ga4DailyMetric.findMany({ where: { projectId: { in: projectIds }, date: { gte: start, lte: end } } })
       : [],
-    projectIds.length
+    prev && projectIds.length
       ? prisma.ga4DailyMetric.findMany({
           where: { projectId: { in: projectIds }, date: { gte: prev.start, lte: prev.end } },
         })
@@ -153,7 +161,7 @@ export async function buildClientAnalytics(clientId, cycle) {
     projectIds.length
       ? prisma.gmbDailyMetric.findMany({ where: { projectId: { in: projectIds }, date: { gte: start, lte: end } } })
       : [],
-    projectIds.length
+    prev && projectIds.length
       ? prisma.gmbDailyMetric.findMany({
           where: { projectId: { in: projectIds }, date: { gte: prev.start, lte: prev.end } },
         })
@@ -211,11 +219,13 @@ export async function buildClientAnalytics(clientId, cycle) {
           orderBy: { impressions: 'desc' },
           take: 1000,
         }),
-        prisma.gscQueryMetric.findMany({
-          where: { projectId: { in: projectIds }, date: { gte: prev.start, lte: prev.end } },
-          orderBy: { impressions: 'desc' },
-          take: 1000,
-        }),
+        prev
+          ? prisma.gscQueryMetric.findMany({
+              where: { projectId: { in: projectIds }, date: { gte: prev.start, lte: prev.end } },
+              orderBy: { impressions: 'desc' },
+              take: 1000,
+            })
+          : Promise.resolve([]),
       ])
     : [[], []];
   const posCurr = queryPositions(qCurr);

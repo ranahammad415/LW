@@ -9,6 +9,7 @@ import {
   buildSeoView,
   buildLlmView,
 } from '../../lib/analytics/sectionBuilders.js';
+import { generateAiHtmlReport } from '../../lib/analytics/aiHtmlReport/index.js';
 
 /**
  * OWNER-scoped native analytics. Mirrors the client-facing native section
@@ -130,6 +131,43 @@ export async function adminAnalyticsRoutes(app) {
       const { clientId, view } = request.params;
       if (!(await assertClientExists(clientId, reply))) return;
       return sendSection(reply, await buildLlmView([clientId], view, request.query));
+    }
+  );
+
+  /**
+   * Generate a downloadable AI HTML performance report for a client + period.
+   * Body: { start, end, compare? } — download only (no ProjectHtmlReport publish).
+   */
+  app.post(
+    '/analytics/:clientId/ai-html-report',
+    { onRequest: [app.verifyJwt, requireOwner] },
+    async (request, reply) => {
+      const { clientId } = request.params;
+      if (!(await assertClientExists(clientId, reply))) return;
+      const body = request.body || {};
+      const start = typeof body.start === 'string' ? body.start.slice(0, 10) : null;
+      const end = typeof body.end === 'string' ? body.end.slice(0, 10) : null;
+      const compare = body.compare !== false && body.compare !== '0' && body.compare !== 'false';
+
+      const result = await generateAiHtmlReport({
+        clientIds: [clientId],
+        start,
+        end,
+        compare,
+        userId: request.user?.id,
+      });
+      if (result.error) {
+        return reply.status(result.error.status || 500).send({
+          message: result.error.message,
+          emptyReason: result.error.emptyReason,
+        });
+      }
+      return reply.send({
+        html: result.html,
+        fileName: result.fileName,
+        range: result.range,
+        meta: result.meta,
+      });
     }
   );
 }

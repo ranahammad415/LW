@@ -24,6 +24,45 @@ function previousCycleRange(cycle) {
   return { start, end };
 }
 
+const MS_DAY = 86400000;
+
+/** Equal-length window immediately preceding [start, end] (GSC-style compare). */
+function previousWindow(start, end) {
+  const lengthDays = Math.round((end.getTime() - start.getTime()) / MS_DAY) + 1;
+  const prevEnd = new Date(start.getTime() - MS_DAY);
+  const prevStart = new Date(prevEnd.getTime() - (lengthDays - 1) * MS_DAY);
+  return { start: prevStart, end: prevEnd };
+}
+
+/** Parse a YYYY-MM-DD query param into a UTC Date, or null when invalid. */
+function parseRangeDate(value) {
+  if (!value || typeof value !== 'string') return null;
+  const d = new Date(`${value.slice(0, 10)}T00:00:00.000Z`);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** Human label for an explicit date range, e.g. "Jul 1 – Jul 18, 2026". */
+function humanRange(start, end) {
+  const fmt = (d) => d.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+  return `${fmt(start)} – ${fmt(end)}`;
+}
+
+/** Response `cycle` meta, overriding the label with the range label when set. */
+function metaCycle(ctx) {
+  const c = ctx.cycle;
+  return { id: c.id, month: c.month, year: c.year, label: ctx.rangeLabel ?? c.label, status: c.status };
+}
+
+/** Response `range` meta echoing the resolved window. */
+function metaRange(ctx) {
+  const toISO = (d) => (typeof d === 'string' ? d.slice(0, 10) : d.toISOString().slice(0, 10));
+  return {
+    start: toISO(ctx.range.start),
+    end: toISO(ctx.range.end),
+    label: ctx.rangeLabel ?? ctx.cycle?.label ?? null,
+  };
+}
+
 /**
  * Merge a previous-period series into the current one by day-of-month index,
  * adding `<key>Prev` fields so charts can overlay the prior period. Returns a
@@ -130,10 +169,33 @@ async function resolveAnalyticsContext(clientIds, query) {
     gmb: projects.some((p) => !!p.gmbLocationId || !!p.gmbCid),
     seo: projects.some((p) => !!p.dataforseoDomain),
   };
-  const range = cycleRange(cycle);
 
+  // Compare-to-previous is on unless explicitly disabled (?compare=0).
+  const compare = !(query?.compare === '0' || query?.compare === false || query?.compare === 'false');
+
+  // Explicit date range (GSC-style period selector) overrides the cycle month.
+  const rangeStart = parseRangeDate(query?.start);
+  const rangeEnd = parseRangeDate(query?.end);
+  let range;
+  let prevRange;
+  let rangeLabel = null;
+  let mode;
+  if (rangeStart && rangeEnd) {
+    const s = rangeStart <= rangeEnd ? rangeStart : rangeEnd;
+    const e = rangeStart <= rangeEnd ? rangeEnd : rangeStart;
+    range = { start: s, end: e };
+    prevRange = compare ? previousWindow(s, e) : null;
+    rangeLabel = humanRange(s, e);
+    mode = 'range';
+  } else {
+    range = cycleRange(cycle);
+    prevRange = compare ? previousCycleRange(cycle) : null;
+    mode = 'cycle';
+  }
+
+  // Frozen snapshots only apply in cycle mode for a CLOSED month.
   let frozen = null;
-  if (cycle.status === 'CLOSED') {
+  if (mode === 'cycle' && cycle.status === 'CLOSED') {
     const snap = await prisma.workCycleAnalyticsSnapshot.findUnique({
       where: { workCycleId_clientId: { workCycleId: cycle.id, clientId } },
     });
@@ -147,8 +209,13 @@ async function resolveAnalyticsContext(clientIds, query) {
     projectIds,
     links,
     range,
+    prevRange,
+    rangeLabel,
+    mode,
+    compare,
     frozen,
-    source: cycle.status === 'CLOSED' ? (frozen ? 'frozen' : 'computed') : 'live',
+    source:
+      mode === 'cycle' && cycle.status === 'CLOSED' ? (frozen ? 'frozen' : 'computed') : 'live',
   };
 }
 
@@ -167,14 +234,17 @@ function empty(linked, reason, cycle, source) {
 export async function buildOverview(clientIds, query) {
   const ctx = await resolveAnalyticsContext(clientIds, query);
   if (ctx.error) return ctx.error;
-  const data = ctx.frozen || (await buildClientAnalytics(ctx.clientId, ctx.cycle));
+  const data =
+    ctx.frozen ||
+    (await buildClientAnalytics(ctx.clientId, ctx.cycle, { range: ctx.range, prevRange: ctx.prevRange }));
   return {
     linked: !!(ctx.links.gsc || ctx.links.ga4 || ctx.links.gmb),
     emptyReason:
       ctx.links.gsc || ctx.links.ga4 || ctx.links.gmb
         ? null
         : 'Connect GSC, GA4, or Business Profile in Admin → Integrations',
-    cycle: { id: ctx.cycle.id, month: ctx.cycle.month, year: ctx.cycle.year, label: ctx.cycle.label, status: ctx.cycle.status },
+    cycle: metaCycle(ctx),
+    range: metaRange(ctx),
     source: ctx.source,
     data,
     links: ctx.links,
@@ -191,10 +261,10 @@ export async function buildGscView(clientIds, view, query) {
   const { start, end } = ctx.range;
   const traffic = await getClientTrafficSeries(ctx.clientId, { start, end });
 
-  // Previous month for deltas
-  const prevStart = new Date(Date.UTC(ctx.cycle.year, ctx.cycle.month - 2, 1));
-  const prevEnd = new Date(Date.UTC(ctx.cycle.year, ctx.cycle.month - 1, 0));
-  const prevTraffic = await getClientTrafficSeries(ctx.clientId, { start: prevStart, end: prevEnd });
+  // Previous comparable period for deltas (skipped when compare is off).
+  const prevTraffic = ctx.prevRange
+    ? await getClientTrafficSeries(ctx.clientId, { start: ctx.prevRange.start, end: ctx.prevRange.end })
+    : null;
 
   const brandTokens = [
     ...new Set(
@@ -262,7 +332,7 @@ export async function buildGscView(clientIds, view, query) {
   });
 
   const totals = traffic.totals;
-  const prev = prevTraffic.totals;
+  const prev = prevTraffic?.totals ?? null;
 
   const data = {
     kpis: {
@@ -271,10 +341,10 @@ export async function buildGscView(clientIds, view, query) {
       ctr: totals.ctr,
       position: totals.position,
       uniqueQueries: queries.length,
-      clicksDelta: pctDelta(totals.clicks, prev.clicks),
-      impressionsDelta: pctDelta(totals.impressions, prev.impressions),
-      ctrDelta: pctDelta(totals.ctr, prev.ctr),
-      positionDelta: pctDelta(totals.position, prev.position),
+      clicksDelta: prev ? pctDelta(totals.clicks, prev.clicks) : null,
+      impressionsDelta: prev ? pctDelta(totals.impressions, prev.impressions) : null,
+      ctrDelta: prev ? pctDelta(totals.ctr, prev.ctr) : null,
+      positionDelta: prev ? pctDelta(totals.position, prev.position) : null,
     },
     series: traffic.series,
     brandGeneric: {
@@ -313,7 +383,8 @@ export async function buildGscView(clientIds, view, query) {
   return {
     linked: true,
     emptyReason: null,
-    cycle: { id: ctx.cycle.id, month: ctx.cycle.month, year: ctx.cycle.year, label: ctx.cycle.label, status: ctx.cycle.status },
+    cycle: metaCycle(ctx),
+    range: metaRange(ctx),
     source: ctx.source,
     data: viewData,
   };
@@ -327,16 +398,18 @@ export async function buildGa4View(clientIds, view, query) {
   }
 
   const { start, end } = ctx.range;
-  const prevRange = previousCycleRange(ctx.cycle);
+  const prevRange = ctx.prevRange;
   const [rows, prevRows] = await Promise.all([
     prisma.ga4DailyMetric.findMany({
       where: { projectId: { in: ctx.projectIds }, date: { gte: start, lte: end } },
       orderBy: { date: 'asc' },
     }),
-    prisma.ga4DailyMetric.findMany({
-      where: { projectId: { in: ctx.projectIds }, date: { gte: prevRange.start, lte: prevRange.end } },
-      orderBy: { date: 'asc' },
-    }),
+    prevRange
+      ? prisma.ga4DailyMetric.findMany({
+          where: { projectId: { in: ctx.projectIds }, date: { gte: prevRange.start, lte: prevRange.end } },
+          orderBy: { date: 'asc' },
+        })
+      : Promise.resolve([]),
   ]);
 
   const curr = aggregateGa4Rows(rows);
@@ -406,7 +479,8 @@ export async function buildGa4View(clientIds, view, query) {
   return {
     linked: true,
     emptyReason: null,
-    cycle: { id: ctx.cycle.id, month: ctx.cycle.month, year: ctx.cycle.year, label: ctx.cycle.label, status: ctx.cycle.status },
+    cycle: metaCycle(ctx),
+    range: metaRange(ctx),
     source: ctx.source,
     data: viewData,
   };
@@ -420,16 +494,18 @@ export async function buildGmbView(clientIds, view, query) {
   }
 
   const { start, end } = ctx.range;
-  const prevRange = previousCycleRange(ctx.cycle);
+  const prevRange = ctx.prevRange;
   const [rows, prevRows] = await Promise.all([
     prisma.gmbDailyMetric.findMany({
       where: { projectId: { in: ctx.projectIds }, date: { gte: start, lte: end } },
       orderBy: { date: 'asc' },
     }),
-    prisma.gmbDailyMetric.findMany({
-      where: { projectId: { in: ctx.projectIds }, date: { gte: prevRange.start, lte: prevRange.end } },
-      orderBy: { date: 'asc' },
-    }),
+    prevRange
+      ? prisma.gmbDailyMetric.findMany({
+          where: { projectId: { in: ctx.projectIds }, date: { gte: prevRange.start, lte: prevRange.end } },
+          orderBy: { date: 'asc' },
+        })
+      : Promise.resolve([]),
   ]);
   const aggregateGmb = (rs) => {
     const seriesMap = new Map();
@@ -551,7 +627,8 @@ export async function buildGmbView(clientIds, view, query) {
   return {
     linked: true,
     emptyReason: null,
-    cycle: { id: ctx.cycle.id, month: ctx.cycle.month, year: ctx.cycle.year, label: ctx.cycle.label, status: ctx.cycle.status },
+    cycle: metaCycle(ctx),
+    range: metaRange(ctx),
     source: ctx.source,
     data: viewData,
   };
@@ -575,7 +652,8 @@ export async function buildSeoView(clientIds, _view, query) {
   return {
     linked: true,
     emptyReason: null,
-    cycle: { id: ctx.cycle.id, month: ctx.cycle.month, year: ctx.cycle.year, label: ctx.cycle.label, status: ctx.cycle.status },
+    cycle: metaCycle(ctx),
+    range: metaRange(ctx),
     source: ctx.source,
     data: {
       kpis: {
@@ -598,7 +676,7 @@ export async function buildLlmView(clientIds, view, query) {
   if (ctx.error) return ctx.error;
 
   const { start, end } = ctx.range;
-  const prevRange = previousCycleRange(ctx.cycle);
+  const prevRange = ctx.prevRange;
   const [promptsTested, cited, platformRows, prevTested, prevCited] = await Promise.all([
     prisma.promptLog.count({ where: { project: { clientId: ctx.clientId }, createdAt: { gte: start, lte: end } } }),
     prisma.promptLog.count({
@@ -610,18 +688,22 @@ export async function buildLlmView(clientIds, view, query) {
       take: 300,
       orderBy: { createdAt: 'desc' },
     }),
-    prisma.promptLog.count({
-      where: { project: { clientId: ctx.clientId }, createdAt: { gte: prevRange.start, lte: prevRange.end } },
-    }),
-    prisma.promptLog.count({
-      where: {
-        project: { clientId: ctx.clientId },
-        createdAt: { gte: prevRange.start, lte: prevRange.end },
-        cited: true,
-      },
-    }),
+    prevRange
+      ? prisma.promptLog.count({
+          where: { project: { clientId: ctx.clientId }, createdAt: { gte: prevRange.start, lte: prevRange.end } },
+        })
+      : Promise.resolve(0),
+    prevRange
+      ? prisma.promptLog.count({
+          where: {
+            project: { clientId: ctx.clientId },
+            createdAt: { gte: prevRange.start, lte: prevRange.end },
+            cited: true,
+          },
+        })
+      : Promise.resolve(0),
   ]);
-  const hasPrevLlm = prevTested > 0;
+  const hasPrevLlm = !!prevRange && prevTested > 0;
   const prevCitationRate = prevTested > 0 ? Math.round((prevCited / prevTested) * 100) : 0;
 
   // LLM referrers from latest GA4 breakdown if available
@@ -671,7 +753,8 @@ export async function buildLlmView(clientIds, view, query) {
       promptsTested === 0 && llmReferrers.length === 0
         ? 'No AI visibility or LLM referrer data for this session yet'
         : null,
-    cycle: { id: ctx.cycle.id, month: ctx.cycle.month, year: ctx.cycle.year, label: ctx.cycle.label, status: ctx.cycle.status },
+    cycle: metaCycle(ctx),
+    range: metaRange(ctx),
     source: ctx.source,
     data: view === 'referrers' ? { llmReferrers, kpis: data.kpis } : data,
   };

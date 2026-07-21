@@ -9,6 +9,7 @@ import {
   buildSeoView,
   buildLlmView,
 } from '../../lib/analytics/sectionBuilders.js';
+import { generateAiHtmlReport } from '../../lib/analytics/aiHtmlReport/index.js';
 
 const MOCK_LOOKER_EMBEDS = [
   { id: 'mock-1', label: 'SEO Dashboard', url: 'https://lookerstudio.google.com/embed/reporting/placeholder', sortOrder: 0 },
@@ -199,4 +200,43 @@ export async function clientAnalyticsRoutes(app) {
     if (!clientIds?.length) return reply.send({ linked: false, data: null, source: 'none' });
     return sendSection(reply, await buildLlmView(clientIds, request.params.view, request.query));
   });
+
+  /**
+   * Generate a downloadable AI HTML performance report for the selected period.
+   * Body: { start, end, compare? } — does not publish to ProjectHtmlReport.
+   */
+  app.post(
+    '/analytics/ai-html-report',
+    { onRequest: [app.verifyJwt, app.requireClient] },
+    async (request, reply) => {
+      const clientIds = request.clientAccountIds;
+      if (!clientIds?.length) {
+        return reply.status(400).send({ message: 'No client in scope' });
+      }
+      const body = request.body || {};
+      const start = typeof body.start === 'string' ? body.start.slice(0, 10) : null;
+      const end = typeof body.end === 'string' ? body.end.slice(0, 10) : null;
+      const compare = body.compare !== false && body.compare !== '0' && body.compare !== 'false';
+
+      const result = await generateAiHtmlReport({
+        clientIds,
+        start,
+        end,
+        compare,
+        userId: request.user?.id,
+      });
+      if (result.error) {
+        return reply.status(result.error.status || 500).send({
+          message: result.error.message,
+          emptyReason: result.error.emptyReason,
+        });
+      }
+      return reply.send({
+        html: result.html,
+        fileName: result.fileName,
+        range: result.range,
+        meta: result.meta,
+      });
+    }
+  );
 }
