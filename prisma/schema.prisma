@@ -964,6 +964,9 @@ model WpContentReview {
   status           String    @db.VarChar(50)
   submittedByName  String?   @db.VarChar(200)
   submittedById    String?   @db.VarChar(100)
+  /// OS-side worker assignee (Admin/PM can reassign; defaults to submitter).
+  assignedWorkerId   String?   @db.VarChar(100)
+  assignedWorkerName String?   @db.VarChar(200)
   pmMemberName     String?   @db.VarChar(200)
   pmMemberId       String?   @db.VarChar(100)
   pmPreviewUrl     String?   @db.VarChar(1000)
@@ -973,6 +976,8 @@ model WpContentReview {
   clientDecision   String?   @db.VarChar(50)
   clientComment    String?   @db.LongText
   workerNote       String?   @db.LongText
+  /// OS-editable description (task-style); independent of WP workerNote.
+  description      String?   @db.LongText
   /// Worker-selected content/page type (e.g. landing_page, pillar_page, article).
   contentType      String?   @db.VarChar(50)
   pmReviewedAt     String?   @db.VarChar(50)
@@ -996,6 +1001,7 @@ model WpContentReview {
   comments WpContentReviewComment[]
 
   @@unique([projectId, wpPipelineId])
+  @@index([assignedWorkerId])
   @@map("wpcontentreview")
 }
 

@@ -3,11 +3,13 @@ import { notify } from '../../lib/notificationService.js';
 import { syncPipelineFromWp } from '../../lib/pipelineSync.js';
 import {
   STATUS_LABELS,
+  STATUS_COLORS,
   formatHistoryEvent,
   reviewDisplayUpdatedAt,
   parseWpDate,
   contentTypeLabel,
   clientDecisionLabel,
+  eventDisplayAt,
 } from '../../lib/pipelineFormat.js';
 
 function reviewStatusLabel(status, clientDecision) {
@@ -21,6 +23,7 @@ function reviewStatusLabel(status, clientDecision) {
 }
 
 const PM_ROLES = ['PM', 'OWNER'];
+const STAFF_ROLES = ['OWNER', 'PM', 'TEAM_MEMBER', 'CONTRACTOR'];
 
 async function requirePmOrOwner(request, reply) {
   if (!PM_ROLES.includes(request.user?.role)) {
@@ -28,10 +31,17 @@ async function requirePmOrOwner(request, reply) {
   }
 }
 
-/** PM/Owner, or a CLIENT linked to the review's project. */
+/**
+ * Any active staff user, or a CLIENT linked to the review's project,
+ * can read/post comments on the unified review timeline.
+ */
 async function requirePipelineCommentAccess(request, reply) {
   const role = request.user?.role;
-  if (PM_ROLES.includes(role)) return;
+  if (!request.user?.id) {
+    return reply.status(401).send({ message: 'Authentication required' });
+  }
+  if (STAFF_ROLES.includes(role)) return;
+
   if (role !== 'CLIENT') {
     return reply.status(403).send({ message: 'Access required' });
   }
@@ -88,6 +98,8 @@ function formatReview(r) {
     publishedAt: r.publishedAt?.toISOString() || null,
     submittedByName: r.submittedByName,
     submittedById: r.submittedById,
+    assignedWorkerId: r.assignedWorkerId || null,
+    assignedWorkerName: r.assignedWorkerName || null,
     pmMemberName: r.pmMemberName,
     pmMemberId: r.pmMemberId,
     pmPreviewUrl: r.pmPreviewUrl,
@@ -100,6 +112,7 @@ function formatReview(r) {
     clientReviewedAt: r.clientReviewedAt || null,
     workerNote: r.workerNote || null,
     aiSummary: r.aiSummary || null,
+    description: r.description || r.workerNote || r.aiSummary || null,
     revisionNumber: r.revisionNumber,
     createdAt:
       (r.wpCreatedAt instanceof Date
@@ -127,9 +140,14 @@ export async function pmPipelineRoutes(app) {
 
         const where = {};
 
-        // PM sees only their projects, OWNER sees all
+        // PM sees projects they lead or secondary-PM; OWNER sees all
         if (user.role === 'PM') {
-          where.project = { leadPmId: user.id };
+          where.project = {
+            OR: [
+              { leadPmId: user.id },
+              { client: { secondaryPmId: user.id } },
+            ],
+          };
         }
 
         if (projectId) {
@@ -167,18 +185,23 @@ export async function pmPipelineRoutes(app) {
     }
   );
 
-  // GET /api/pm/pipeline/my-reviews — content reviews where current user is the submitter
+  // GET /api/pm/pipeline/my-reviews — assigned, submitted, or commented-on by me
   app.get(
     '/pipeline/my-reviews',
     { onRequest: [app.verifyJwt] },
     async (request, reply) => {
       try {
         const userId = request.user.id;
+        const includePublished = request.query?.includePublished === 'true';
 
         const reviews = await prisma.wpContentReview.findMany({
           where: {
-            submittedById: userId,
-            isPublished: false,
+            ...(includePublished ? {} : { isPublished: false }),
+            OR: [
+              { assignedWorkerId: userId },
+              { submittedById: userId },
+              { comments: { some: { userId } } },
+            ],
           },
           include: {
             events: { orderBy: { createdAt: 'desc' } },
@@ -196,6 +219,100 @@ export async function pmPipelineRoutes(app) {
       } catch (err) {
         request.log.error(err);
         return reply.status(500).send({ message: 'Failed to fetch your content reviews' });
+      }
+    }
+  );
+
+  // PATCH /api/pm/pipeline/:projectId/:wpPipelineId/assign — Admin/PM assign worker
+  app.patch(
+    '/pipeline/:projectId/:wpPipelineId/assign',
+    { onRequest: [app.verifyJwt, requirePmOrOwner] },
+    async (request, reply) => {
+      try {
+        const { projectId, wpPipelineId } = request.params;
+        const pipelineId = Number(wpPipelineId);
+        if (!pipelineId) {
+          return reply.status(400).send({ message: 'Invalid pipeline id' });
+        }
+
+        const workerUserId =
+          request.body?.workerUserId === null || request.body?.workerUserId === ''
+            ? null
+            : String(request.body?.workerUserId || '').trim() || null;
+
+        const existing = await prisma.wpContentReview.findUnique({
+          where: { projectId_wpPipelineId: { projectId, wpPipelineId: pipelineId } },
+          select: {
+            id: true,
+            postTitle: true,
+            assignedWorkerId: true,
+            project: { select: { name: true, leadPmId: true, client: { select: { secondaryPmId: true } } } },
+          },
+        });
+        if (!existing) {
+          return reply.status(404).send({ message: 'Review not found' });
+        }
+
+        // PMs may only assign on their own projects
+        if (request.user.role === 'PM') {
+          const lead = existing.project?.leadPmId === request.user.id;
+          const secondary = existing.project?.client?.secondaryPmId === request.user.id;
+          if (!lead && !secondary) {
+            return reply.status(403).send({ message: 'Not allowed to assign on this project' });
+          }
+        }
+
+        let assignedWorkerId = null;
+        let assignedWorkerName = null;
+        if (workerUserId) {
+          const worker = await prisma.user.findFirst({
+            where: {
+              id: workerUserId,
+              isActive: true,
+              role: { in: ['TEAM_MEMBER', 'CONTRACTOR', 'PM'] },
+            },
+            select: { id: true, name: true },
+          });
+          if (!worker) {
+            return reply.status(400).send({ message: 'Worker not found or not assignable' });
+          }
+          assignedWorkerId = worker.id;
+          assignedWorkerName = worker.name || 'Worker';
+        }
+
+        const updated = await prisma.wpContentReview.update({
+          where: { id: existing.id },
+          data: { assignedWorkerId, assignedWorkerName },
+        });
+
+        if (
+          assignedWorkerId &&
+          assignedWorkerId !== existing.assignedWorkerId &&
+          assignedWorkerId !== request.user.id
+        ) {
+          try {
+            await notify({
+              slug: 'content_submitted_for_review',
+              recipientIds: [assignedWorkerId],
+              variables: {
+                postTitle: existing.postTitle || 'Content review',
+                projectName: existing.project?.name || '',
+                submittedByName: request.user.name || 'PM',
+              },
+              actionUrl: '/portal/pm/content-reviews',
+            });
+          } catch (notifyErr) {
+            request.log.warn({ err: notifyErr }, 'Assign notify failed');
+          }
+        }
+
+        return reply.send({
+          assignedWorkerId: updated.assignedWorkerId,
+          assignedWorkerName: updated.assignedWorkerName,
+        });
+      } catch (err) {
+        request.log.error(err);
+        return reply.status(500).send({ message: 'Failed to assign worker' });
       }
     }
   );
@@ -630,7 +747,44 @@ export async function pmPipelineRoutes(app) {
     }
   );
 
-  // GET/POST comments for a content review (OS freeform + merged with review notes).
+  // PATCH description (OS-editable, task-style).
+  app.patch(
+    '/pipeline/:projectId/:wpPipelineId/description',
+    { onRequest: [app.verifyJwt, requirePipelineCommentAccess] },
+    async (request, reply) => {
+      try {
+        const { projectId, wpPipelineId } = request.params;
+        const pipelineId = Number(wpPipelineId);
+        const description =
+          request.body?.description == null
+            ? null
+            : String(request.body.description).slice(0, 10000);
+
+        const existing = await prisma.wpContentReview.findUnique({
+          where: { projectId_wpPipelineId: { projectId, wpPipelineId: pipelineId } },
+          select: { id: true },
+        });
+        if (!existing) {
+          return reply.status(404).send({ message: 'Review not found' });
+        }
+
+        const updated = await prisma.wpContentReview.update({
+          where: { id: existing.id },
+          data: { description: description && description.trim() ? description.trim() : null },
+          select: { description: true, workerNote: true, aiSummary: true },
+        });
+
+        return reply.send({
+          description: updated.description || updated.workerNote || updated.aiSummary || null,
+        });
+      } catch (err) {
+        request.log.error(err);
+        return reply.status(500).send({ message: 'Failed to update description' });
+      }
+    }
+  );
+
+  // GET/POST comments: unified timeline (all review events + OS freeform comments).
   app.get(
     '/pipeline/:projectId/:wpPipelineId/comments',
     { onRequest: [app.verifyJwt, requirePipelineCommentAccess] },
@@ -654,73 +808,75 @@ export async function pmPipelineRoutes(app) {
 
         const fromEvents = [];
         for (const e of review.events) {
-          const eventAt =
-            e.createdAt instanceof Date ? e.createdAt.toISOString() : e.createdAt;
-          if (e.workerNote) {
-            fromEvents.push({
-              id: `evt-worker-${e.id}`,
-              source: 'review_event',
-              role: 'Worker',
-              authorName: review.submittedByName || 'Worker',
-              decision: null,
-              revisionNumber: e.revisionNumber,
-              content: e.workerNote,
-              createdAt: eventAt,
-              eventType: e.eventType,
-              status: e.status,
-            });
-          }
-          if (e.pmComment) {
-            fromEvents.push({
-              id: `evt-pm-${e.id}`,
-              source: 'review_event',
-              role: 'PM',
-              authorName: review.pmMemberName || 'PM',
-              decision: e.pmDecision,
-              revisionNumber: e.revisionNumber,
-              content: e.pmComment,
-              createdAt: e.pmReviewedAt || eventAt,
-              eventType: e.eventType,
-              status: e.status,
-            });
-          }
-          if (e.clientComment) {
-            fromEvents.push({
-              id: `evt-client-${e.id}`,
-              source: 'review_event',
-              role: 'Client',
-              authorName: 'Client',
-              decision: clientDecisionLabel(e.clientDecision) || e.clientDecision,
-              revisionNumber: e.revisionNumber,
-              content: e.clientComment,
-              createdAt: e.clientReviewedAt || eventAt,
-              eventType: e.eventType,
-              status: e.status,
-            });
-          }
+          if (e.eventType === 'pipeline_resend_notification') continue;
+
+          const at = eventDisplayAt(e);
+          const createdAt =
+            at instanceof Date
+              ? at.toISOString()
+              : e.createdAt instanceof Date
+                ? e.createdAt.toISOString()
+                : e.createdAt;
+
+          const isContentTypeChange = e.eventType === 'pipeline_content_type_changed';
+          const statusLabel = isContentTypeChange
+            ? 'Content Type Changed'
+            : reviewStatusLabel(e.status, e.clientDecision);
+
+          fromEvents.push({
+            id: `evt-${e.id}`,
+            source: 'timeline',
+            role: null,
+            authorName: null,
+            decision: e.clientDecision
+              ? clientDecisionLabel(e.clientDecision) || e.clientDecision
+              : e.pmDecision || null,
+            revisionNumber: e.revisionNumber,
+            content: e.message || null,
+            workerNote: e.workerNote || null,
+            pmComment: e.pmComment || null,
+            clientComment: e.clientComment || null,
+            createdAt,
+            eventType: e.eventType,
+            status: e.status,
+            statusLabel,
+            statusColor: STATUS_COLORS[e.status] || '#888',
+          });
         }
 
         const fromOs = (review.comments || []).map((c) => ({
           id: c.id,
           source: 'os_comment',
-          role: c.user?.role === 'OWNER' ? 'Admin' : c.user?.role === 'CLIENT' ? 'Client' : c.user?.role || 'User',
+          role:
+            c.user?.role === 'OWNER'
+              ? 'Admin'
+              : c.user?.role === 'CLIENT'
+                ? 'Client'
+                : c.user?.role === 'PM'
+                  ? 'PM'
+                  : c.user?.role || 'User',
           authorName: c.user?.name || 'User',
           authorId: c.userId,
           decision: null,
           revisionNumber: null,
           content: c.content,
+          workerNote: null,
+          pmComment: null,
+          clientComment: null,
           createdAt: c.createdAt.toISOString(),
           eventType: null,
           status: null,
+          statusLabel: 'Comment',
+          statusColor: '#64748b',
         }));
 
         const merged = [...fromEvents, ...fromOs].sort(
-          (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
         );
 
         return reply.send({
           items: merged,
-          description: review.workerNote || review.aiSummary || null,
+          description: review.description || review.workerNote || review.aiSummary || null,
         });
       } catch (err) {
         request.log.error(err);
@@ -766,13 +922,22 @@ export async function pmPipelineRoutes(app) {
               ? 'Admin'
               : created.user?.role === 'CLIENT'
                 ? 'Client'
-                : created.user?.role || 'User',
+                : created.user?.role === 'PM'
+                  ? 'PM'
+                  : created.user?.role || 'User',
           authorName: created.user?.name || 'User',
           authorId: created.userId,
           decision: null,
           revisionNumber: null,
           content: created.content,
+          workerNote: null,
+          pmComment: null,
+          clientComment: null,
           createdAt: created.createdAt.toISOString(),
+          eventType: null,
+          status: null,
+          statusLabel: 'Comment',
+          statusColor: '#64748b',
         });
       } catch (err) {
         request.log.error(err);

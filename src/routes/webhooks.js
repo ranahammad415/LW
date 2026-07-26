@@ -333,14 +333,16 @@ export async function wpWebhookRoutes(app) {
     const isCancelEvent = eventType === 'pipeline_cancelled';
 
     let alreadyPublished = false;
+    let existingAssigneeId = null;
     try {
       const existingReview = await prisma.wpContentReview.findUnique({
         where: {
           projectId_wpPipelineId: { projectId: project.id, wpPipelineId },
         },
-        select: { isPublished: true },
+        select: { isPublished: true, assignedWorkerId: true },
       });
       alreadyPublished = existingReview?.isPublished || false;
+      existingAssigneeId = existingReview?.assignedWorkerId || null;
     } catch { /* fail-safe */ }
 
     // Upsert the content review record
@@ -396,6 +398,10 @@ export async function wpWebhookRoutes(app) {
         status: isPublishEvent ? 'published' : status,
         submittedByName,
         submittedById,
+        // Default OS assignee to submitter; Admin/PM may reassign later.
+        ...(submittedById && !existingAssigneeId
+          ? { assignedWorkerId: submittedById, assignedWorkerName: submittedByName }
+          : {}),
         pmMemberName,
         pmMemberId,
         pmPreviewUrl,

@@ -8,7 +8,7 @@ const FEATURES = [
   { key: 'plans', scopes: ['OWNER'] },
   { key: 'projects', scopes: ['OWNER', 'CLIENT'] },
   { key: 'tasks', scopes: ['OWNER', 'PM', 'TEAM_MEMBER', 'CONTRACTOR', 'CLIENT'] },
-  { key: 'contentReviews', scopes: ['OWNER'] },
+  { key: 'contentReviews', scopes: ['OWNER', 'PM', 'TEAM_MEMBER', 'CONTRACTOR', 'CLIENT'] },
   { key: 'support', scopes: ['OWNER', 'PM', 'TEAM_MEMBER', 'CONTRACTOR', 'CLIENT'] },
   { key: 'meetings', scopes: ['OWNER', 'CLIENT'] },
   { key: 'team', scopes: ['OWNER', 'CLIENT'] },

@@ -56,12 +56,23 @@ export async function syncPipelineFromWp({ projectId } = {}) {
         // the pipeline itself is published or already marked published in OS.
         const existing = await prisma.wpContentReview.findUnique({
           where: { projectId_wpPipelineId: { projectId: project.id, wpPipelineId } },
-          select: { isPublished: true, publishedAt: true },
+          select: {
+            isPublished: true,
+            publishedAt: true,
+            assignedWorkerId: true,
+            assignedWorkerName: true,
+          },
         });
         const pipelineStatus = String(p.status || '').slice(0, 50);
         const wpSaysPublished =
           pipelineStatus === 'published' || pipelineStatus === 'publish';
         const isPublished = Boolean(existing?.isPublished || wpSaysPublished);
+        const submittedById = p.submittedBy?.memberId
+          ? String(p.submittedBy.memberId).slice(0, 100)
+          : null;
+        const submittedByName = p.submittedBy?.name
+          ? String(p.submittedBy.name).slice(0, 200)
+          : null;
 
         const data = {
           wpPostId: Number(p.postId) || 0,
@@ -71,8 +82,8 @@ export async function syncPipelineFromWp({ projectId } = {}) {
           // "Update Content" reviews: keep the parent-page link.
           ...(p.parentPostId ? { parentWpPostId: Number(p.parentPostId) } : {}),
           status: isPublished ? 'published' : pipelineStatus,
-          submittedByName: p.submittedBy?.name ? String(p.submittedBy.name).slice(0, 200) : null,
-          submittedById: p.submittedBy?.memberId ? String(p.submittedBy.memberId).slice(0, 100) : null,
+          submittedByName,
+          submittedById,
           pmMemberName: p.pmAssigned?.name ? String(p.pmAssigned.name).slice(0, 200) : null,
           pmMemberId: p.pmAssigned?.memberId ? String(p.pmAssigned.memberId).slice(0, 100) : null,
           pmPreviewUrl: p.pmPreviewUrl ? String(p.pmPreviewUrl).slice(0, 1000) : null,
@@ -99,6 +110,16 @@ export async function syncPipelineFromWp({ projectId } = {}) {
         };
 
         try {
+          // Default OS assignee to submitter on create only; never overwrite an
+          // existing Admin/PM assignment on later syncs.
+          const createAssignee =
+            !existing?.assignedWorkerId && submittedById
+              ? {
+                  assignedWorkerId: submittedById,
+                  assignedWorkerName: submittedByName,
+                }
+              : {};
+
           const review = await prisma.wpContentReview.upsert({
             where: { projectId_wpPipelineId: { projectId: project.id, wpPipelineId } },
             update: data,
@@ -109,6 +130,7 @@ export async function syncPipelineFromWp({ projectId } = {}) {
               // empty title, so provide a fallback.
               postTitle: String(p.postTitle || 'Untitled').slice(0, 500),
               ...data,
+              ...createAssignee,
             },
           });
 
