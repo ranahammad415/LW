@@ -1413,7 +1413,7 @@ Return the id of the single most restrictive preset that still allows this task 
         });
       }
 
-      // Helper to clean up and delete a single task by id
+      // Helper to clean up and delete a single task by id (no children).
       async function cleanAndDeleteTask(taskId) {
         await prisma.taskCommentReaction.deleteMany({ where: { comment: { taskId } } });
         await prisma.taskComment.deleteMany({ where: { taskId } });
@@ -1429,12 +1429,21 @@ Return the id of the single most restrictive preset that still allows this task 
         await prisma.task.delete({ where: { id: taskId } });
       }
 
-      // Delete all subtasks first, then the parent task
-      const subtasks = await prisma.task.findMany({ where: { parentTaskId: id }, select: { id: true } });
-      for (const sub of subtasks) {
-        await cleanAndDeleteTask(sub.id);
+      // Recursively delete the full subtree (main → sub → step). Parent relation
+      // uses onDelete:SetNull, so deleting only direct children left grandchildren
+      // as orphan root tasks that looked like "deleted tasks came back" on reload.
+      async function deleteSubtree(taskId) {
+        const children = await prisma.task.findMany({
+          where: { parentTaskId: taskId },
+          select: { id: true },
+        });
+        for (const child of children) {
+          await deleteSubtree(child.id);
+        }
+        await cleanAndDeleteTask(taskId);
       }
-      await cleanAndDeleteTask(id);
+
+      await deleteSubtree(id);
 
       return reply.send({});
     }

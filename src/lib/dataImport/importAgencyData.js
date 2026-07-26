@@ -125,6 +125,21 @@ export async function importAgencyData(data, options = {}) {
       keywords: 0,
     };
 
+    // Wilhelmina is managed only in the OS UI — never create/recreate tasks from
+    // sheets or agency import. Deletes must stick (no seed/import revive).
+    const isWilhelmina =
+      /wilhelmina/i.test(project.name || '') ||
+      /wilhelmina/i.test(project.client?.agencyName || '') ||
+      /wilhelmina/i.test(matchKey);
+    if (isWilhelmina) {
+      summary.projects.push({
+        ...projectResult,
+        status: 'skipped',
+        reason: 'Wilhelmina tasks are OS-managed only (import create disabled)',
+      });
+      continue;
+    }
+
     const existingTasks = await prisma.task.findMany({
       where: { projectId: project.id },
       select: { id: true, title: true, parentTaskId: true },
@@ -178,6 +193,9 @@ export async function importAgencyData(data, options = {}) {
       projectResult.steps++;
     }
 
+    // plan_with_progress / plan_only: create missing titles only (never wipe).
+    // sync_progress: never create — updates status/comments only. Deleting a
+    // task in OS must not bring it back on page reload from this importer.
     if (importMode !== 'sync_progress') {
       for (const group of projEntry.taskGroups || []) {
         const milestone = group.milestone || '(Unspecified)';

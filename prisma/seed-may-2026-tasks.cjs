@@ -6,7 +6,7 @@
  * Templates (in ./tasks-may-2026/):
  *   - Q2_TASKS         → Roman Electric, Milwaukee Signs, P2EzPay
  *   - Q1_TASKS         → Keyway Broaching (aka Broaching Technologies), Great Lakes Power Vac
- *   - WILHELMINA_TASKS → Wilhelmina Balloon (Q1 Ongoing SEO + Foundation Setup)
+ *   - WILHELMINA_TASKS → Wilhelmina Balloon (skipped by default — July owns this client)
  *   - SOUTHGATE_TASKS  → SouthGate Lease (Local SEO only)
  *
  * Each template task carries { title, taskType, priority, milestone,
@@ -16,11 +16,16 @@
  *
  * Usage:
  *   node prisma/seed-may-2026-tasks.cjs
+ *   node prisma/seed-may-2026-tasks.cjs --include-wilhelmina   # opt-in; prefer July seed
+ *
+ * Wilhelmina plan ownership: use prisma/seed-july-2026-tasks.cjs --wilhelmina-only
+ * so May + July templates do not stack duplicate task trees.
  */
 require('dotenv').config();
 const { PrismaClient } = require('@prisma/client');
 
 const prisma = new PrismaClient();
+const INCLUDE_WILHELMINA = process.argv.includes('--include-wilhelmina');
 
 // ─── Assignee keys ────────────────────────────────────────────────────────────
 // Keys must match case-insensitive substrings of User.name in DB.
@@ -265,6 +270,22 @@ async function main() {
 
   for (const entry of projectsToSeed) {
     const { project, template } = entry;
+    if (template === 'WILHELMINA' && !INCLUDE_WILHELMINA) {
+      console.log(
+        `  ⊘ skip ${project.name}: Wilhelmina owned by July seed (pass --include-wilhelmina to force May)`,
+      );
+      summary.push({
+        project: project.name,
+        template,
+        mains: 0,
+        subs: 0,
+        steps: 0,
+        skipped: 0,
+        missingAssignee: 0,
+        total: 0,
+      });
+      continue;
+    }
     const tasks =
       template === 'Q2'         ? Q2_TASKS :
       template === 'Q1'         ? Q1_TASKS :

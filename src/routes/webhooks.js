@@ -2,7 +2,7 @@ import { prisma } from '../lib/prisma.js';
 import { maybeGenerateSummary, autoSyncSitemap } from '../lib/wpSync.js';
 import { notify, notifyTest } from '../lib/notificationService.js';
 import { publish as publishRealtime } from '../lib/realtimeBus.js';
-import { commentsForEventType, parseWpDate } from '../lib/pipelineFormat.js';
+import { commentsForEventType, timestampsForEventType, parseWpDate } from '../lib/pipelineFormat.js';
 
 export async function wpWebhookRoutes(app) {
   app.post('/wp-content-change', async (request, reply) => {
@@ -464,6 +464,10 @@ export async function wpWebhookRoutes(app) {
             pmDecision,
             clientDecision,
           });
+          const scopedTimes = timestampsForEventType(eventType, {
+            pmReviewedAt: body.pmReviewedAt ? String(body.pmReviewedAt).slice(0, 50) : null,
+            clientReviewedAt: body.clientReviewedAt ? String(body.clientReviewedAt).slice(0, 50) : null,
+          });
           await prisma.wpContentReviewEvent.create({
             data: {
               contentReviewId: review.id,
@@ -479,8 +483,8 @@ export async function wpWebhookRoutes(app) {
               pmDecision: scoped.pmDecision,
               clientComment: scoped.clientComment,
               clientDecision: scoped.clientDecision,
-              pmReviewedAt: body.pmReviewedAt ? String(body.pmReviewedAt).slice(0, 50) : null,
-              clientReviewedAt: body.clientReviewedAt ? String(body.clientReviewedAt).slice(0, 50) : null,
+              pmReviewedAt: scopedTimes.pmReviewedAt,
+              clientReviewedAt: scopedTimes.clientReviewedAt,
             },
           });
         }

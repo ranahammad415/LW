@@ -50,15 +50,18 @@ export async function syncPipelineFromWp({ projectId } = {}) {
         const wpPipelineId = Number(p.id);
         if (!wpPipelineId) continue;
 
-        // Detect a live WP post so a missed publish webhook self-corrects here.
-        const wpLive = String(p.wpPostStatus || '').toLowerCase() === 'publish';
-
         // Preserve an already-published state; never let sync regress it.
+        // Do NOT treat WP post_status=publish alone as "review done" — active
+        // pipelines (especially blogs submitted while live) stay visible until
+        // the pipeline itself is published or already marked published in OS.
         const existing = await prisma.wpContentReview.findUnique({
           where: { projectId_wpPipelineId: { projectId: project.id, wpPipelineId } },
           select: { isPublished: true, publishedAt: true },
         });
-        const isPublished = wpLive || existing?.isPublished || false;
+        const pipelineStatus = String(p.status || '').slice(0, 50);
+        const wpSaysPublished =
+          pipelineStatus === 'published' || pipelineStatus === 'publish';
+        const isPublished = Boolean(existing?.isPublished || wpSaysPublished);
 
         const data = {
           wpPostId: Number(p.postId) || 0,
@@ -67,7 +70,7 @@ export async function syncPipelineFromWp({ projectId } = {}) {
           ...(p.postTitle ? { postTitle: String(p.postTitle).slice(0, 500) } : {}),
           // "Update Content" reviews: keep the parent-page link.
           ...(p.parentPostId ? { parentWpPostId: Number(p.parentPostId) } : {}),
-          status: isPublished ? 'published' : String(p.status || '').slice(0, 50),
+          status: isPublished ? 'published' : pipelineStatus,
           submittedByName: p.submittedBy?.name ? String(p.submittedBy.name).slice(0, 200) : null,
           submittedById: p.submittedBy?.memberId ? String(p.submittedBy.memberId).slice(0, 100) : null,
           pmMemberName: p.pmAssigned?.name ? String(p.pmAssigned.name).slice(0, 200) : null,
@@ -154,6 +157,15 @@ export async function syncPipelineFromWp({ projectId } = {}) {
                 parseWpDate(h.pmReviewedAt) ||
                 new Date();
 
+              // Only attach reviewer times that belong to this status snapshot.
+              const pmAt =
+                status === 'pm_approved' || status === 'changes_requested_by_pm'
+                  ? h.pmReviewedAt || null
+                  : null;
+              const clientAt =
+                status === 'client_approved' || status === 'changes_requested_by_client'
+                  ? h.clientReviewedAt || null
+                  : null;
               await prisma.wpContentReviewEvent.create({
                 data: {
                   contentReviewId: review.id,
@@ -165,8 +177,8 @@ export async function syncPipelineFromWp({ projectId } = {}) {
                   pmDecision: scoped.pmDecision,
                   clientComment: scoped.clientComment,
                   clientDecision: scoped.clientDecision,
-                  pmReviewedAt: h.pmReviewedAt || null,
-                  clientReviewedAt: h.clientReviewedAt || null,
+                  pmReviewedAt: pmAt,
+                  clientReviewedAt: clientAt,
                   createdAt: at,
                 },
               });

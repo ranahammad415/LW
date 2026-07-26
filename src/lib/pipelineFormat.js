@@ -52,6 +52,18 @@ export function contentTypeLabel(value) {
   return CONTENT_TYPE_LABELS[value] || value;
 }
 
+/** Labels for client_decision values (including additive changes_publish). */
+export const CLIENT_DECISION_LABELS = {
+  approved: 'Approved',
+  changes_requested: 'Changes — re-review required',
+  changes_publish: 'Minor changes — then publish',
+};
+
+export function clientDecisionLabel(value) {
+  if (!value) return null;
+  return CLIENT_DECISION_LABELS[value] || value;
+}
+
 /**
  * Only persist comments that belong to this event type.
  * WP webhooks always send the full current pipeline row, which previously
@@ -204,15 +216,43 @@ export function reviewDisplayUpdatedAt(r) {
 }
 
 /**
- * Best display timestamp for an event: prefer reviewer action time, then
- * stored createdAt.
+ * Scope reviewer timestamps to the event types that produced them — same idea
+ * as commentsForEventType. Stops every timeline row showing the latest
+ * clientReviewedAt / pmReviewedAt from the pipeline row.
+ */
+export function timestampsForEventType(eventType, fields = {}) {
+  const { pmReviewedAt = null, clientReviewedAt = null } = fields;
+  switch (eventType) {
+    case 'pipeline_pm_approved':
+    case 'pipeline_pm_changes_requested':
+      return { pmReviewedAt, clientReviewedAt: null };
+    case 'pipeline_client_approved':
+    case 'pipeline_client_changes_requested':
+      return { pmReviewedAt: null, clientReviewedAt };
+    default:
+      return { pmReviewedAt: null, clientReviewedAt: null };
+  }
+}
+
+/**
+ * Best display timestamp for an event: prefer the reviewer action time that
+ * belongs to this event type, then stored createdAt.
  */
 export function eventDisplayAt(e) {
-  return (
-    parseWpDate(e.clientReviewedAt) ||
-    parseWpDate(e.pmReviewedAt) ||
-    (e.createdAt instanceof Date ? e.createdAt : parseWpDate(e.createdAt))
-  );
+  const type = e.eventType || '';
+  const isPm =
+    type === 'pipeline_pm_approved' ||
+    type === 'pipeline_pm_changes_requested' ||
+    (!type && (e.status === 'pm_approved' || e.status === 'changes_requested_by_pm'));
+  const isClient =
+    type === 'pipeline_client_approved' ||
+    type === 'pipeline_client_changes_requested' ||
+    (!type &&
+      (e.status === 'client_approved' || e.status === 'changes_requested_by_client'));
+
+  if (isClient && e.clientReviewedAt) return parseWpDate(e.clientReviewedAt);
+  if (isPm && e.pmReviewedAt) return parseWpDate(e.pmReviewedAt);
+  return e.createdAt instanceof Date ? e.createdAt : parseWpDate(e.createdAt);
 }
 
 export function formatHistoryEvent(e, labels = STATUS_LABELS) {
@@ -222,16 +262,27 @@ export function formatHistoryEvent(e, labels = STATUS_LABELS) {
       ? e.createdAt.toISOString()
       : parseWpDate(e.createdAt)?.toISOString() || null;
 
+  let statusLabel = labels[e.status] || e.status;
+  if (e.status === 'changes_requested_by_client' && e.clientDecision === 'changes_publish') {
+    statusLabel = CLIENT_DECISION_LABELS.changes_publish;
+  } else if (
+    e.status === 'changes_requested_by_client' &&
+    e.clientDecision === 'changes_requested'
+  ) {
+    statusLabel = CLIENT_DECISION_LABELS.changes_requested;
+  }
+
   return {
     eventType: e.eventType || null,
     revisionNumber: e.revisionNumber,
     status: e.status,
-    statusLabel: labels[e.status] || e.status,
+    statusLabel,
     statusColor: STATUS_COLORS[e.status] || '#888',
     message: e.message || null,
     pmComment: e.pmComment,
     clientComment: e.clientComment,
     workerNote: e.workerNote,
+    clientDecision: e.clientDecision || null,
     pmReviewedAt: e.pmReviewedAt,
     clientReviewedAt: e.clientReviewedAt,
     createdAt: createdIso,

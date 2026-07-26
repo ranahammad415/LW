@@ -81,6 +81,7 @@ model User {
   passwordResetTokens         PasswordResetToken[]
   openedWorkCycles            WorkCycle[]              @relation("WorkCycleOpener")
   agencyGoogleConnections     AgencyGoogleConnection[] @relation("AgencyGoogleConnector")
+  wpContentReviewComments     WpContentReviewComment[] @relation("WpContentReviewCommentAuthor")
 
   @@map("user")
 }
@@ -587,7 +588,7 @@ model Task {
   parentTaskId     String?
   wpAccessPresetId String?
   workCycleId      String?
-  parentTask       Task?           @relation("SubTasks", fields: [parentTaskId], references: [id], onDelete: SetNull)
+  parentTask       Task?           @relation("SubTasks", fields: [parentTaskId], references: [id], onDelete: Cascade)
   subTasks         Task[]          @relation("SubTasks")
   wpAccessPreset   WpAccessPreset? @relation(fields: [wpAccessPresetId], references: [id], onDelete: SetNull)
   workCycle        WorkCycle?      @relation(fields: [workCycleId], references: [id], onDelete: SetNull)
@@ -990,11 +991,31 @@ model WpContentReview {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @default(now()) @updatedAt
 
-  project Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  events  WpContentReviewEvent[]
+  project  Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  events   WpContentReviewEvent[]
+  comments WpContentReviewComment[]
 
   @@unique([projectId, wpPipelineId])
   @@map("wpcontentreview")
+}
+
+/// Freeform OS-side comments on a content review (discussion; not WP decisions).
+model WpContentReviewComment {
+  id              String   @id @default(uuid())
+  contentReviewId String
+  userId          String
+  content         String   @db.LongText
+  parentId        String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @default(now()) @updatedAt
+
+  contentReview WpContentReview        @relation(fields: [contentReviewId], references: [id], onDelete: Cascade)
+  user          User                   @relation("WpContentReviewCommentAuthor", fields: [userId], references: [id], onDelete: Cascade)
+  parent        WpContentReviewComment?  @relation("WpContentReviewCommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies       WpContentReviewComment[] @relation("WpContentReviewCommentReplies")
+
+  @@index([contentReviewId, createdAt])
+  @@map("wpcontentreviewcomment")
 }
 
 model WpContentReviewEvent {

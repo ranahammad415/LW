@@ -1,13 +1,54 @@
 import { prisma } from '../../lib/prisma.js';
 import { notify } from '../../lib/notificationService.js';
 import { syncPipelineFromWp } from '../../lib/pipelineSync.js';
-import { STATUS_LABELS, formatHistoryEvent, reviewDisplayUpdatedAt, parseWpDate, contentTypeLabel } from '../../lib/pipelineFormat.js';
+import {
+  STATUS_LABELS,
+  formatHistoryEvent,
+  reviewDisplayUpdatedAt,
+  parseWpDate,
+  contentTypeLabel,
+  clientDecisionLabel,
+} from '../../lib/pipelineFormat.js';
+
+function reviewStatusLabel(status, clientDecision) {
+  if (status === 'changes_requested_by_client' && clientDecision === 'changes_publish') {
+    return clientDecisionLabel('changes_publish') || 'Minor changes — then publish';
+  }
+  if (status === 'changes_requested_by_client' && clientDecision === 'changes_requested') {
+    return clientDecisionLabel('changes_requested') || STATUS_LABELS[status] || status;
+  }
+  return STATUS_LABELS[status] || status;
+}
 
 const PM_ROLES = ['PM', 'OWNER'];
 
 async function requirePmOrOwner(request, reply) {
   if (!PM_ROLES.includes(request.user?.role)) {
     return reply.status(403).send({ message: 'PM or Owner access required' });
+  }
+}
+
+/** PM/Owner, or a CLIENT linked to the review's project. */
+async function requirePipelineCommentAccess(request, reply) {
+  const role = request.user?.role;
+  if (PM_ROLES.includes(role)) return;
+  if (role !== 'CLIENT') {
+    return reply.status(403).send({ message: 'Access required' });
+  }
+  const { projectId } = request.params;
+  const project = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { clientId: true },
+  });
+  if (!project) {
+    return reply.status(404).send({ message: 'Project not found' });
+  }
+  const link = await prisma.clientUser.findFirst({
+    where: { userId: request.user.id, clientId: project.clientId },
+    select: { id: true },
+  });
+  if (!link) {
+    return reply.status(403).send({ message: 'No access to this project' });
   }
 }
 
@@ -38,7 +79,7 @@ function formatReview(r) {
     postTitle: r.postTitle,
     wpPostStatus: '',
     status: effectiveStatus,
-    statusLabel: STATUS_LABELS[effectiveStatus] || effectiveStatus,
+    statusLabel: reviewStatusLabel(effectiveStatus, r.clientDecision),
     contentType: r.contentType || null,
     contentTypeLabel: contentTypeLabel(r.contentType),
     parentWpPostId: r.parentWpPostId ?? null,
@@ -57,6 +98,8 @@ function formatReview(r) {
     clientDecision: r.clientDecision,
     clientComment: r.clientComment,
     clientReviewedAt: r.clientReviewedAt || null,
+    workerNote: r.workerNote || null,
+    aiSummary: r.aiSummary || null,
     revisionNumber: r.revisionNumber,
     createdAt:
       (r.wpCreatedAt instanceof Date
@@ -425,13 +468,16 @@ export async function pmPipelineRoutes(app) {
     }
   );
 
-  // POST /api/pm/pipeline/:projectId/:wpPipelineId/content-type
+  // POST /api/pm/pipeline/:projectId/:wpPipelineId/change-type
+  // Path deliberately avoids the literal token "content-type" — some hosts'
+  // WAF/ModSecurity rules reset connections to URLs containing it (same reason
+  // the WP plugin uses /change-type).
   // Change a review's content type standalone (no resubmit). Round-trips to
   // WordPress (single source of truth); WP fires the pipeline_content_type_changed
   // webhook which creates the timeline event, so we only optimistically mirror
   // the contentType locally here for immediacy.
   app.post(
-    '/pipeline/:projectId/:wpPipelineId/content-type',
+    '/pipeline/:projectId/:wpPipelineId/change-type',
     { onRequest: [app.verifyJwt, requirePmOrOwner] },
     async (request, reply) => {
       try {
@@ -512,6 +558,225 @@ export async function pmPipelineRoutes(app) {
       } catch (err) {
         request.log.error(err);
         return reply.status(500).send({ message: 'Failed to change content type' });
+      }
+    }
+  );
+
+  // DELETE /api/pm/pipeline/:projectId/:wpPipelineId
+  // Owner-only: hard-delete pipeline on WordPress and in OS (events cascade).
+  app.delete(
+    '/pipeline/:projectId/:wpPipelineId',
+    { onRequest: [app.verifyJwt, app.requireOwner] },
+    async (request, reply) => {
+      try {
+        const { projectId, wpPipelineId } = request.params;
+        const pipelineId = Number(wpPipelineId);
+        if (!pipelineId) {
+          return reply.status(400).send({ message: 'Invalid pipeline id' });
+        }
+
+        const project = await prisma.project.findUnique({
+          where: { id: projectId },
+          select: { wpUrl: true, wpApiKey: true },
+        });
+        if (!project) {
+          return reply.status(404).send({ message: 'Project not found' });
+        }
+
+        const existing = await prisma.wpContentReview.findUnique({
+          where: { projectId_wpPipelineId: { projectId, wpPipelineId: pipelineId } },
+          select: { id: true },
+        });
+
+        // Best-effort WP cancel/delete (force so approved rows can be removed).
+        if (project.wpUrl && project.wpApiKey) {
+          const baseUrl = project.wpUrl.replace(/\/$/, '');
+          const url = `${baseUrl}/wp-json/lwa/v1/pipeline/${pipelineId}/cancel`;
+          try {
+            const res = await fetch(url, {
+              method: 'POST',
+              headers: {
+                ...wpHeaders(project.wpApiKey),
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ force: true, as_admin: true }),
+              signal: AbortSignal.timeout(15000),
+            });
+            // 404 / not_found → already gone on WP; still wipe OS.
+            if (!res.ok && res.status !== 404) {
+              const json = await res.json().catch(() => ({}));
+              // Continue to OS delete unless WP is unreachable in a hard way.
+              if (res.status >= 500) {
+                return reply.status(502).send({
+                  message: json.message || 'Unable to delete pipeline on WordPress.',
+                });
+              }
+            }
+          } catch (fetchErr) {
+            request.log.error({ err: fetchErr, url }, 'WP pipeline delete failed');
+            // If OS row exists, still delete it so Owner can clean stuck reviews.
+          }
+        }
+
+        if (existing) {
+          await prisma.wpContentReview.delete({ where: { id: existing.id } });
+        }
+
+        return reply.send({ success: true });
+      } catch (err) {
+        request.log.error(err);
+        return reply.status(500).send({ message: 'Failed to delete pipeline' });
+      }
+    }
+  );
+
+  // GET/POST comments for a content review (OS freeform + merged with review notes).
+  app.get(
+    '/pipeline/:projectId/:wpPipelineId/comments',
+    { onRequest: [app.verifyJwt, requirePipelineCommentAccess] },
+    async (request, reply) => {
+      try {
+        const { projectId, wpPipelineId } = request.params;
+        const pipelineId = Number(wpPipelineId);
+        const review = await prisma.wpContentReview.findUnique({
+          where: { projectId_wpPipelineId: { projectId, wpPipelineId: pipelineId } },
+          include: {
+            events: { orderBy: { createdAt: 'asc' } },
+            comments: {
+              orderBy: { createdAt: 'asc' },
+              include: { user: { select: { id: true, name: true, role: true } } },
+            },
+          },
+        });
+        if (!review) {
+          return reply.status(404).send({ message: 'Review not found' });
+        }
+
+        const fromEvents = [];
+        for (const e of review.events) {
+          const eventAt =
+            e.createdAt instanceof Date ? e.createdAt.toISOString() : e.createdAt;
+          if (e.workerNote) {
+            fromEvents.push({
+              id: `evt-worker-${e.id}`,
+              source: 'review_event',
+              role: 'Worker',
+              authorName: review.submittedByName || 'Worker',
+              decision: null,
+              revisionNumber: e.revisionNumber,
+              content: e.workerNote,
+              createdAt: eventAt,
+              eventType: e.eventType,
+              status: e.status,
+            });
+          }
+          if (e.pmComment) {
+            fromEvents.push({
+              id: `evt-pm-${e.id}`,
+              source: 'review_event',
+              role: 'PM',
+              authorName: review.pmMemberName || 'PM',
+              decision: e.pmDecision,
+              revisionNumber: e.revisionNumber,
+              content: e.pmComment,
+              createdAt: e.pmReviewedAt || eventAt,
+              eventType: e.eventType,
+              status: e.status,
+            });
+          }
+          if (e.clientComment) {
+            fromEvents.push({
+              id: `evt-client-${e.id}`,
+              source: 'review_event',
+              role: 'Client',
+              authorName: 'Client',
+              decision: clientDecisionLabel(e.clientDecision) || e.clientDecision,
+              revisionNumber: e.revisionNumber,
+              content: e.clientComment,
+              createdAt: e.clientReviewedAt || eventAt,
+              eventType: e.eventType,
+              status: e.status,
+            });
+          }
+        }
+
+        const fromOs = (review.comments || []).map((c) => ({
+          id: c.id,
+          source: 'os_comment',
+          role: c.user?.role === 'OWNER' ? 'Admin' : c.user?.role === 'CLIENT' ? 'Client' : c.user?.role || 'User',
+          authorName: c.user?.name || 'User',
+          authorId: c.userId,
+          decision: null,
+          revisionNumber: null,
+          content: c.content,
+          createdAt: c.createdAt.toISOString(),
+          eventType: null,
+          status: null,
+        }));
+
+        const merged = [...fromEvents, ...fromOs].sort(
+          (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+        );
+
+        return reply.send({
+          items: merged,
+          description: review.workerNote || review.aiSummary || null,
+        });
+      } catch (err) {
+        request.log.error(err);
+        return reply.status(500).send({ message: 'Failed to load comments' });
+      }
+    }
+  );
+
+  app.post(
+    '/pipeline/:projectId/:wpPipelineId/comments',
+    { onRequest: [app.verifyJwt, requirePipelineCommentAccess] },
+    async (request, reply) => {
+      try {
+        const { projectId, wpPipelineId } = request.params;
+        const pipelineId = Number(wpPipelineId);
+        const content = String(request.body?.content || '').trim();
+        if (!content) {
+          return reply.status(400).send({ message: 'Comment content is required' });
+        }
+
+        const review = await prisma.wpContentReview.findUnique({
+          where: { projectId_wpPipelineId: { projectId, wpPipelineId: pipelineId } },
+          select: { id: true },
+        });
+        if (!review) {
+          return reply.status(404).send({ message: 'Review not found' });
+        }
+
+        const created = await prisma.wpContentReviewComment.create({
+          data: {
+            contentReviewId: review.id,
+            userId: request.user.id,
+            content: content.slice(0, 10000),
+          },
+          include: { user: { select: { id: true, name: true, role: true } } },
+        });
+
+        return reply.send({
+          id: created.id,
+          source: 'os_comment',
+          role:
+            created.user?.role === 'OWNER'
+              ? 'Admin'
+              : created.user?.role === 'CLIENT'
+                ? 'Client'
+                : created.user?.role || 'User',
+          authorName: created.user?.name || 'User',
+          authorId: created.userId,
+          decision: null,
+          revisionNumber: null,
+          content: created.content,
+          createdAt: created.createdAt.toISOString(),
+        });
+      } catch (err) {
+        request.log.error(err);
+        return reply.status(500).send({ message: 'Failed to post comment' });
       }
     }
   );

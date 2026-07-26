@@ -17,9 +17,12 @@
  * Usage:
  *   node prisma/seed-july-2026-tasks.cjs
  *   node prisma/seed-july-2026-tasks.cjs --dry-run
- *   node prisma/seed-july-2026-tasks.cjs --wilhelmina-only
- *   node prisma/seed-july-2026-tasks.cjs --wilhelmina-only --replace
+ *   node prisma/seed-july-2026-tasks.cjs --wilhelmina-only --force-wilhelmina
+ *   node prisma/seed-july-2026-tasks.cjs --wilhelmina-only --force-wilhelmina --replace
  *       (--replace deletes existing July-cycle tasks for matched projects first)
+ *
+ * Wilhelmina is OS-managed: agency import never recreates its tasks. Seeding
+ * Wilhelmina requires --force-wilhelmina so accidental runs cannot revive deletes.
  */
 require('dotenv').config();
 const { PrismaClient } = require('@prisma/client');
@@ -30,6 +33,7 @@ const WILHELMINA_JULY_TASKS = require('./tasks-july-2026/wilhelmina-july-tasks.c
 
 const DRY_RUN = process.argv.includes('--dry-run');
 const WILHELMINA_ONLY = process.argv.includes('--wilhelmina-only');
+const FORCE_WILHELMINA = process.argv.includes('--force-wilhelmina');
 const REPLACE = process.argv.includes('--replace');
 const CYCLE_MONTH = 7;
 const CYCLE_YEAR = 2026;
@@ -170,6 +174,13 @@ async function main() {
   if (REPLACE) console.log('  REPLACE: wipe existing July-cycle tasks before seed');
   console.log('');
 
+  if (WILHELMINA_ONLY && !FORCE_WILHELMINA) {
+    console.error('✗ Wilhelmina is OS-managed. Seeding is blocked so deleted tasks stay deleted.');
+    console.error('  If you really need a one-time rebuild, pass --force-wilhelmina.');
+    process.exitCode = 1;
+    return;
+  }
+
   if (!prisma.workCycle) {
     console.error('✗ prisma.workCycle is undefined.');
     console.error('  Run: npx prisma generate && restart the API process, then re-run this script.');
@@ -231,6 +242,11 @@ async function main() {
 
   for (const project of projects) {
     const useWilhelmina = isWilhelminaProject(project);
+    // Default July seed never touches Wilhelmina (OS-managed).
+    if (useWilhelmina && !FORCE_WILHELMINA) {
+      console.log(`  ⊘ skip ${project.name}: Wilhelmina is OS-managed (pass --force-wilhelmina to seed)`);
+      continue;
+    }
     const tasks = useWilhelmina ? WILHELMINA_JULY_TASKS : JULY_TASKS;
     const templateLabel = useWilhelmina ? 'WILHELMINA' : 'JULY';
 
