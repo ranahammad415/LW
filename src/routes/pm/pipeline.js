@@ -71,6 +71,47 @@ function wpHeaders(apiKey) {
   };
 }
 
+function commentRoleLabel(role) {
+  if (role === 'OWNER') return 'Admin';
+  if (role === 'CLIENT') return 'Client';
+  if (role === 'PM') return 'PM';
+  if (role === 'TEAM_MEMBER') return 'Worker';
+  if (role === 'CONTRACTOR') return 'Contractor';
+  return role || 'User';
+}
+
+/** Format a WpContentReviewComment (+ user) for the unified timeline API. */
+function formatOsComment(c) {
+  const createdAt = c.createdAt instanceof Date ? c.createdAt : new Date(c.createdAt);
+  const updatedAt = c.updatedAt instanceof Date ? c.updatedAt : new Date(c.updatedAt);
+  const edited =
+    updatedAt &&
+    createdAt &&
+    !Number.isNaN(updatedAt.getTime()) &&
+    !Number.isNaN(createdAt.getTime()) &&
+    updatedAt.getTime() - createdAt.getTime() > 1000;
+
+  return {
+    id: c.id,
+    source: 'os_comment',
+    role: commentRoleLabel(c.user?.role),
+    authorName: c.user?.name || 'User',
+    authorId: c.userId,
+    decision: null,
+    revisionNumber: null,
+    content: c.content,
+    workerNote: null,
+    pmComment: null,
+    clientComment: null,
+    createdAt: createdAt.toISOString(),
+    editedAt: edited ? updatedAt.toISOString() : null,
+    eventType: null,
+    status: null,
+    statusLabel: 'Comment',
+    statusColor: '#64748b',
+  };
+}
+
 function formatReview(r) {
   const activityAt = reviewDisplayUpdatedAt(r);
   // Once published, present a distinct "Published" state regardless of the raw
@@ -943,31 +984,7 @@ export async function pmPipelineRoutes(app) {
           });
         }
 
-        const fromOs = (review.comments || []).map((c) => ({
-          id: c.id,
-          source: 'os_comment',
-          role:
-            c.user?.role === 'OWNER'
-              ? 'Admin'
-              : c.user?.role === 'CLIENT'
-                ? 'Client'
-                : c.user?.role === 'PM'
-                  ? 'PM'
-                  : c.user?.role || 'User',
-          authorName: c.user?.name || 'User',
-          authorId: c.userId,
-          decision: null,
-          revisionNumber: null,
-          content: c.content,
-          workerNote: null,
-          pmComment: null,
-          clientComment: null,
-          createdAt: c.createdAt.toISOString(),
-          eventType: null,
-          status: null,
-          statusLabel: 'Comment',
-          statusColor: '#64748b',
-        }));
+        const fromOs = (review.comments || []).map((c) => formatOsComment(c));
 
         const merged = [...fromEvents, ...fromOs].sort(
           (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
@@ -1013,34 +1030,91 @@ export async function pmPipelineRoutes(app) {
           include: { user: { select: { id: true, name: true, role: true } } },
         });
 
-        return reply.send({
-          id: created.id,
-          source: 'os_comment',
-          role:
-            created.user?.role === 'OWNER'
-              ? 'Admin'
-              : created.user?.role === 'CLIENT'
-                ? 'Client'
-                : created.user?.role === 'PM'
-                  ? 'PM'
-                  : created.user?.role || 'User',
-          authorName: created.user?.name || 'User',
-          authorId: created.userId,
-          decision: null,
-          revisionNumber: null,
-          content: created.content,
-          workerNote: null,
-          pmComment: null,
-          clientComment: null,
-          createdAt: created.createdAt.toISOString(),
-          eventType: null,
-          status: null,
-          statusLabel: 'Comment',
-          statusColor: '#64748b',
-        });
+        return reply.send(formatOsComment(created));
       } catch (err) {
         request.log.error(err);
         return reply.status(500).send({ message: 'Failed to post comment' });
+      }
+    }
+  );
+
+  // PATCH /api/pm/pipeline/:projectId/:wpPipelineId/comments/:commentId — edit own
+  app.patch(
+    '/pipeline/:projectId/:wpPipelineId/comments/:commentId',
+    { onRequest: [app.verifyJwt, requirePipelineCommentAccess] },
+    async (request, reply) => {
+      try {
+        const { projectId, wpPipelineId, commentId } = request.params;
+        const pipelineId = Number(wpPipelineId);
+        const content = String(request.body?.content || '').trim();
+        if (!content) {
+          return reply.status(400).send({ message: 'Comment content is required' });
+        }
+
+        const review = await prisma.wpContentReview.findUnique({
+          where: { projectId_wpPipelineId: { projectId, wpPipelineId: pipelineId } },
+          select: { id: true },
+        });
+        if (!review) {
+          return reply.status(404).send({ message: 'Review not found' });
+        }
+
+        const comment = await prisma.wpContentReviewComment.findUnique({
+          where: { id: commentId },
+        });
+        if (!comment || comment.contentReviewId !== review.id) {
+          return reply.status(404).send({ message: 'Comment not found' });
+        }
+        if (comment.userId !== request.user.id) {
+          return reply.status(403).send({ message: 'You can only edit your own comments' });
+        }
+
+        const updated = await prisma.wpContentReviewComment.update({
+          where: { id: comment.id },
+          data: { content: content.slice(0, 10000) },
+          include: { user: { select: { id: true, name: true, role: true } } },
+        });
+
+        return reply.send(formatOsComment(updated));
+      } catch (err) {
+        request.log.error(err);
+        return reply.status(500).send({ message: 'Failed to update comment' });
+      }
+    }
+  );
+
+  // DELETE /api/pm/pipeline/:projectId/:wpPipelineId/comments/:commentId — delete own
+  app.delete(
+    '/pipeline/:projectId/:wpPipelineId/comments/:commentId',
+    { onRequest: [app.verifyJwt, requirePipelineCommentAccess] },
+    async (request, reply) => {
+      try {
+        const { projectId, wpPipelineId, commentId } = request.params;
+        const pipelineId = Number(wpPipelineId);
+
+        const review = await prisma.wpContentReview.findUnique({
+          where: { projectId_wpPipelineId: { projectId, wpPipelineId: pipelineId } },
+          select: { id: true },
+        });
+        if (!review) {
+          return reply.status(404).send({ message: 'Review not found' });
+        }
+
+        const comment = await prisma.wpContentReviewComment.findUnique({
+          where: { id: commentId },
+        });
+        if (!comment || comment.contentReviewId !== review.id) {
+          return reply.status(404).send({ message: 'Comment not found' });
+        }
+        if (comment.userId !== request.user.id) {
+          return reply.status(403).send({ message: 'You can only delete your own comments' });
+        }
+
+        await prisma.wpContentReviewComment.delete({ where: { id: comment.id } });
+        return reply.send({ success: true });
+      } catch (err) {
+        request.log.error(err);
+        return reply.status(500).send({ message: 'Failed to delete comment' });
       }
     }
   );
