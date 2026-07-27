@@ -14,6 +14,11 @@ import {
   startAiVisibilityRun,
   getLatestAiVisibilityRun,
 } from '../../lib/analytics/aiVisibilityRunner.js';
+import {
+  extractSiteFocusKeywords,
+  loadProjectForSiteKeywords,
+  normalizeProbeList,
+} from '../../lib/analytics/aiVisibilitySiteKeywords.js';
 
 /**
  * OWNER-scoped native analytics. Mirrors the client-facing native section
@@ -139,7 +144,38 @@ export async function adminAnalyticsRoutes(app) {
   );
 
   /**
+   * Crawl site + Claude: preview 10–15 focus keywords (no OpenRouter run).
+   */
+  app.post(
+    '/analytics/:clientId/projects/:projectId/ai-visibility/preview-queries',
+    { onRequest: [app.verifyJwt, requireOwner] },
+    async (request, reply) => {
+      const { clientId, projectId } = request.params;
+      if (!(await assertClientExists(clientId, reply))) return;
+
+      const project = await loadProjectForSiteKeywords(projectId, clientId);
+      if (!project) return reply.status(404).send({ message: 'Project not found for this client' });
+
+      try {
+        const preview = await extractSiteFocusKeywords(project);
+        return reply.send({
+          siteUrl: preview.siteUrl,
+          targetMarket: preview.targetMarket,
+          marketSource: preview.marketSource,
+          pagesCrawled: preview.pagesCrawled,
+          pageUrls: preview.pageUrls,
+          queries: preview.queries,
+        });
+      } catch (err) {
+        request.log.error({ err }, 'AI Visibility preview-queries failed');
+        return reply.status(err.status || 500).send({ message: err.message || 'Keyword preview failed' });
+      }
+    }
+  );
+
+  /**
    * Start OpenRouter + DataForSEO AI Visibility regenerate for a project.
+   * Body: { probes: string[] } — confirmed queries from preview modal.
    * Persists until the next regenerate. 409 if a run is already in progress.
    */
   app.post(
@@ -155,34 +191,47 @@ export async function adminAnalyticsRoutes(app) {
       });
       if (!project) return reply.status(404).send({ message: 'Project not found for this client' });
 
-      const { run, started, conflict } = await startAiVisibilityRun({
-        projectId,
-        clientId,
-        triggeredById: request.user?.id || null,
-      });
-
-      if (conflict) {
-        return reply.status(409).send({
-          message: 'An AI Visibility run is already in progress for this project',
-          run: {
-            id: run.id,
-            status: run.status,
-            startedAt: run.startedAt,
-            createdAt: run.createdAt,
-          },
+      const probes = normalizeProbeList(request.body?.probes || [], { min: 1, max: 20 });
+      if (probes.length === 0) {
+        return reply.status(400).send({
+          message: 'probes array is required (confirm keywords from the preview modal)',
         });
       }
 
-      return reply.status(202).send({
-        message: started ? 'AI Visibility run started' : 'AI Visibility run queued',
-        run: {
-          id: run.id,
-          status: run.status,
-          projectId: run.projectId,
-          createdAt: run.createdAt,
-        },
-        costHint: '~60 OpenRouter calls + DataForSEO mentions pull',
-      });
+      try {
+        const { run, started, conflict, probeCount } = await startAiVisibilityRun({
+          projectId,
+          clientId,
+          triggeredById: request.user?.id || null,
+          probes,
+        });
+
+        if (conflict) {
+          return reply.status(409).send({
+            message: 'An AI Visibility run is already in progress for this project',
+            run: {
+              id: run.id,
+              status: run.status,
+              startedAt: run.startedAt,
+              createdAt: run.createdAt,
+            },
+          });
+        }
+
+        return reply.status(202).send({
+          message: started ? 'AI Visibility run started' : 'AI Visibility run queued',
+          run: {
+            id: run.id,
+            status: run.status,
+            projectId: run.projectId,
+            createdAt: run.createdAt,
+          },
+          probeCount,
+          costHint: `~${(probeCount || probes.length) * 4} OpenRouter calls + DataForSEO mentions pull`,
+        });
+      } catch (err) {
+        return reply.status(err.status || 500).send({ message: err.message || 'Failed to start run' });
+      }
     }
   );
 

@@ -1,6 +1,7 @@
 /**
  * Admin-triggered AI Visibility job:
- * GSC → Anthropic local rewrite → OpenRouter probes → DataForSEO → PromptLog + snapshot.
+ * Confirmed probes (from site-crawl preview) → OpenRouter → DataForSEO → PromptLog + snapshot.
+ * Falls back to GSC intelligence only when probes are not provided (legacy).
  */
 
 import { prisma } from '../prisma.js';
@@ -13,6 +14,7 @@ import {
   brandTokensForProject,
   buildIntelligentProbeQueries,
 } from './aiVisibilityQueryIntel.js';
+import { normalizeProbeList } from './aiVisibilitySiteKeywords.js';
 
 const CONCURRENCY = 3;
 const RESPONSE_MAX = 4000;
@@ -76,8 +78,10 @@ async function syncPromptLogsFromProbes({ projectId, runId, domain, probeResults
 
 /**
  * Execute a full AI Visibility run (must already exist as pending/running).
+ * @param {string} runId
+ * @param {{ probes?: string[] }} [opts]
  */
-export async function executeAiVisibilityRun(runId) {
+export async function executeAiVisibilityRun(runId, opts = {}) {
   const run = await prisma.aiVisibilityRun.findUnique({ where: { id: runId } });
   if (!run) throw new Error('AI Visibility run not found');
 
@@ -113,15 +117,32 @@ export async function executeAiVisibilityRun(runId) {
     const brands = brandTokensForProject(project);
     if (project.client?.agencyName) brands.unshift(project.client.agencyName);
 
-    const intel = await buildIntelligentProbeQueries(project, brands);
-    if (intel.probes.length === 0) {
-      throw new Error(intel.warning || 'No GSC queries available — sync Search Console data first');
+    const confirmed = normalizeProbeList(opts.probes || [], { min: 1, max: 20 });
+    let probeRows;
+    let warning = null;
+    let rangeStart = null;
+    let rangeEnd = null;
+
+    if (confirmed.length > 0) {
+      probeRows = confirmed.map((q) => ({
+        probeQuery: q,
+        sourceQuery: 'site-crawl',
+      }));
+    } else {
+      const intel = await buildIntelligentProbeQueries(project, brands);
+      if (intel.probes.length === 0) {
+        throw new Error(intel.warning || 'No probe queries available');
+      }
+      probeRows = intel.probes;
+      warning = intel.warning;
+      rangeStart = intel.rangeStart;
+      rangeEnd = intel.rangeEnd;
     }
 
     const modelMap = getOpenRouterModelMap();
     const platforms = Object.keys(modelMap);
     const jobs = [];
-    for (const probe of intel.probes) {
+    for (const probe of probeRows) {
       for (const platform of platforms) {
         jobs.push({
           query: probe.probeQuery,
@@ -135,10 +156,10 @@ export async function executeAiVisibilityRun(runId) {
     await prisma.aiVisibilityRun.update({
       where: { id: runId },
       data: {
-        queryCount: intel.probes.length,
+        queryCount: probeRows.length,
         modelCount: platforms.length,
-        gscRangeStart: intel.rangeStart,
-        gscRangeEnd: intel.rangeEnd,
+        gscRangeStart: rangeStart,
+        gscRangeEnd: rangeEnd,
       },
     });
 
@@ -206,7 +227,7 @@ export async function executeAiVisibilityRun(runId) {
       },
     });
 
-    const warnings = [intel.warning, dfsPayload.skipped ? `DFS skipped: ${dfsPayload.error || 'unavailable'}` : null]
+    const warnings = [warning, dfsPayload.skipped ? `DFS skipped: ${dfsPayload.error || 'unavailable'}` : null]
       .filter(Boolean)
       .join(' · ');
 
@@ -219,7 +240,7 @@ export async function executeAiVisibilityRun(runId) {
       },
     });
 
-    return { ok: true, runId, queryCount: intel.probes.length, modelCount: platforms.length };
+    return { ok: true, runId, queryCount: probeRows.length, modelCount: platforms.length };
   } catch (err) {
     await prisma.aiVisibilityRun.update({
       where: { id: runId },
@@ -235,15 +256,23 @@ export async function executeAiVisibilityRun(runId) {
 
 /**
  * Create a run row and kick off background execution.
+ * @param {{ projectId: string, clientId: string, triggeredById?: string|null, probes?: string[] }} args
  * @returns {{ run, started: boolean, conflict?: boolean }}
  */
-export async function startAiVisibilityRun({ projectId, clientId, triggeredById }) {
+export async function startAiVisibilityRun({ projectId, clientId, triggeredById, probes }) {
   const active = await prisma.aiVisibilityRun.findFirst({
     where: { projectId, status: { in: ['pending', 'running'] } },
     orderBy: { createdAt: 'desc' },
   });
   if (active) {
     return { run: active, started: false, conflict: true };
+  }
+
+  const confirmed = normalizeProbeList(probes || [], { min: 1, max: 20 });
+  if (confirmed.length === 0) {
+    const err = new Error('At least one probe query is required. Preview and confirm keywords first.');
+    err.status = 400;
+    throw err;
   }
 
   const run = await prisma.aiVisibilityRun.create({
@@ -256,12 +285,12 @@ export async function startAiVisibilityRun({ projectId, clientId, triggeredById 
   });
 
   setImmediate(() => {
-    executeAiVisibilityRun(run.id).catch((err) => {
+    executeAiVisibilityRun(run.id, { probes: confirmed }).catch((err) => {
       console.error('[aiVisibility] run failed', run.id, err.message);
     });
   });
 
-  return { run, started: true, conflict: false };
+  return { run, started: true, conflict: false, probeCount: confirmed.length };
 }
 
 export async function getLatestAiVisibilityRun(projectId) {
