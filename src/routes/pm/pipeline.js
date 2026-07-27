@@ -671,27 +671,44 @@ export async function pmPipelineRoutes(app) {
 
         let res;
         try {
-          res = await fetch(url, {
-            method: 'POST',
-            headers: {
-              ...wpHeaders(project.wpApiKey),
-              'Content-Type': 'application/json',
-            },
-            signal: AbortSignal.timeout(15000),
-          });
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 15000);
+          try {
+            res = await fetch(url, {
+              method: 'POST',
+              headers: {
+                ...wpHeaders(project.wpApiKey),
+                'Content-Type': 'application/json',
+              },
+              body: '{}',
+              signal: controller.signal,
+            });
+          } finally {
+            clearTimeout(timer);
+          }
         } catch (fetchErr) {
           request.log.error({ err: fetchErr, url }, 'WP regenerate-links fetch failed');
           const isTimeout = fetchErr?.name === 'TimeoutError' || fetchErr?.name === 'AbortError';
           return reply.status(502).send({
             message: isTimeout
               ? 'WordPress did not respond in time. Please try again.'
-              : 'Unable to reach WordPress site.',
+              : 'Unable to reach WordPress site. Check the project WP URL and that the Localwave Agent plugin is active.',
           });
         }
 
         const json = await res.json().catch(() => ({}));
         if (!res.ok) {
-          return reply.status(res.status).send({ message: json.message || 'WP API error' });
+          const wpCode = json.code || json.data?.status;
+          const wpMsg = json.message || '';
+          const missingRoute =
+            res.status === 404 ||
+            wpCode === 'rest_no_route' ||
+            /no route was found/i.test(wpMsg);
+          return reply.status(missingRoute ? 502 : res.status >= 400 && res.status < 600 ? res.status : 502).send({
+            message: missingRoute
+              ? 'WordPress is missing the regenerate-links endpoint. Update the Localwave Agent (agency-os-bridge) plugin on that site to 1.9.3+, then try again.'
+              : wpMsg || 'WordPress could not regenerate preview links.',
+          });
         }
 
         const pmPreviewUrl = String(json.pmPreviewUrl || json.pipeline?.pmPreviewUrl || '').slice(0, 1000) || null;
@@ -707,7 +724,7 @@ export async function pmPipelineRoutes(app) {
             wpUpdatedAt: new Date(),
           },
           include: {
-            events: { orderBy: { createdAt: 'desc' } },
+            events: { orderBy: { createdAt: 'desc' }, take: 50 },
             project: { select: { name: true, client: { select: { agencyName: true } } } },
           },
         });
