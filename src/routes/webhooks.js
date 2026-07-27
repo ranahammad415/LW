@@ -345,6 +345,17 @@ export async function wpWebhookRoutes(app) {
       existingAssigneeId = existingReview?.assignedWorkerId || null;
     } catch { /* fail-safe */ }
 
+    const resolvedStatus =
+      isPublishEvent || alreadyPublished ? 'published' : status;
+    // When WP re-enters a pending_* stage, drop stale decision fields so OS
+    // badges match WP (e.g. changes_updated → pending_client_review).
+    const shouldClearClient =
+      resolvedStatus === 'pending_client_review' ||
+      eventType === 'pipeline_sent_to_client';
+    const shouldClearPm =
+      resolvedStatus === 'pending_pm_review' ||
+      eventType === 'pipeline_resubmitted';
+
     // Upsert the content review record
     const review = await prisma.wpContentReview.upsert({
       where: {
@@ -356,7 +367,7 @@ export async function wpWebhookRoutes(app) {
         // Canonicalize to 'published' on the publish event, and never let a
         // later (out-of-order) event regress an already-published row back to
         // an approved/pending status.
-        status: isPublishEvent || alreadyPublished ? 'published' : status,
+        status: resolvedStatus,
         submittedByName,
         submittedById,
         pmMemberName,
@@ -368,10 +379,10 @@ export async function wpWebhookRoutes(app) {
         // belt-and-suspenders for any future code path.)
         ...(pmPreviewUrl ? { pmPreviewUrl } : {}),
         ...(clientPreviewUrl ? { clientPreviewUrl } : {}),
-        pmDecision,
+        pmDecision: shouldClearPm ? null : pmDecision,
         pmComment,
-        clientDecision,
-        clientComment,
+        clientDecision: shouldClearClient ? null : clientDecision,
+        clientComment: shouldClearClient ? null : clientComment,
         workerNote,
         // Don't wipe a previously stored content type if WP omits it on a
         // later event (only submit/resubmit reliably carry it).
@@ -379,8 +390,8 @@ export async function wpWebhookRoutes(app) {
         // Persist the parent-page link for update-mode reviews (don't wipe if a
         // later event omits it).
         ...(parentWpPostId ? { parentWpPostId } : {}),
-        pmReviewedAt,
-        clientReviewedAt,
+        pmReviewedAt: shouldClearPm ? null : pmReviewedAt,
+        clientReviewedAt: shouldClearClient ? null : clientReviewedAt,
         revisionNumber,
         lastEventType: eventType,
         wpUpdatedAt,
@@ -406,15 +417,15 @@ export async function wpWebhookRoutes(app) {
         pmMemberId,
         pmPreviewUrl,
         clientPreviewUrl,
-        pmDecision,
+        pmDecision: shouldClearPm ? null : pmDecision,
         pmComment,
-        clientDecision,
-        clientComment,
+        clientDecision: shouldClearClient ? null : clientDecision,
+        clientComment: shouldClearClient ? null : clientComment,
         workerNote,
         contentType,
         parentWpPostId,
-        pmReviewedAt,
-        clientReviewedAt,
+        pmReviewedAt: shouldClearPm ? null : pmReviewedAt,
+        clientReviewedAt: shouldClearClient ? null : clientReviewedAt,
         revisionNumber,
         lastEventType: eventType,
         wpCreatedAt: wpCreatedAt || new Date(),
@@ -448,7 +459,9 @@ export async function wpWebhookRoutes(app) {
     // Create immutable event log entry.
     // Skip resend-notification — it re-fires the same status/comments and
     // floods the timeline with duplicate rows at the same timestamp.
-    if (eventType !== 'pipeline_resend_notification') {
+    // Skip links-regenerated — URL rotation should update stored previews without
+    // adding a noisy timeline row (message still available via lastEventType).
+    if (eventType !== 'pipeline_resend_notification' && eventType !== 'pipeline_links_regenerated') {
       try {
         // Dedupe the "Published" entry: the OS publish proxy, this
         // pipeline_published webhook, and the wp-content-change webhook can all

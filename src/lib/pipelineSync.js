@@ -36,15 +36,28 @@ export async function syncPipelineFromWp({ projectId } = {}) {
 
   const fetches = projects.map(async (project) => {
     const baseUrl = project.wpUrl.replace(/\/$/, '');
-    const url = `${baseUrl}/wp-json/lwa/v1/pipeline`;
     try {
-      const res = await fetch(url, {
-        headers: wpHeaders(project.wpApiKey),
-        signal: AbortSignal.timeout(10000),
-      });
-      if (!res.ok) { errors++; return; }
-      const json = await res.json();
-      const items = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : [];
+      // Paginate WP pipeline list (default 50/page) so sync heals all rows.
+      const items = [];
+      let page = 1;
+      let totalPages = 1;
+      while (page <= totalPages && page <= 40) {
+        const url = `${baseUrl}/wp-json/lwa/v1/pipeline?page=${page}&per_page=100`;
+        const res = await fetch(url, {
+          headers: wpHeaders(project.wpApiKey),
+          signal: AbortSignal.timeout(15000),
+        });
+        if (!res.ok) {
+          errors++;
+          return;
+        }
+        const json = await res.json();
+        const batch = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : [];
+        items.push(...batch);
+        totalPages = Math.max(1, Number(json?.total_pages) || 1);
+        if (batch.length === 0) break;
+        page += 1;
+      }
 
       for (const p of items) {
         const wpPipelineId = Number(p.id);
@@ -74,6 +87,11 @@ export async function syncPipelineFromWp({ projectId } = {}) {
           ? String(p.submittedBy.name).slice(0, 200)
           : null;
 
+        const resolvedStatus = isPublished ? 'published' : pipelineStatus;
+        // WP is source of truth: clear stale decisions on pending_* stages.
+        const clearClient = resolvedStatus === 'pending_client_review';
+        const clearPm = resolvedStatus === 'pending_pm_review';
+
         const data = {
           wpPostId: Number(p.postId) || 0,
           // Don't overwrite a stored title with an empty string (can happen for a
@@ -81,22 +99,30 @@ export async function syncPipelineFromWp({ projectId } = {}) {
           ...(p.postTitle ? { postTitle: String(p.postTitle).slice(0, 500) } : {}),
           // "Update Content" reviews: keep the parent-page link.
           ...(p.parentPostId ? { parentWpPostId: Number(p.parentPostId) } : {}),
-          status: isPublished ? 'published' : pipelineStatus,
+          status: resolvedStatus,
           submittedByName,
           submittedById,
           pmMemberName: p.pmAssigned?.name ? String(p.pmAssigned.name).slice(0, 200) : null,
           pmMemberId: p.pmAssigned?.memberId ? String(p.pmAssigned.memberId).slice(0, 100) : null,
           pmPreviewUrl: p.pmPreviewUrl ? String(p.pmPreviewUrl).slice(0, 1000) : null,
           clientPreviewUrl: p.clientPreviewUrl ? String(p.clientPreviewUrl).slice(0, 1000) : null,
-          pmDecision: p.pmDecision ? String(p.pmDecision).slice(0, 50) : null,
+          pmDecision: clearPm ? null : (p.pmDecision ? String(p.pmDecision).slice(0, 50) : null),
           pmComment: p.pmComment ? String(p.pmComment).slice(0, 10000) : null,
-          clientDecision: p.clientDecision ? String(p.clientDecision).slice(0, 50) : null,
-          clientComment: p.clientComment ? String(p.clientComment).slice(0, 10000) : null,
+          clientDecision: clearClient
+            ? null
+            : (p.clientDecision ? String(p.clientDecision).slice(0, 50) : null),
+          clientComment: clearClient
+            ? null
+            : (p.clientComment ? String(p.clientComment).slice(0, 10000) : null),
           workerNote: p.workerNote ? String(p.workerNote).slice(0, 10000) : null,
           // Don't wipe a stored content type if WP omits it for legacy rows.
           ...(p.contentType ? { contentType: String(p.contentType).slice(0, 50) } : {}),
-          pmReviewedAt: p.pmReviewedAt ? String(p.pmReviewedAt).slice(0, 50) : null,
-          clientReviewedAt: p.clientReviewedAt ? String(p.clientReviewedAt).slice(0, 50) : null,
+          pmReviewedAt: clearPm
+            ? null
+            : (p.pmReviewedAt ? String(p.pmReviewedAt).slice(0, 50) : null),
+          clientReviewedAt: clearClient
+            ? null
+            : (p.clientReviewedAt ? String(p.clientReviewedAt).slice(0, 50) : null),
           revisionNumber: Number(p.revisionNumber) || 1,
           ...(parseWpDate(p.createdAt) ? { wpCreatedAt: parseWpDate(p.createdAt) } : {}),
           ...(parseWpDate(p.updatedAt) ? { wpUpdatedAt: parseWpDate(p.updatedAt) } : {}),

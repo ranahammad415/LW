@@ -99,9 +99,10 @@ export function commentsForEventType(eventType, fields = {}) {
         clientDecision: null,
       };
     case 'pipeline_sent_to_client':
+      // Status transition only — PM note already lives on pipeline_pm_approved.
       return {
         workerNote: null,
-        pmComment,
+        pmComment: null,
         clientComment: null,
         pmDecision: null,
         clientDecision: null,
@@ -159,9 +160,10 @@ export function commentsForStatus(status, fields = {}) {
         clientDecision: null,
       };
     case 'pending_client_review':
+      // Status snapshot only — do not repeat the PM approve note here.
       return {
         workerNote: null,
-        pmComment,
+        pmComment: null,
         clientComment: null,
         pmDecision: null,
         clientDecision: null,

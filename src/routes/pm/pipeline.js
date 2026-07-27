@@ -585,6 +585,105 @@ export async function pmPipelineRoutes(app) {
     }
   );
 
+  // POST /api/pm/pipeline/:projectId/:wpPipelineId/regenerate-preview-links
+  // Explicitly rotate PM + client preview tokens on WordPress (old URLs 301 to
+  // new), then persist the fresh URLs on the OS review row.
+  app.post(
+    '/pipeline/:projectId/:wpPipelineId/regenerate-preview-links',
+    { onRequest: [app.verifyJwt, requirePmOrOwner] },
+    async (request, reply) => {
+      try {
+        const { projectId, wpPipelineId } = request.params;
+
+        const project = await prisma.project.findUnique({
+          where: { id: projectId },
+          select: { wpUrl: true, wpApiKey: true, leadPmId: true },
+        });
+        if (!project || !project.wpUrl || !project.wpApiKey) {
+          return reply.status(404).send({ message: 'Project not found or no WP config' });
+        }
+
+        if (request.user.role === 'PM' && project.leadPmId !== request.user.id) {
+          return reply.status(403).send({ message: 'Access denied' });
+        }
+
+        const pipelineId = Number(wpPipelineId);
+        if (!pipelineId) {
+          return reply.status(400).send({ message: 'Invalid pipeline id' });
+        }
+
+        const existing = await prisma.wpContentReview.findUnique({
+          where: { projectId_wpPipelineId: { projectId, wpPipelineId: pipelineId } },
+          select: { id: true, isPublished: true, status: true },
+        });
+        if (!existing) {
+          return reply.status(404).send({ message: 'Content review not found' });
+        }
+        if (existing.isPublished || existing.status === 'cancelled' || existing.status === 'published') {
+          return reply.status(400).send({
+            message: 'Review links can only be regenerated while the pipeline is active.',
+          });
+        }
+
+        const baseUrl = project.wpUrl.replace(/\/$/, '');
+        const url = `${baseUrl}/wp-json/lwa/v1/pipeline/${pipelineId}/regenerate-links`;
+
+        let res;
+        try {
+          res = await fetch(url, {
+            method: 'POST',
+            headers: {
+              ...wpHeaders(project.wpApiKey),
+              'Content-Type': 'application/json',
+            },
+            signal: AbortSignal.timeout(15000),
+          });
+        } catch (fetchErr) {
+          request.log.error({ err: fetchErr, url }, 'WP regenerate-links fetch failed');
+          const isTimeout = fetchErr?.name === 'TimeoutError' || fetchErr?.name === 'AbortError';
+          return reply.status(502).send({
+            message: isTimeout
+              ? 'WordPress did not respond in time. Please try again.'
+              : 'Unable to reach WordPress site.',
+          });
+        }
+
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          return reply.status(res.status).send({ message: json.message || 'WP API error' });
+        }
+
+        const pmPreviewUrl = String(json.pmPreviewUrl || json.pipeline?.pmPreviewUrl || '').slice(0, 1000) || null;
+        const clientPreviewUrl =
+          String(json.clientPreviewUrl || json.pipeline?.clientPreviewUrl || '').slice(0, 1000) || null;
+
+        const updated = await prisma.wpContentReview.update({
+          where: { id: existing.id },
+          data: {
+            ...(pmPreviewUrl ? { pmPreviewUrl } : {}),
+            ...(clientPreviewUrl ? { clientPreviewUrl } : {}),
+            lastEventType: 'pipeline_links_regenerated',
+            wpUpdatedAt: new Date(),
+          },
+          include: {
+            events: { orderBy: { createdAt: 'desc' } },
+            project: { select: { name: true, client: { select: { agencyName: true } } } },
+          },
+        });
+
+        return reply.send({
+          success: true,
+          pmPreviewUrl: updated.pmPreviewUrl,
+          clientPreviewUrl: updated.clientPreviewUrl,
+          pipeline: formatReview(updated),
+        });
+      } catch (err) {
+        request.log.error(err);
+        return reply.status(500).send({ message: 'Failed to regenerate preview links' });
+      }
+    }
+  );
+
   // POST /api/pm/pipeline/:projectId/:wpPipelineId/change-type
   // Path deliberately avoids the literal token "content-type" — some hosts'
   // WAF/ModSecurity rules reset connections to URLs containing it (same reason
