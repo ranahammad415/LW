@@ -13,6 +13,8 @@ import {
 } from '../../lib/analytics/googleAuth.js';
 import { runGscSync } from '../../lib/gscSync.js';
 import { runNativeAnalyticsSync } from '../../lib/analytics/runNativeSync.js';
+import { normalizeGmbIdentifier } from '../../lib/analytics/gmbIdentifier.js';
+import { runConnectionHealth, probeProjectGmbDfs } from '../../lib/analytics/connectionHealth.js';
 
 const accessSecret = process.env.JWT_ACCESS_SECRET;
 const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
@@ -305,20 +307,36 @@ export async function adminIntegrationsRoutes(app) {
         data.gmbAccountId = body.gmbAccountId || null;
         data.gmbLocationName = body.gmbLocationName || null;
       }
-      if (body.gmbCid !== undefined) {
-        data.gmbCid = body.gmbCid ? String(body.gmbCid).trim().slice(0, 200) : null;
-        if (body.gmbLocationName !== undefined) {
-          data.gmbLocationName = body.gmbLocationName || null;
-        }
+      if (body.targetMarket !== undefined) {
+        const tm = body.targetMarket ? String(body.targetMarket).trim().slice(0, 120) : '';
+        data.targetMarket = tm || null;
       }
       if (body.dataforseoDomain !== undefined) {
         data.dataforseoDomain = body.dataforseoDomain
           ? domainFromUrl(body.dataforseoDomain)
           : null;
       }
-      if (body.targetMarket !== undefined) {
-        const tm = body.targetMarket ? String(body.targetMarket).trim().slice(0, 120) : '';
-        data.targetMarket = tm || null;
+      if (body.gmbCid !== undefined) {
+        const market =
+          data.targetMarket !== undefined
+            ? data.targetMarket
+            : body.targetMarket !== undefined
+              ? String(body.targetMarket || '').trim() || null
+              : project.targetMarket;
+        const normalized = normalizeGmbIdentifier(body.gmbCid, {
+          targetMarket: market,
+          displayName: body.gmbLocationName,
+        });
+        data.gmbCid = normalized.identifier;
+        if (body.gmbLocationName !== undefined) {
+          data.gmbLocationName = body.gmbLocationName
+            ? String(body.gmbLocationName).trim().slice(0, 255)
+            : normalized.displayName;
+        } else if (normalized.displayName && !project.gmbLocationName) {
+          data.gmbLocationName = normalized.displayName.slice(0, 255);
+        }
+      } else if (body.gmbLocationName !== undefined) {
+        data.gmbLocationName = body.gmbLocationName || null;
       }
 
       const updated = await prisma.project.update({
@@ -339,6 +357,41 @@ export async function adminIntegrationsRoutes(app) {
         },
       });
       return reply.send(updated);
+    }
+  );
+
+  /** Live connection / adapter health for Owner admin. */
+  app.get(
+    '/integrations/health',
+    { onRequest: [app.verifyJwt, requireOwner] },
+    async (request, reply) => {
+      try {
+        const result = await runConnectionHealth();
+        return reply.send(result);
+      } catch (err) {
+        request.log.error({ err }, 'Connection health failed');
+        return reply.status(500).send({ message: err.message || 'Health check failed' });
+      }
+    }
+  );
+
+  /** Probe DataForSEO Business Data for one project's gmbCid. */
+  app.post(
+    '/integrations/health/probe-gmb',
+    { onRequest: [app.verifyJwt, requireOwner] },
+    async (request, reply) => {
+      const projectId = request.body?.projectId;
+      if (!projectId) return reply.status(400).send({ message: 'projectId is required' });
+      try {
+        const result = await probeProjectGmbDfs(projectId);
+        if (result.status === 'fail' && /not found/i.test(result.message || '')) {
+          return reply.status(404).send(result);
+        }
+        return reply.send(result);
+      } catch (err) {
+        request.log.error({ err }, 'GMB DFS probe failed');
+        return reply.status(500).send({ message: err.message || 'Probe failed' });
+      }
     }
   );
 

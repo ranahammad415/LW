@@ -147,6 +147,7 @@ async function clientProjects(clientId) {
       ga4PropertyId: true,
       gmbLocationId: true,
       gmbCid: true,
+      gmbLocationName: true,
       dataforseoDomain: true,
       targetMarket: true,
       client: { select: { agencyName: true, websiteUrl: true } },
@@ -490,8 +491,18 @@ export async function buildGa4View(clientIds, view, query) {
 export async function buildGmbView(clientIds, view, query) {
   const ctx = await resolveAnalyticsContext(clientIds, query);
   if (ctx.error) return ctx.error;
-  if (!ctx.links.gmb) {
-    return empty(false, 'Connect a Business Profile location in Admin → Integrations', ctx.cycle, ctx.source);
+
+  const reviewCountEarly = ctx.projectIds.length
+    ? await prisma.gmbReview.count({ where: { projectId: { in: ctx.projectIds } } })
+    : 0;
+
+  if (!ctx.links.gmb && reviewCountEarly === 0) {
+    return empty(
+      false,
+      'Connect a Business Profile location (or paste Maps/CID for DataForSEO) in Admin → Integrations',
+      ctx.cycle,
+      ctx.source
+    );
   }
 
   const { start, end } = ctx.range;
@@ -591,9 +602,28 @@ export async function buildGmbView(clientIds, view, query) {
     byStar,
   };
 
+  const hasNativeMetrics = rows.length > 0;
+  const hasDfsBinding = ctx.projects.some((p) => !!p.gmbCid);
+  const hasNativeBinding = ctx.projects.some((p) => !!p.gmbLocationId);
+  const metricsLimited = hasDfsBinding && !hasNativeMetrics;
+  const dataSource = hasNativeMetrics ? 'google' : hasDfsBinding || reviews.length > 0 ? 'dataforseo' : 'none';
+
+  const meta = {
+    metricsLimited,
+    dataSource,
+    hasNativeBinding,
+    hasDfsBinding,
+    profileName: ctx.projects.map((p) => p.gmbLocationName).find(Boolean) || null,
+  };
+
   const viewData =
     view === 'reviews'
-      ? { reviews: data.reviews, byStar: data.byStar, kpis: { reviews: data.kpis.reviews, rating: data.kpis.rating } }
+      ? {
+          reviews: data.reviews,
+          byStar: data.byStar,
+          kpis: { reviews: data.kpis.reviews, rating: data.kpis.rating },
+          ...meta,
+        }
       : view === 'actions'
         ? {
             series: data.series.map((r) => ({
@@ -622,8 +652,9 @@ export async function buildGmbView(clientIds, view, query) {
                   )
                 : null,
             },
+            ...meta,
           }
-        : { series: data.series, kpis: data.kpis };
+        : { series: data.series, kpis: data.kpis, reviews: data.reviews, byStar: data.byStar, ...meta };
 
   return {
     linked: true,

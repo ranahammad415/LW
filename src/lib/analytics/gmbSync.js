@@ -8,6 +8,7 @@ import {
   BUSINESS_DATA_PROVIDER,
   hasRealBusinessDataProvider,
 } from '../omniSearch/omniSearchConfig.js';
+import { dfsKeywordForProject, normalizeGmbIdentifier } from './gmbIdentifier.js';
 
 function fmt(d) {
   return d.toISOString().slice(0, 10);
@@ -48,16 +49,48 @@ async function upsertReview(projectId, r) {
  * Does not populate GmbDailyMetric (owner-only performance metrics are native-only).
  */
 async function syncGmbProjectViaDataForSeo(project) {
-  const identifier = project.gmbCid;
-  let reviews = 0;
-  const list = await fetchGmbReviewsDfs({ identifier });
-  for (const r of list) {
-    if (await upsertReview(project.id, r)) reviews++;
+  const identifier =
+    dfsKeywordForProject(project) ||
+    normalizeGmbIdentifier(project.gmbCid, { targetMarket: project.targetMarket }).identifier;
+  if (!identifier) {
+    return {
+      projectId: project.id,
+      status: 'skipped',
+      source: 'dataforseo',
+      reason: 'no_gmb_identifier',
+    };
   }
-  // Validate the identifier / warm the profile (rating is derived from reviews in buildGmbView).
+
+  let reviews = 0;
+  let info = null;
+  let infoError = null;
+
   try {
-    await fetchGmbInfoDfs({ identifier });
+    const list = await fetchGmbReviewsDfs({ identifier });
+    for (const r of list) {
+      if (await upsertReview(project.id, r)) reviews++;
+    }
   } catch (err) {
+    return {
+      projectId: project.id,
+      status: 'error',
+      source: 'dataforseo',
+      error: err.message || 'DataForSEO reviews failed',
+      identifier,
+      reviews: 0,
+    };
+  }
+
+  try {
+    info = await fetchGmbInfoDfs({ identifier });
+    if (info?.title && !project.gmbLocationName) {
+      await prisma.project.update({
+        where: { id: project.id },
+        data: { gmbLocationName: String(info.title).slice(0, 255) },
+      });
+    }
+  } catch (err) {
+    infoError = err.message;
     // eslint-disable-next-line no-console
     console.warn(`[gmbSync] dataforseo info failed for ${project.id}: ${err.message}`);
   }
@@ -67,7 +100,19 @@ async function syncGmbProjectViaDataForSeo(project) {
     data: { gmbLastSyncedAt: new Date() },
   });
 
-  return { projectId: project.id, status: 'ok', source: 'dataforseo', days: 0, reviews };
+  return {
+    projectId: project.id,
+    status: 'ok',
+    source: 'dataforseo',
+    days: 0,
+    reviews,
+    identifier,
+    profile: info
+      ? { title: info.title, rating: info.rating, reviewsCount: info.reviewsCount, cid: info.cid }
+      : null,
+    infoError,
+    metricsLimited: true,
+  };
 }
 
 export async function syncGmbProject(project) {
@@ -79,13 +124,19 @@ export async function syncGmbProject(project) {
     hasRealBusinessDataProvider();
 
   if (BUSINESS_DATA_PROVIDER === 'dataforseo') {
-    if (!dfsAvailable) return { projectId: project.id, status: 'skipped' };
+    if (!dfsAvailable) {
+      return {
+        projectId: project.id,
+        status: 'skipped',
+        reason: !project.gmbCid ? 'no_gmb_cid' : 'no_dataforseo_creds',
+      };
+    }
     return syncGmbProjectViaDataForSeo(project);
   }
 
   if (!project.gmbLocationId) {
     if (dfsAvailable) return syncGmbProjectViaDataForSeo(project);
-    return { projectId: project.id, status: 'skipped' };
+    return { projectId: project.id, status: 'skipped', reason: 'no_gmb_binding' };
   }
 
   const end = new Date();
@@ -163,6 +214,8 @@ export async function runGmbSync() {
       gmbLocationId: true,
       gmbAccountId: true,
       gmbCid: true,
+      gmbLocationName: true,
+      targetMarket: true,
       clientId: true,
     },
   });
@@ -171,13 +224,14 @@ export async function runGmbSync() {
     try {
       details.push(await syncGmbProject(p));
     } catch (err) {
-      details.push({ projectId: p.id, status: 'error', error: err.message });
+      details.push({ projectId: p.id, status: 'error', error: err.message, source: 'unknown' });
     }
   }
   return {
     total: projects.length,
     success: details.filter((d) => d.status === 'ok').length,
     errors: details.filter((d) => d.status === 'error').length,
+    skipped: details.filter((d) => d.status === 'skipped').length,
     details,
   };
 }
