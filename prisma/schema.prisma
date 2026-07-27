@@ -448,6 +448,8 @@ model Project {
   gmbCid             String?       @db.VarChar(200)
   gmbLastSyncedAt    DateTime?
   dataforseoDomain   String?       @db.VarChar(255)
+  /// Local market for AI Visibility query rewrites (e.g. "Milwaukee")
+  targetMarket       String?       @db.VarChar(120)
   createdAt          DateTime      @default(now())
   updatedAt          DateTime      @default(now()) @updatedAt
 
@@ -1218,6 +1220,8 @@ model AiVisibilityResult {
   id              String   @id @default(uuid())
   runId           String
   query           String   @db.VarChar(500)
+  /// Original GSC query before local rewrite (when different from probe query)
+  sourceQuery     String?  @db.VarChar(500)
   platform        String   @db.VarChar(50)
   openrouterModel String   @db.VarChar(120)
   cited           Boolean  @default(false)

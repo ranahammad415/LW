@@ -148,6 +148,7 @@ async function clientProjects(clientId) {
       gmbLocationId: true,
       gmbCid: true,
       dataforseoDomain: true,
+      targetMarket: true,
       client: { select: { agencyName: true, websiteUrl: true } },
     },
   });
@@ -755,35 +756,50 @@ export async function buildLlmView(clientIds, view, query) {
     if (p.cited) byPlatform[key].cited++;
   }
 
-  // Query breakdown: group by query across platforms
+  // Query breakdown: group by query across platforms (all answers, not only cited)
   const byQuery = new Map();
   for (const r of results) {
     const acc = byQuery.get(r.query) || {
       query: r.query,
+      sourceQuery: r.sourceQuery || null,
       tested: 0,
       cited: 0,
       platforms: {},
       snippets: [],
+      competitors: new Set(),
     };
+    if (!acc.sourceQuery && r.sourceQuery) acc.sourceQuery = r.sourceQuery;
     acc.tested++;
-    if (r.cited) {
-      acc.cited++;
-      if (r.responseText) {
-        acc.snippets.push({
-          platform: r.platform,
-          citationType: r.citationType,
-          text: String(r.responseText).slice(0, 600),
-        });
-      }
+    if (r.cited) acc.cited++;
+    if (r.responseText) {
+      const comps = Array.isArray(r.competitorsJson) ? r.competitorsJson : [];
+      for (const c of comps) if (c) acc.competitors.add(String(c));
+      acc.snippets.push({
+        platform: r.platform,
+        cited: !!r.cited,
+        citationType: r.citationType,
+        text: String(r.responseText).slice(0, 1200),
+        competitors: comps,
+      });
     }
     acc.platforms[r.platform] = { cited: r.cited, citationType: r.citationType };
     byQuery.set(r.query, acc);
   }
   const queries = [...byQuery.values()]
-    .map((q) => ({
-      ...q,
-      citationRate: q.tested > 0 ? Math.round((q.cited / q.tested) * 100) : 0,
-    }))
+    .map((q) => {
+      const snippets = [...q.snippets].sort((a, b) => Number(b.cited) - Number(a.cited));
+      return {
+        query: q.query,
+        sourceQuery:
+          q.sourceQuery && q.sourceQuery !== q.query ? q.sourceQuery : q.sourceQuery || null,
+        tested: q.tested,
+        cited: q.cited,
+        platforms: q.platforms,
+        snippets,
+        competitors: [...q.competitors].slice(0, 20),
+        citationRate: q.tested > 0 ? Math.round((q.cited / q.tested) * 100) : 0,
+      };
+    })
     .sort((a, b) => b.cited - a.cited || b.tested - a.tested);
 
   const dfsPayload = latestRun?.dfs?.payload || null;
@@ -818,6 +834,7 @@ export async function buildLlmView(clientIds, view, query) {
     name: p.name,
     gscLinked: !!p.gscSiteUrl,
     domain: p.dataforseoDomain || null,
+    targetMarket: p.targetMarket || null,
   }));
 
   const runMeta = latestRun

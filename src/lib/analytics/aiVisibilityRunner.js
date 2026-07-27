@@ -1,6 +1,6 @@
 /**
  * Admin-triggered AI Visibility job:
- * GSC top queries → OpenRouter multi-model probes → DataForSEO LLM Mentions → persist snapshot.
+ * GSC → Anthropic local rewrite → OpenRouter probes → DataForSEO → PromptLog + snapshot.
  */
 
 import { prisma } from '../prisma.js';
@@ -8,68 +8,21 @@ import { domainFromUrl } from './providers.js';
 import { getOpenRouterModelMap, isOpenRouterConfigured, probeVisibilityQuery } from '../openrouter/client.js';
 import { detectCitation, extractCompetitorDomains } from '../openrouter/citation.js';
 import { buildDfsVisibilitySnapshot } from '../dataforseo/llmMentions.js';
+import {
+  AI_VIS_AUTO_NOTES_PREFIX,
+  brandTokensForProject,
+  buildIntelligentProbeQueries,
+} from './aiVisibilityQueryIntel.js';
 
-const QUERY_LIMIT = 15;
 const CONCURRENCY = 3;
 const RESPONSE_MAX = 4000;
-const GSC_SEED_DAYS = 28;
 
-function brandTokensForProject(project) {
-  const raw = [
-    project.client?.agencyName,
-    project.client?.websiteUrl,
-    project.dataforseoDomain,
-    project.gscSiteUrl,
-  ].filter(Boolean);
-  return [
-    ...new Set(
-      raw.flatMap((s) => {
-        const cleaned = String(s)
-          .toLowerCase()
-          .replace(/^https?:\/\//, '')
-          .replace(/^www\./, '')
-          .replace(/^sc-domain:/, '');
-        const parts = cleaned.split(/[./\s_-]+/).filter((t) => t && t.length > 2);
-        const hostLabel = cleaned.split(/[./]/)[0];
-        return [hostLabel, ...parts].filter(Boolean);
-      })
-    ),
-  ].filter((t) => t && t.length >= 2);
-}
-
-function isBrandQuery(query, brandTokens) {
-  const q = String(query || '').toLowerCase();
-  return brandTokens.some((t) => t && q.includes(String(t).toLowerCase()));
-}
-
-async function seedGscQueries(projectId, brandTokens) {
-  const end = new Date();
-  const start = new Date(end.getTime() - GSC_SEED_DAYS * 86400000);
-  const rows = await prisma.gscQueryMetric.findMany({
-    where: { projectId, date: { gte: start, lte: end } },
-    orderBy: { impressions: 'desc' },
-    take: 400,
-  });
-
-  const byQuery = new Map();
-  for (const r of rows) {
-    const acc = byQuery.get(r.query) || { query: r.query, impressions: 0, clicks: 0 };
-    acc.impressions += r.impressions || 0;
-    acc.clicks += r.clicks || 0;
-    byQuery.set(r.query, acc);
-  }
-
-  const all = [...byQuery.values()].sort((a, b) => b.impressions - a.impressions);
-  const generic = all.filter((q) => !isBrandQuery(q.query, brandTokens));
-  const preferred = generic.length >= Math.min(8, QUERY_LIMIT) ? generic : all;
-  const selected = preferred.slice(0, QUERY_LIMIT).map((q) => q.query);
-
-  return {
-    queries: selected,
-    rangeStart: start,
-    rangeEnd: end,
-  };
-}
+const PLATFORM_LABELS = {
+  chatgpt: 'ChatGPT',
+  claude: 'Claude',
+  gemini: 'Gemini',
+  perplexity: 'Perplexity',
+};
 
 async function mapPool(items, concurrency, worker) {
   const results = new Array(items.length);
@@ -87,6 +40,38 @@ async function mapPool(items, concurrency, worker) {
 function truncate(text, max = RESPONSE_MAX) {
   const s = String(text || '');
   return s.length > max ? `${s.slice(0, max)}…` : s;
+}
+
+async function syncPromptLogsFromProbes({ projectId, runId, domain, probeResults }) {
+  await prisma.promptLog.deleteMany({
+    where: {
+      projectId,
+      notes: { startsWith: AI_VIS_AUTO_NOTES_PREFIX },
+    },
+  });
+
+  if (!probeResults.length) return;
+
+  const notes = `${AI_VIS_AUTO_NOTES_PREFIX} · run ${runId}`.slice(0, 1000);
+  const targetUrl = domain ? `https://${domain}` : null;
+
+  const rows = probeResults.map((r) => ({
+    projectId,
+    platform: (PLATFORM_LABELS[r.platform] || r.platform || 'unknown').slice(0, 100),
+    promptQuery: String(r.query || ''),
+    llmResponse: String(r.responseText || ''),
+    notes,
+    keyword: r.sourceQuery ? String(r.sourceQuery).slice(0, 500) : null,
+    targetUrl: targetUrl ? targetUrl.slice(0, 500) : null,
+    cited: !!r.cited,
+    competitorsCited: Array.isArray(r.competitorsJson) ? r.competitorsJson : [],
+  }));
+
+  // Batch create to avoid huge single payloads
+  const chunk = 50;
+  for (let i = 0; i < rows.length; i += chunk) {
+    await prisma.promptLog.createMany({ data: rows.slice(i, i + chunk) });
+  }
 }
 
 /**
@@ -110,9 +95,11 @@ export async function executeAiVisibilityRun(runId) {
       where: { id: run.projectId },
       select: {
         id: true,
+        clientId: true,
         name: true,
         gscSiteUrl: true,
         dataforseoDomain: true,
+        targetMarket: true,
         client: { select: { agencyName: true, websiteUrl: true } },
       },
     });
@@ -126,27 +113,32 @@ export async function executeAiVisibilityRun(runId) {
     const brands = brandTokensForProject(project);
     if (project.client?.agencyName) brands.unshift(project.client.agencyName);
 
-    const { queries, rangeStart, rangeEnd } = await seedGscQueries(project.id, brands);
-    if (queries.length === 0) {
-      throw new Error('No GSC queries available — sync Search Console data first');
+    const intel = await buildIntelligentProbeQueries(project, brands);
+    if (intel.probes.length === 0) {
+      throw new Error(intel.warning || 'No GSC queries available — sync Search Console data first');
     }
 
     const modelMap = getOpenRouterModelMap();
     const platforms = Object.keys(modelMap);
     const jobs = [];
-    for (const query of queries) {
+    for (const probe of intel.probes) {
       for (const platform of platforms) {
-        jobs.push({ query, platform, model: modelMap[platform] });
+        jobs.push({
+          query: probe.probeQuery,
+          sourceQuery: probe.sourceQuery,
+          platform,
+          model: modelMap[platform],
+        });
       }
     }
 
     await prisma.aiVisibilityRun.update({
       where: { id: runId },
       data: {
-        queryCount: queries.length,
+        queryCount: intel.probes.length,
         modelCount: platforms.length,
-        gscRangeStart: rangeStart,
-        gscRangeEnd: rangeEnd,
+        gscRangeStart: intel.rangeStart,
+        gscRangeEnd: intel.rangeEnd,
       },
     });
 
@@ -165,6 +157,7 @@ export async function executeAiVisibilityRun(runId) {
         return {
           runId,
           query: job.query.slice(0, 500),
+          sourceQuery: job.sourceQuery ? String(job.sourceQuery).slice(0, 500) : null,
           platform: job.platform,
           openrouterModel: model || job.model,
           cited,
@@ -176,6 +169,7 @@ export async function executeAiVisibilityRun(runId) {
         return {
           runId,
           query: job.query.slice(0, 500),
+          sourceQuery: job.sourceQuery ? String(job.sourceQuery).slice(0, 500) : null,
           platform: job.platform,
           openrouterModel: job.model,
           cited: false,
@@ -186,11 +180,17 @@ export async function executeAiVisibilityRun(runId) {
       }
     });
 
-    // Replace prior results for this run (idempotent if retried)
     await prisma.aiVisibilityResult.deleteMany({ where: { runId } });
     if (probeResults.length) {
       await prisma.aiVisibilityResult.createMany({ data: probeResults });
     }
+
+    await syncPromptLogsFromProbes({
+      projectId: project.id,
+      runId,
+      domain,
+      probeResults,
+    });
 
     const dfsPayload = await buildDfsVisibilitySnapshot(domain);
     await prisma.aiVisibilityDfsSnapshot.upsert({
@@ -206,16 +206,20 @@ export async function executeAiVisibilityRun(runId) {
       },
     });
 
+    const warnings = [intel.warning, dfsPayload.skipped ? `DFS skipped: ${dfsPayload.error || 'unavailable'}` : null]
+      .filter(Boolean)
+      .join(' · ');
+
     await prisma.aiVisibilityRun.update({
       where: { id: runId },
       data: {
         status: 'completed',
         finishedAt: new Date(),
-        error: dfsPayload.skipped ? `DFS skipped: ${dfsPayload.error || 'unavailable'}` : null,
+        error: warnings ? warnings.slice(0, 1000) : null,
       },
     });
 
-    return { ok: true, runId, queryCount: queries.length, modelCount: platforms.length };
+    return { ok: true, runId, queryCount: intel.probes.length, modelCount: platforms.length };
   } catch (err) {
     await prisma.aiVisibilityRun.update({
       where: { id: runId },
@@ -251,7 +255,6 @@ export async function startAiVisibilityRun({ projectId, clientId, triggeredById 
     },
   });
 
-  // Fire-and-forget; errors are persisted on the run row.
   setImmediate(() => {
     executeAiVisibilityRun(run.id).catch((err) => {
       console.error('[aiVisibility] run failed', run.id, err.message);
@@ -283,7 +286,9 @@ export async function getLatestCompletedAiVisibilityRun(clientId, projectIds = [
     include: {
       results: true,
       dfs: true,
-      project: { select: { id: true, name: true, dataforseoDomain: true, gscSiteUrl: true } },
+      project: {
+        select: { id: true, name: true, dataforseoDomain: true, gscSiteUrl: true, targetMarket: true },
+      },
     },
   });
 }

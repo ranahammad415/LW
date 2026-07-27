@@ -269,6 +269,7 @@ export async function adminIntegrationsRoutes(app) {
           gmbCid: true,
           gmbLastSyncedAt: true,
           dataforseoDomain: true,
+          targetMarket: true,
           client: { select: { agencyName: true, websiteUrl: true } },
         },
       });
@@ -315,6 +316,10 @@ export async function adminIntegrationsRoutes(app) {
           ? domainFromUrl(body.dataforseoDomain)
           : null;
       }
+      if (body.targetMarket !== undefined) {
+        const tm = body.targetMarket ? String(body.targetMarket).trim().slice(0, 120) : '';
+        data.targetMarket = tm || null;
+      }
 
       const updated = await prisma.project.update({
         where: { id: projectId },
@@ -330,6 +335,7 @@ export async function adminIntegrationsRoutes(app) {
           gmbLocationName: true,
           gmbCid: true,
           dataforseoDomain: true,
+          targetMarket: true,
         },
       });
       return reply.send(updated);
@@ -354,6 +360,7 @@ export async function adminIntegrationsRoutes(app) {
           gmbLocationName: true,
           gmbCid: true,
           dataforseoDomain: true,
+          targetMarket: true,
           gscLastSyncedAt: true,
           ga4LastSyncedAt: true,
           gmbLastSyncedAt: true,
