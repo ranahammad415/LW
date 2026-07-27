@@ -120,32 +120,24 @@ export async function buildClientAnalytics(clientId, cycle, opts = {}) {
       : null,
   };
 
-  // AI-search visibility ("AI chat results") for the cycle month.
-  const [promptsTested, cited, platformRows, prevTested, prevCited] = await Promise.all([
-    prisma.promptLog.count({ where: { project: { clientId }, createdAt: { gte: start, lte: end } } }),
-    prisma.promptLog.count({ where: { project: { clientId }, createdAt: { gte: start, lte: end }, cited: true } }),
-    prisma.promptLog.findMany({
-      where: { project: { clientId }, createdAt: { gte: start, lte: end } },
-      select: { platform: true },
-      take: 500,
-    }),
-    prev
-      ? prisma.promptLog.count({ where: { project: { clientId }, createdAt: { gte: prev.start, lte: prev.end } } })
-      : Promise.resolve(0),
-    prev
-      ? prisma.promptLog.count({
-          where: { project: { clientId }, createdAt: { gte: prev.start, lte: prev.end }, cited: true },
-        })
-      : Promise.resolve(0),
-  ]);
+  // AI Visibility from latest completed OpenRouter snapshot (not PromptLog sim).
+  const latestAiRun = projectIds.length
+    ? await prisma.aiVisibilityRun.findFirst({
+        where: { clientId, projectId: { in: projectIds }, status: 'completed' },
+        orderBy: { finishedAt: 'desc' },
+        include: { results: { select: { platform: true, cited: true } } },
+      })
+    : null;
+  const promptsTested = latestAiRun?.results?.length || 0;
+  const cited = latestAiRun?.results?.filter((r) => r.cited).length || 0;
   const citationRate = promptsTested > 0 ? Math.round((cited / promptsTested) * 100) : 0;
-  const prevCitationRate = prevTested > 0 ? Math.round((prevCited / prevTested) * 100) : 0;
   const aiVisibility = {
     promptsTested,
     cited,
     citationRate,
-    citationRateDelta: prevTested > 0 ? pctDelta(citationRate, prevCitationRate) : null,
-    platforms: [...new Set(platformRows.map((p) => p.platform).filter(Boolean))],
+    citationRateDelta: null,
+    platforms: [...new Set((latestAiRun?.results || []).map((p) => p.platform).filter(Boolean))],
+    runFinishedAt: latestAiRun?.finishedAt || null,
   };
 
   // GA4 + GMB rollups for the cycle month (with previous month for deltas)

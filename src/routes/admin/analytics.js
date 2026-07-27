@@ -10,6 +10,10 @@ import {
   buildLlmView,
 } from '../../lib/analytics/sectionBuilders.js';
 import { generateAiHtmlReport } from '../../lib/analytics/aiHtmlReport/index.js';
+import {
+  startAiVisibilityRun,
+  getLatestAiVisibilityRun,
+} from '../../lib/analytics/aiVisibilityRunner.js';
 
 /**
  * OWNER-scoped native analytics. Mirrors the client-facing native section
@@ -131,6 +135,91 @@ export async function adminAnalyticsRoutes(app) {
       const { clientId, view } = request.params;
       if (!(await assertClientExists(clientId, reply))) return;
       return sendSection(reply, await buildLlmView([clientId], view, request.query));
+    }
+  );
+
+  /**
+   * Start OpenRouter + DataForSEO AI Visibility regenerate for a project.
+   * Persists until the next regenerate. 409 if a run is already in progress.
+   */
+  app.post(
+    '/analytics/:clientId/projects/:projectId/ai-visibility/run',
+    { onRequest: [app.verifyJwt, requireOwner] },
+    async (request, reply) => {
+      const { clientId, projectId } = request.params;
+      if (!(await assertClientExists(clientId, reply))) return;
+
+      const project = await prisma.project.findFirst({
+        where: { id: projectId, clientId },
+        select: { id: true, gscSiteUrl: true, dataforseoDomain: true },
+      });
+      if (!project) return reply.status(404).send({ message: 'Project not found for this client' });
+
+      const { run, started, conflict } = await startAiVisibilityRun({
+        projectId,
+        clientId,
+        triggeredById: request.user?.id || null,
+      });
+
+      if (conflict) {
+        return reply.status(409).send({
+          message: 'An AI Visibility run is already in progress for this project',
+          run: {
+            id: run.id,
+            status: run.status,
+            startedAt: run.startedAt,
+            createdAt: run.createdAt,
+          },
+        });
+      }
+
+      return reply.status(202).send({
+        message: started ? 'AI Visibility run started' : 'AI Visibility run queued',
+        run: {
+          id: run.id,
+          status: run.status,
+          projectId: run.projectId,
+          createdAt: run.createdAt,
+        },
+        costHint: '~60 OpenRouter calls + DataForSEO mentions pull',
+      });
+    }
+  );
+
+  /** Poll latest AI Visibility run status for a project. */
+  app.get(
+    '/analytics/:clientId/projects/:projectId/ai-visibility/latest',
+    { onRequest: [app.verifyJwt, requireOwner] },
+    async (request, reply) => {
+      const { clientId, projectId } = request.params;
+      if (!(await assertClientExists(clientId, reply))) return;
+
+      const project = await prisma.project.findFirst({
+        where: { id: projectId, clientId },
+        select: { id: true },
+      });
+      if (!project) return reply.status(404).send({ message: 'Project not found for this client' });
+
+      const run = await getLatestAiVisibilityRun(projectId);
+      if (!run) {
+        return reply.send({ run: null, message: 'No AI Visibility run yet' });
+      }
+
+      return reply.send({
+        run: {
+          id: run.id,
+          status: run.status,
+          projectId: run.projectId,
+          startedAt: run.startedAt,
+          finishedAt: run.finishedAt,
+          queryCount: run.queryCount,
+          modelCount: run.modelCount,
+          error: run.error,
+          resultCount: run._count?.results || 0,
+          hasDfs: !!run.dfs,
+          createdAt: run.createdAt,
+        },
+      });
     }
   );
 

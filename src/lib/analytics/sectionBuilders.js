@@ -676,37 +676,52 @@ export async function buildLlmView(clientIds, view, query) {
   if (ctx.error) return ctx.error;
 
   const { start, end } = ctx.range;
-  const prevRange = ctx.prevRange;
-  const [promptsTested, cited, platformRows, prevTested, prevCited] = await Promise.all([
-    prisma.promptLog.count({ where: { project: { clientId: ctx.clientId }, createdAt: { gte: start, lte: end } } }),
-    prisma.promptLog.count({
-      where: { project: { clientId: ctx.clientId }, createdAt: { gte: start, lte: end }, cited: true },
-    }),
-    prisma.promptLog.findMany({
-      where: { project: { clientId: ctx.clientId }, createdAt: { gte: start, lte: end } },
-      select: { platform: true, cited: true, promptQuery: true, createdAt: true },
-      take: 300,
-      orderBy: { createdAt: 'desc' },
-    }),
-    prevRange
-      ? prisma.promptLog.count({
-          where: { project: { clientId: ctx.clientId }, createdAt: { gte: prevRange.start, lte: prevRange.end } },
-        })
-      : Promise.resolve(0),
-    prevRange
-      ? prisma.promptLog.count({
-          where: {
-            project: { clientId: ctx.clientId },
-            createdAt: { gte: prevRange.start, lte: prevRange.end },
-            cited: true,
-          },
-        })
-      : Promise.resolve(0),
-  ]);
-  const hasPrevLlm = !!prevRange && prevTested > 0;
-  const prevCitationRate = prevTested > 0 ? Math.round((prevCited / prevTested) * 100) : 0;
 
-  // LLM referrers from latest GA4 breakdown if available
+  // Prefer latest completed OpenRouter + DFS snapshot (persists until next regenerate).
+  const latestRun = await prisma.aiVisibilityRun.findFirst({
+    where: { clientId: ctx.clientId, projectId: { in: ctx.projectIds }, status: 'completed' },
+    orderBy: { finishedAt: 'desc' },
+    include: {
+      results: true,
+      dfs: true,
+      project: { select: { id: true, name: true, dataforseoDomain: true, gscSiteUrl: true } },
+    },
+  });
+
+  const activeRun = await prisma.aiVisibilityRun.findFirst({
+    where: {
+      clientId: ctx.clientId,
+      projectId: { in: ctx.projectIds },
+      status: { in: ['pending', 'running'] },
+    },
+    orderBy: { createdAt: 'desc' },
+    select: {
+      id: true,
+      projectId: true,
+      status: true,
+      startedAt: true,
+      createdAt: true,
+      queryCount: true,
+      modelCount: true,
+      error: true,
+    },
+  });
+
+  const prevRun = latestRun
+    ? await prisma.aiVisibilityRun.findFirst({
+        where: {
+          clientId: ctx.clientId,
+          projectId: { in: ctx.projectIds },
+          status: 'completed',
+          id: { not: latestRun.id },
+          finishedAt: { lt: latestRun.finishedAt || latestRun.createdAt },
+        },
+        orderBy: { finishedAt: 'desc' },
+        include: { results: { select: { cited: true } } },
+      })
+    : null;
+
+  // GA4 AI referrers (period-scoped traffic, separate from citations)
   let llmReferrers = [];
   if (ctx.links.ga4) {
     const rows = await prisma.ga4DailyMetric.findMany({
@@ -722,40 +737,138 @@ export async function buildLlmView(clientIds, view, query) {
     }
   }
 
+  const results = latestRun?.results || [];
+  const promptsTested = results.length;
+  const cited = results.filter((r) => r.cited).length;
+  const citationRate = promptsTested > 0 ? Math.round((cited / promptsTested) * 100) : 0;
+
+  const prevTested = prevRun?.results?.length || 0;
+  const prevCited = prevRun?.results?.filter((r) => r.cited).length || 0;
+  const prevCitationRate = prevTested > 0 ? Math.round((prevCited / prevTested) * 100) : 0;
+  const hasPrev = prevTested > 0;
+
   const byPlatform = {};
-  for (const p of platformRows) {
+  for (const p of results) {
     const key = p.platform || 'unknown';
     byPlatform[key] = byPlatform[key] || { platform: key, tested: 0, cited: 0 };
     byPlatform[key].tested++;
     if (p.cited) byPlatform[key].cited++;
   }
 
+  // Query breakdown: group by query across platforms
+  const byQuery = new Map();
+  for (const r of results) {
+    const acc = byQuery.get(r.query) || {
+      query: r.query,
+      tested: 0,
+      cited: 0,
+      platforms: {},
+      snippets: [],
+    };
+    acc.tested++;
+    if (r.cited) {
+      acc.cited++;
+      if (r.responseText) {
+        acc.snippets.push({
+          platform: r.platform,
+          citationType: r.citationType,
+          text: String(r.responseText).slice(0, 600),
+        });
+      }
+    }
+    acc.platforms[r.platform] = { cited: r.cited, citationType: r.citationType };
+    byQuery.set(r.query, acc);
+  }
+  const queries = [...byQuery.values()]
+    .map((q) => ({
+      ...q,
+      citationRate: q.tested > 0 ? Math.round((q.cited / q.tested) * 100) : 0,
+    }))
+    .sort((a, b) => b.cited - a.cited || b.tested - a.tested);
+
+  const dfsPayload = latestRun?.dfs?.payload || null;
+  const dfs = dfsPayload
+    ? {
+        ok: !!dfsPayload.ok,
+        skipped: !!dfsPayload.skipped,
+        error: dfsPayload.error || null,
+        domain: dfsPayload.domain || latestRun?.dfs?.domain || null,
+        totalMentions: dfsPayload.totalMentions || 0,
+        aiSearchVolume: dfsPayload.aiSearchVolume || 0,
+        byPlatform: dfsPayload.byPlatform || {},
+        topDomains: dfsPayload.topDomains || [],
+        searchMentions: dfsPayload.searchMentions || null,
+        fetchedAt: dfsPayload.fetchedAt || latestRun?.dfs?.createdAt || null,
+      }
+    : null;
+
+  // Merge Google AIO from DFS into platform table when present
+  const platforms = Object.values(byPlatform);
+  if (dfs?.byPlatform?.google?.mentions != null) {
+    platforms.push({
+      platform: 'google_aio',
+      tested: null,
+      cited: dfs.byPlatform.google.mentions,
+      source: 'dataforseo',
+    });
+  }
+
+  const projects = ctx.projects.map((p) => ({
+    id: p.id,
+    name: p.name,
+    gscLinked: !!p.gscSiteUrl,
+    domain: p.dataforseoDomain || null,
+  }));
+
+  const runMeta = latestRun
+    ? {
+        id: latestRun.id,
+        projectId: latestRun.projectId,
+        projectName: latestRun.project?.name || null,
+        status: latestRun.status,
+        startedAt: latestRun.startedAt,
+        finishedAt: latestRun.finishedAt,
+        queryCount: latestRun.queryCount,
+        modelCount: latestRun.modelCount,
+        gscRangeStart: latestRun.gscRangeStart,
+        gscRangeEnd: latestRun.gscRangeEnd,
+        error: latestRun.error,
+      }
+    : null;
+
   const data = {
     kpis: {
       promptsTested,
       cited,
-      citationRate: promptsTested > 0 ? Math.round((cited / promptsTested) * 100) : 0,
+      citationRate,
       referrers: llmReferrers.length,
-      promptsTestedDelta: hasPrevLlm ? pctDelta(promptsTested, prevTested) : null,
-      citedDelta: hasPrevLlm ? pctDelta(cited, prevCited) : null,
-      citationRateDelta: hasPrevLlm
-        ? pctDelta(promptsTested > 0 ? Math.round((cited / promptsTested) * 100) : 0, prevCitationRate)
-        : null,
+      platformsCovered: platforms.filter((p) => p.tested == null || p.tested > 0).length,
+      promptsTestedDelta: hasPrev ? pctDelta(promptsTested, prevTested) : null,
+      citedDelta: hasPrev ? pctDelta(cited, prevCited) : null,
+      citationRateDelta: hasPrev ? pctDelta(citationRate, prevCitationRate) : null,
     },
-    platforms: Object.values(byPlatform),
+    platforms,
+    queries,
+    dfs,
     llmReferrers,
-    recent: platformRows.slice(0, 50),
+    run: runMeta,
+    activeRun: activeRun || null,
+    projects,
+    canRegenerate: true,
+    emptyHint: !latestRun
+      ? ctx.links.gsc
+        ? 'No AI Visibility run yet — Generate AI Visibility to probe ChatGPT, Claude, Gemini, and Perplexity on your top Search queries.'
+        : 'Link Google Search Console and set a domain, then Generate AI Visibility.'
+      : null,
   };
 
   return {
-    linked: promptsTested > 0 || llmReferrers.length > 0 || ctx.links.ga4,
-    emptyReason:
-      promptsTested === 0 && llmReferrers.length === 0
-        ? 'No AI visibility or LLM referrer data for this session yet'
-        : null,
+    // Always linked so the page can show regenerate CTA / honest empty state
+    linked: true,
+    emptyReason: null,
     cycle: metaCycle(ctx),
     range: metaRange(ctx),
     source: ctx.source,
-    data: view === 'referrers' ? { llmReferrers, kpis: data.kpis } : data,
+    data: view === 'referrers' ? { llmReferrers, kpis: data.kpis, run: runMeta } : data,
   };
 }

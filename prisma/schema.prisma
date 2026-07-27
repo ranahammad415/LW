@@ -472,6 +472,7 @@ model Project {
   ga4DailyMetrics     Ga4DailyMetric[]
   gmbDailyMetrics     GmbDailyMetric[]
   gmbReviews          GmbReview[]
+  aiVisibilityRuns    AiVisibilityRun[]
 
   @@map("project")
 }
@@ -1184,6 +1185,64 @@ model GmbReview {
   @@unique([projectId, reviewId])
   @@index([projectId, createTime])
   @@map("gmbreview")
+}
+
+/// Admin-triggered AI Visibility snapshot (OpenRouter probes + DataForSEO mentions).
+model AiVisibilityRun {
+  id             String    @id @default(uuid())
+  projectId      String
+  clientId       String
+  status         String    @default("pending") @db.VarChar(30)
+  triggeredById  String?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  queryCount     Int       @default(0)
+  modelCount     Int       @default(0)
+  gscRangeStart  DateTime? @db.Date
+  gscRangeEnd    DateTime? @db.Date
+  error          String?   @db.VarChar(1000)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @default(now()) @updatedAt
+
+  project Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  results AiVisibilityResult[]
+  dfs     AiVisibilityDfsSnapshot?
+
+  @@index([projectId, createdAt])
+  @@index([clientId, createdAt])
+  @@index([status])
+  @@map("aivisibilityrun")
+}
+
+model AiVisibilityResult {
+  id              String   @id @default(uuid())
+  runId           String
+  query           String   @db.VarChar(500)
+  platform        String   @db.VarChar(50)
+  openrouterModel String   @db.VarChar(120)
+  cited           Boolean  @default(false)
+  citationType    String?  @db.VarChar(30)
+  responseText    String?  @db.LongText
+  competitorsJson Json?
+  createdAt       DateTime @default(now())
+
+  run AiVisibilityRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, platform])
+  @@index([runId, query])
+  @@map("aivisibilityresult")
+}
+
+model AiVisibilityDfsSnapshot {
+  id        String   @id @default(uuid())
+  runId     String   @unique
+  domain    String?  @db.VarChar(255)
+  payload   Json
+  createdAt DateTime @default(now())
+
+  run AiVisibilityRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@map("aivisibilitydfssnapshot")
 }
 
 model ClientROIConfig {
