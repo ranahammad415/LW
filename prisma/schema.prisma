@@ -1191,20 +1191,24 @@ model GmbReview {
 
 /// Admin-triggered AI Visibility snapshot (OpenRouter probes + DataForSEO mentions).
 model AiVisibilityRun {
-  id             String    @id @default(uuid())
-  projectId      String
-  clientId       String
-  status         String    @default("pending") @db.VarChar(30)
-  triggeredById  String?
-  startedAt      DateTime?
-  finishedAt     DateTime?
-  queryCount     Int       @default(0)
-  modelCount     Int       @default(0)
-  gscRangeStart  DateTime? @db.Date
-  gscRangeEnd    DateTime? @db.Date
-  error          String?   @db.VarChar(1000)
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @default(now()) @updatedAt
+  id               String    @id @default(uuid())
+  projectId        String
+  clientId         String
+  status           String    @default("pending") @db.VarChar(30)
+  triggeredById    String?
+  startedAt        DateTime?
+  finishedAt       DateTime?
+  queryCount       Int       @default(0)
+  modelCount       Int       @default(0)
+  gscRangeStart    DateTime? @db.Date
+  gscRangeEnd      DateTime? @db.Date
+  error            String?   @db.VarChar(1000)
+  /// Labeled sample/demo snapshot (not a live OpenRouter run)
+  isDemo           Boolean   @default(false)
+  /// sha256 of normalized probe list (live runs only)
+  probeFingerprint String?   @db.VarChar(64)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @default(now()) @updatedAt
 
   project Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
   results AiVisibilityResult[]
@@ -1213,6 +1217,7 @@ model AiVisibilityRun {
   @@index([projectId, createdAt])
   @@index([clientId, createdAt])
   @@index([status])
+  @@index([projectId, probeFingerprint])
   @@map("aivisibilityrun")
 }
 

@@ -881,6 +881,7 @@ export async function buildLlmView(clientIds, view, query) {
         gscRangeStart: latestRun.gscRangeStart,
         gscRangeEnd: latestRun.gscRangeEnd,
         error: latestRun.error,
+        isDemo: !!latestRun.isDemo,
       }
     : null;
 

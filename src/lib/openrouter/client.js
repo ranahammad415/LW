@@ -6,8 +6,9 @@
 
 const DEFAULT_MODELS = {
   chatgpt: 'openai/gpt-4o-mini',
-  claude: 'anthropic/claude-3.5-haiku',
-  gemini: 'google/gemini-2.0-flash-001',
+  // Prefer current OpenRouter slugs (old 3.5-haiku / gemini-2.0-flash-001 often return "No endpoints found")
+  claude: 'anthropic/claude-haiku-4.5',
+  gemini: 'google/gemini-2.5-flash',
   perplexity: 'perplexity/sonar',
 };
 

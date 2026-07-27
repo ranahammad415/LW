@@ -14,6 +14,7 @@ import {
   startAiVisibilityRun,
   getLatestAiVisibilityRun,
 } from '../../lib/analytics/aiVisibilityRunner.js';
+import { createAiVisibilityDemoRun } from '../../lib/analytics/aiVisibilityDemoSnapshot.js';
 import {
   extractSiteFocusKeywords,
   loadProjectForSiteKeywords,
@@ -200,7 +201,7 @@ export async function adminAnalyticsRoutes(app) {
       }
 
       try {
-        const { run, started, conflict, probeCount } = await startAiVisibilityRun({
+        const { run, started, conflict, probeCount, reused, partialReuse } = await startAiVisibilityRun({
           projectId,
           clientId,
           triggeredById: request.user?.id || null,
@@ -219,6 +220,23 @@ export async function adminAnalyticsRoutes(app) {
           });
         }
 
+        if (reused) {
+          return reply.status(200).send({
+            message: 'Reusing AI Visibility results from the last 7 days (same queries)',
+            run: {
+              id: run.id,
+              status: run.status,
+              projectId: run.projectId,
+              createdAt: run.createdAt,
+              finishedAt: run.finishedAt,
+              isDemo: !!run.isDemo,
+            },
+            probeCount,
+            reused: true,
+            costHint: 'No OpenRouter calls — same probe list cached for 7 days',
+          });
+        }
+
         return reply.status(202).send({
           message: started ? 'AI Visibility run started' : 'AI Visibility run queued',
           run: {
@@ -228,10 +246,73 @@ export async function adminAnalyticsRoutes(app) {
             createdAt: run.createdAt,
           },
           probeCount,
-          costHint: `~${(probeCount || probes.length) * 4} OpenRouter calls + DataForSEO mentions pull`,
+          partialReuse: !!partialReuse,
+          costHint: partialReuse
+            ? `Partial re-probe — unchanged queries reused; OpenRouter only for new/edited + DataForSEO`
+            : `~${(probeCount || probes.length) * 4} OpenRouter calls + DataForSEO mentions pull`,
         });
       } catch (err) {
         return reply.status(err.status || 500).send({ message: err.message || 'Failed to start run' });
+      }
+    }
+  );
+
+  /**
+   * Labeled sample/demo snapshot (no OpenRouter / DataForSEO).
+   * Body: { probes: string[] }
+   */
+  app.post(
+    '/analytics/:clientId/projects/:projectId/ai-visibility/demo',
+    { onRequest: [app.verifyJwt, requireOwner] },
+    async (request, reply) => {
+      const { clientId, projectId } = request.params;
+      if (!(await assertClientExists(clientId, reply))) return;
+
+      const project = await prisma.project.findFirst({
+        where: { id: projectId, clientId },
+        select: { id: true },
+      });
+      if (!project) return reply.status(404).send({ message: 'Project not found for this client' });
+
+      const probes = normalizeProbeList(request.body?.probes || [], { min: 1, max: 20 });
+      if (probes.length === 0) {
+        return reply.status(400).send({
+          message: 'probes array is required (confirm keywords from the preview modal)',
+        });
+      }
+
+      try {
+        const { run, probeCount, citationRate, targetRate } = await createAiVisibilityDemoRun({
+          projectId,
+          clientId,
+          triggeredById: request.user?.id || null,
+          probes,
+        });
+        return reply.status(201).send({
+          message: 'Sample demo snapshot loaded',
+          run: {
+            id: run.id,
+            status: run.status,
+            projectId: run.projectId,
+            createdAt: run.createdAt,
+            finishedAt: run.finishedAt,
+            isDemo: true,
+          },
+          probeCount,
+          citationRate,
+          targetRate,
+          isDemo: true,
+        });
+      } catch (err) {
+        if (err.status === 409) {
+          return reply.status(409).send({
+            message: err.message,
+            run: err.run
+              ? { id: err.run.id, status: err.run.status, createdAt: err.run.createdAt }
+              : undefined,
+          });
+        }
+        return reply.status(err.status || 500).send({ message: err.message || 'Failed to create demo' });
       }
     }
   );
@@ -265,6 +346,7 @@ export async function adminAnalyticsRoutes(app) {
           queryCount: run.queryCount,
           modelCount: run.modelCount,
           error: run.error,
+          isDemo: !!run.isDemo,
           resultCount: run._count?.results || 0,
           hasDfs: !!run.dfs,
           createdAt: run.createdAt,

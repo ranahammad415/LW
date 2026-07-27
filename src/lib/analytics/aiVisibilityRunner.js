@@ -1,7 +1,8 @@
 /**
  * Admin-triggered AI Visibility job:
- * Confirmed probes (from site-crawl preview) → OpenRouter → DataForSEO → PromptLog + snapshot.
- * Falls back to GSC intelligence only when probes are not provided (legacy).
+ * Confirmed probes → OpenRouter → DataForSEO → PromptLog + snapshot.
+ * 7-day cache when probe fingerprint matches a prior live run.
+ * Partial re-probe when only some queries changed.
  */
 
 import { prisma } from '../prisma.js';
@@ -14,10 +15,11 @@ import {
   brandTokensForProject,
   buildIntelligentProbeQueries,
 } from './aiVisibilityQueryIntel.js';
-import { normalizeProbeList } from './aiVisibilitySiteKeywords.js';
+import { fingerprintProbeList, normalizeProbeList } from './aiVisibilitySiteKeywords.js';
 
 const CONCURRENCY = 3;
 const RESPONSE_MAX = 4000;
+const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const PLATFORM_LABELS = {
   chatgpt: 'ChatGPT',
@@ -69,17 +71,47 @@ async function syncPromptLogsFromProbes({ projectId, runId, domain, probeResults
     competitorsCited: Array.isArray(r.competitorsJson) ? r.competitorsJson : [],
   }));
 
-  // Batch create to avoid huge single payloads
   const chunk = 50;
   for (let i = 0; i < rows.length; i += chunk) {
     await prisma.promptLog.createMany({ data: rows.slice(i, i + chunk) });
   }
 }
 
+async function findReusableLiveRun(projectId, fingerprint) {
+  const since = new Date(Date.now() - CACHE_TTL_MS);
+  const candidate = await prisma.aiVisibilityRun.findFirst({
+    where: {
+      projectId,
+      status: 'completed',
+      isDemo: false,
+      probeFingerprint: fingerprint,
+      finishedAt: { gte: since },
+    },
+    orderBy: { finishedAt: 'desc' },
+    include: {
+      results: { select: { citationType: true }, take: 200 },
+    },
+  });
+  if (!candidate) return null;
+  // Do not reuse runs where every platform cell failed (e.g. bad OpenRouter model ids)
+  const cells = candidate.results || [];
+  if (cells.length > 0 && cells.every((r) => r.citationType === 'error')) return null;
+  const { results: _r, ...run } = candidate;
+  return run;
+}
+
+async function findLatestLiveCompletedRun(projectId) {
+  return prisma.aiVisibilityRun.findFirst({
+    where: { projectId, status: 'completed', isDemo: false },
+    orderBy: { finishedAt: 'desc' },
+    include: { results: true, dfs: true },
+  });
+}
+
 /**
  * Execute a full AI Visibility run (must already exist as pending/running).
  * @param {string} runId
- * @param {{ probes?: string[] }} [opts]
+ * @param {{ probes?: string[], priorRunId?: string|null }} [opts]
  */
 export async function executeAiVisibilityRun(runId, opts = {}) {
   const run = await prisma.aiVisibilityRun.findUnique({ where: { id: runId } });
@@ -118,6 +150,7 @@ export async function executeAiVisibilityRun(runId, opts = {}) {
     if (project.client?.agencyName) brands.unshift(project.client.agencyName);
 
     const confirmed = normalizeProbeList(opts.probes || [], { min: 1, max: 20 });
+    const fingerprint = confirmed.length ? fingerprintProbeList(confirmed) : null;
     let probeRows;
     let warning = null;
     let rangeStart = null;
@@ -141,15 +174,48 @@ export async function executeAiVisibilityRun(runId, opts = {}) {
 
     const modelMap = getOpenRouterModelMap();
     const platforms = Object.keys(modelMap);
+
+    // Prior live results for partial re-probe
+    let priorByQuery = new Map();
+    if (opts.priorRunId) {
+      const priorResults = await prisma.aiVisibilityResult.findMany({
+        where: { runId: opts.priorRunId },
+      });
+      for (const r of priorResults) {
+        const key = String(r.query || '').toLowerCase();
+        if (!priorByQuery.has(key)) priorByQuery.set(key, []);
+        priorByQuery.get(key).push(r);
+      }
+    }
+
     const jobs = [];
+    const reusedResults = [];
     for (const probe of probeRows) {
-      for (const platform of platforms) {
-        jobs.push({
-          query: probe.probeQuery,
-          sourceQuery: probe.sourceQuery,
-          platform,
-          model: modelMap[platform],
-        });
+      const key = probe.probeQuery.toLowerCase();
+      const prior = priorByQuery.get(key);
+      if (prior && prior.length > 0) {
+        for (const r of prior) {
+          reusedResults.push({
+            runId,
+            query: r.query.slice(0, 500),
+            sourceQuery: r.sourceQuery || probe.sourceQuery || null,
+            platform: r.platform,
+            openrouterModel: r.openrouterModel,
+            cited: !!r.cited,
+            citationType: r.citationType || (r.cited ? 'brand' : 'none'),
+            responseText: r.responseText,
+            competitorsJson: Array.isArray(r.competitorsJson) ? r.competitorsJson : [],
+          });
+        }
+      } else {
+        for (const platform of platforms) {
+          jobs.push({
+            query: probe.probeQuery,
+            sourceQuery: probe.sourceQuery,
+            platform,
+            model: modelMap[platform],
+          });
+        }
       }
     }
 
@@ -160,10 +226,12 @@ export async function executeAiVisibilityRun(runId, opts = {}) {
         modelCount: platforms.length,
         gscRangeStart: rangeStart,
         gscRangeEnd: rangeEnd,
+        probeFingerprint: fingerprint,
+        isDemo: false,
       },
     });
 
-    const probeResults = await mapPool(jobs, CONCURRENCY, async (job) => {
+    const freshResults = await mapPool(jobs, CONCURRENCY, async (job) => {
       try {
         const { text, model } = await probeVisibilityQuery({
           platform: job.platform,
@@ -201,6 +269,8 @@ export async function executeAiVisibilityRun(runId, opts = {}) {
       }
     });
 
+    const probeResults = [...reusedResults, ...freshResults];
+
     await prisma.aiVisibilityResult.deleteMany({ where: { runId } });
     if (probeResults.length) {
       await prisma.aiVisibilityResult.createMany({ data: probeResults });
@@ -213,7 +283,22 @@ export async function executeAiVisibilityRun(runId, opts = {}) {
       probeResults,
     });
 
-    const dfsPayload = await buildDfsVisibilitySnapshot(domain);
+    let dfsPayload;
+    if (jobs.length === 0 && opts.priorRunId) {
+      const priorDfs = await prisma.aiVisibilityDfsSnapshot.findUnique({
+        where: { runId: opts.priorRunId },
+      });
+      dfsPayload = priorDfs?.payload || (await buildDfsVisibilitySnapshot(domain));
+      if (priorDfs?.payload) {
+        dfsPayload = {
+          ...priorDfs.payload,
+          reusedFromRunId: opts.priorRunId,
+        };
+      }
+    } else {
+      dfsPayload = await buildDfsVisibilitySnapshot(domain);
+    }
+
     await prisma.aiVisibilityDfsSnapshot.upsert({
       where: { runId },
       create: {
@@ -227,7 +312,18 @@ export async function executeAiVisibilityRun(runId, opts = {}) {
       },
     });
 
-    const warnings = [warning, dfsPayload.skipped ? `DFS skipped: ${dfsPayload.error || 'unavailable'}` : null]
+    const reuseNote =
+      reusedResults.length && jobs.length
+        ? `Partial re-probe: reused ${reusedResults.length} cells, probed ${jobs.length}`
+        : reusedResults.length && !jobs.length
+          ? 'Reused prior probe cells (no OpenRouter calls)'
+          : null;
+
+    const warnings = [
+      warning,
+      reuseNote,
+      dfsPayload.skipped ? `DFS skipped: ${dfsPayload.error || 'unavailable'}` : null,
+    ]
       .filter(Boolean)
       .join(' · ');
 
@@ -240,7 +336,14 @@ export async function executeAiVisibilityRun(runId, opts = {}) {
       },
     });
 
-    return { ok: true, runId, queryCount: probeRows.length, modelCount: platforms.length };
+    return {
+      ok: true,
+      runId,
+      queryCount: probeRows.length,
+      modelCount: platforms.length,
+      probedCells: jobs.length,
+      reusedCells: reusedResults.length,
+    };
   } catch (err) {
     await prisma.aiVisibilityRun.update({
       where: { id: runId },
@@ -255,9 +358,8 @@ export async function executeAiVisibilityRun(runId, opts = {}) {
 }
 
 /**
- * Create a run row and kick off background execution.
+ * Create a run row and kick off background execution (or reuse 7-day cache).
  * @param {{ projectId: string, clientId: string, triggeredById?: string|null, probes?: string[] }} args
- * @returns {{ run, started: boolean, conflict?: boolean }}
  */
 export async function startAiVisibilityRun({ projectId, clientId, triggeredById, probes }) {
   const active = await prisma.aiVisibilityRun.findFirst({
@@ -275,22 +377,55 @@ export async function startAiVisibilityRun({ projectId, clientId, triggeredById,
     throw err;
   }
 
+  const fingerprint = fingerprintProbeList(confirmed);
+  const cached = await findReusableLiveRun(projectId, fingerprint);
+  if (cached) {
+    // Bump finishedAt so this live snapshot is the current one again (e.g. after a demo).
+    const touched = await prisma.aiVisibilityRun.update({
+      where: { id: cached.id },
+      data: { finishedAt: new Date() },
+    });
+    return {
+      run: touched,
+      started: false,
+      conflict: false,
+      reused: true,
+      probeCount: confirmed.length,
+    };
+  }
+
+  const prior = await findLatestLiveCompletedRun(projectId);
+  const priorQueries = new Set(
+    (prior?.results || []).map((r) => String(r.query || '').toLowerCase())
+  );
+  const hasOverlap = confirmed.some((q) => priorQueries.has(q.toLowerCase()));
+  const priorRunId = hasOverlap && prior ? prior.id : null;
+
   const run = await prisma.aiVisibilityRun.create({
     data: {
       projectId,
       clientId,
       status: 'pending',
       triggeredById: triggeredById || null,
+      probeFingerprint: fingerprint,
+      isDemo: false,
     },
   });
 
   setImmediate(() => {
-    executeAiVisibilityRun(run.id, { probes: confirmed }).catch((err) => {
+    executeAiVisibilityRun(run.id, { probes: confirmed, priorRunId }).catch((err) => {
       console.error('[aiVisibility] run failed', run.id, err.message);
     });
   });
 
-  return { run, started: true, conflict: false, probeCount: confirmed.length };
+  return {
+    run,
+    started: true,
+    conflict: false,
+    reused: false,
+    probeCount: confirmed.length,
+    partialReuse: !!priorRunId,
+  };
 }
 
 export async function getLatestAiVisibilityRun(projectId) {

@@ -4,6 +4,7 @@
  * Prefers synced WordPress plugin pages (WpPage); HTML crawl is fallback.
  */
 
+import { createHash } from 'crypto';
 import { prisma } from '../prisma.js';
 import { crawlPage } from '../omniSearch/omniSearchCrawler.js';
 import { generateChat, isAiConfigured, sanitizeUserInputForPrompt } from '../ai.js';
@@ -404,6 +405,14 @@ export function normalizeProbeList(probes, { min = 1, max = 20 } = {}) {
   }
   if (out.length < min) return [];
   return out;
+}
+
+/** Stable fingerprint for a normalized probe list (order-independent). */
+export function fingerprintProbeList(probes) {
+  const list = normalizeProbeList(probes || [], { min: 0, max: 20 })
+    .map((q) => q.toLowerCase())
+    .sort();
+  return createHash('sha256').update(list.join('\n')).digest('hex');
 }
 
 export async function loadProjectForSiteKeywords(projectId, clientId) {
