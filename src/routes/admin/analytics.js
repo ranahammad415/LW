@@ -162,6 +162,7 @@ export async function adminAnalyticsRoutes(app) {
           siteUrl: preview.siteUrl,
           targetMarket: preview.targetMarket,
           marketSource: preview.marketSource,
+          pagesSource: preview.pagesSource,
           pagesCrawled: preview.pagesCrawled,
           pageUrls: preview.pageUrls,
           queries: preview.queries,

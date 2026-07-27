@@ -1,17 +1,20 @@
 /**
- * Crawl client website + Anthropic extraction of 10–15 local focus keywords
+ * Site context + Anthropic extraction of 10–15 local focus keywords
  * for AI Visibility preview (admin-editable before OpenRouter probes).
+ * Prefers synced WordPress plugin pages (WpPage); HTML crawl is fallback.
  */
 
 import { prisma } from '../prisma.js';
 import { crawlPage } from '../omniSearch/omniSearchCrawler.js';
 import { generateChat, isAiConfigured, sanitizeUserInputForPrompt } from '../ai.js';
-import { domainFromUrl } from './providers.js';
 import { brandTokensForProject, resolveTargetMarket } from './aiVisibilityQueryIntel.js';
 
-const MAX_PAGES = 12;
+const MAX_PAGES = 6;
+const CRAWL_CONCURRENCY = 3;
+const MIN_WP_PAGES = 2;
 const MIN_KEYWORDS = 8;
 const MAX_KEYWORDS = 15;
+const WP_TEXT_MAX = 1000;
 
 const SERVICE_PATH_RE =
   /\/(services?|solutions?|industries|commercial|residential|plumbing|electrical|hvac|about|locations?)(\/|$)/i;
@@ -39,40 +42,152 @@ export function resolveProjectSiteUrl(project) {
   );
 }
 
-function scoreUrl(url, baseOrigin) {
+function scorePath(url) {
   try {
-    const u = new URL(url);
-    if (u.origin !== baseOrigin) return -1;
+    const u = new URL(url, 'https://example.com');
     let score = 0;
     const path = u.pathname.toLowerCase();
     if (path === '/' || path === '') score += 50;
     if (SERVICE_PATH_RE.test(path)) score += 40;
     if (/commercial|contractor|service|plumber|electric|drain/i.test(path)) score += 20;
     if (/blog|news|wp-content|tag|category|cart|login|privacy|terms/i.test(path)) score -= 30;
-    // Prefer shorter paths (landing/service)
     score += Math.max(0, 15 - path.split('/').filter(Boolean).length * 3);
     return score;
+  } catch {
+    return 0;
+  }
+}
+
+function scoreUrl(url, baseOrigin) {
+  try {
+    const u = new URL(url);
+    if (baseOrigin && u.origin !== baseOrigin) return -1;
+    return scorePath(url);
   } catch {
     return -1;
   }
 }
 
+function urlKey(url) {
+  return String(url || '')
+    .split('#')[0]
+    .split('?')[0]
+    .replace(/\/$/, '');
+}
+
+/** Strip HTML tags + shortcodes for lightweight WP body context. */
+export function stripWpContentNoise(raw, maxLen = WP_TEXT_MAX) {
+  let s = String(raw || '');
+  s = s.replace(/<!--[\s\S]*?-->/g, ' ');
+  s = s.replace(/\[[^\]]+\]/g, ' ');
+  s = s.replace(/<script[\s\S]*?<\/script>/gi, ' ');
+  s = s.replace(/<style[\s\S]*?<\/style>/gi, ' ');
+  s = s.replace(/<[^>]+>/g, ' ');
+  s = s
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/gi, '"');
+  s = s.replace(/\s+/g, ' ').trim();
+  return s.slice(0, maxLen);
+}
+
+function toPageSnippet(page) {
+  return {
+    url: page.url,
+    title: page.title || '',
+    metaDescription: (page.metaDescription || '').slice(0, 280),
+    h1: page.h1 || '',
+    h2s: (page.h2s || []).slice(0, 6),
+    text: page.text || undefined,
+  };
+}
+
+/**
+ * Prefer published pages from Localwave Agent sync (WpPage).
+ * @returns {Array|null} snippets or null if too few
+ */
+async function loadWpPageSnippets(projectId) {
+  const rows = await prisma.wpPage.findMany({
+    where: {
+      projectId,
+      status: { in: ['publish', 'published'] },
+    },
+    select: {
+      url: true,
+      title: true,
+      slug: true,
+      postType: true,
+      content: true,
+      excerpt: true,
+      seoTitle: true,
+      seoDescription: true,
+    },
+    take: 80,
+  });
+  if (rows.length === 0) return null;
+
+  const scored = rows
+    .map((row) => {
+      const url = row.url || '';
+      let score = scorePath(url || `/${row.slug || ''}`);
+      if (String(row.postType || '').toLowerCase() === 'page') score += 15;
+      else score -= 5;
+      const text = stripWpContentNoise(row.content || row.excerpt || '');
+      if (text.length < 40 && !(row.seoDescription || row.excerpt)) score -= 20;
+      return { row, score, text };
+    })
+    .filter((x) => x.score >= 0 || x.text.length >= 40)
+    .sort((a, b) => b.score - a.score);
+
+  const picked = [];
+  const seen = new Set();
+  for (const { row, text } of scored) {
+    const url = row.url || '';
+    const key = urlKey(url) || row.slug;
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    const title = (row.seoTitle || row.title || '').trim();
+    const meta =
+      (row.seoDescription || '').trim() ||
+      stripWpContentNoise(row.excerpt || '', 280);
+    picked.push(
+      toPageSnippet({
+        url: url || `/${row.slug || ''}`,
+        title,
+        metaDescription: meta,
+        h1: (row.title || title).trim(),
+        h2s: [],
+        text,
+      })
+    );
+    if (picked.length >= MAX_PAGES) break;
+  }
+
+  return picked.length >= MIN_WP_PAGES ? picked : null;
+}
+
 async function collectPageUrls(project, siteUrl) {
   const origin = new URL(siteUrl).origin;
-  const candidates = new Set([origin + '/', siteUrl.replace(/\/$/, '') + '/']);
+  const homeUrl = origin + '/';
+  const candidates = new Set([homeUrl, siteUrl.replace(/\/$/, '') + '/']);
 
   const sitemapNodes = await prisma.sitemapNode.findMany({
     where: { projectId: project.id },
     select: { url: true },
-    take: 80,
+    take: 40,
   });
   for (const n of sitemapNodes) {
     if (n.url) candidates.add(n.url);
   }
 
-  // Seed crawl homepage for internal links
-  const home = await crawlPage(origin + '/');
+  // Seed crawl homepage for internal links (reuse snippet later — avoid double fetch)
+  let homeSnippet = null;
+  const home = await crawlPage(homeUrl);
   if (home.statusCode >= 200 && home.statusCode < 400) {
+    homeSnippet = toPageSnippet(home);
     for (const link of home.internalLinks || []) {
       candidates.add(link);
     }
@@ -86,31 +201,47 @@ async function collectPageUrls(project, siteUrl) {
   const picked = [];
   const seen = new Set();
   for (const { url } of ranked) {
-    const key = url.split('#')[0].split('?')[0].replace(/\/$/, '') || url;
+    const key = urlKey(url);
     if (seen.has(key)) continue;
     seen.add(key);
     picked.push(url);
     if (picked.length >= MAX_PAGES) break;
   }
 
-  if (picked.length === 0) picked.push(origin + '/');
-  return picked;
+  if (picked.length === 0) picked.push(homeUrl);
+  return { urls: picked, homeSnippet };
 }
 
+/** Crawl URLs with a small concurrency pool (keeps preview under proxy timeouts). */
 async function crawlSelectedPages(urls) {
+  if (urls.length === 0) return [];
   const pages = [];
-  for (const url of urls) {
-    const page = await crawlPage(url);
-    if (page.error || !page.statusCode || page.statusCode >= 400) continue;
-    pages.push({
-      url: page.url,
-      title: page.title || '',
-      metaDescription: page.metaDescription || '',
-      h1: page.h1 || '',
-      h2s: (page.h2s || []).slice(0, 12),
-      wordCount: page.wordCount || 0,
-    });
+  let idx = 0;
+
+  async function worker() {
+    while (idx < urls.length) {
+      const url = urls[idx++];
+      const page = await crawlPage(url);
+      if (page.error || !page.statusCode || page.statusCode >= 400) continue;
+      pages.push(toPageSnippet(page));
+    }
   }
+
+  const workers = Array.from({ length: Math.min(CRAWL_CONCURRENCY, urls.length) }, () => worker());
+  await Promise.all(workers);
+  const order = new Map(urls.map((u, i) => [urlKey(u), i]));
+  pages.sort((a, b) => (order.get(urlKey(a.url)) ?? 99) - (order.get(urlKey(b.url)) ?? 99));
+  return pages;
+}
+
+async function crawlSitePages(project, siteUrl) {
+  const { urls: pageUrls, homeSnippet } = await collectPageUrls(project, siteUrl);
+  const homeKey = homeSnippet ? urlKey(homeSnippet.url) : null;
+  const toFetch = homeKey ? pageUrls.filter((u) => urlKey(u) !== homeKey) : pageUrls;
+  const crawled = await crawlSelectedPages(toFetch);
+  const pages = [];
+  if (homeSnippet && pageUrls.some((u) => urlKey(u) === homeKey)) pages.push(homeSnippet);
+  pages.push(...crawled);
   return pages;
 }
 
@@ -134,11 +265,17 @@ export async function extractSiteFocusKeywords(project) {
   }
 
   const { market, source: marketSource } = await resolveTargetMarket(project);
-  const pageUrls = await collectPageUrls(project, siteUrl);
-  const pages = await crawlSelectedPages(pageUrls);
-  if (pages.length === 0) {
+
+  let pages = await loadWpPageSnippets(project.id);
+  let pagesSource = 'wordpress';
+  if (!pages) {
+    pages = await crawlSitePages(project, siteUrl);
+    pagesSource = 'crawl';
+  }
+
+  if (!pages || pages.length === 0) {
     const err = new Error(
-      `Could not crawl any pages from ${siteUrl}. Check the site is publicly reachable.`
+      `No page content available for ${siteUrl}. Sync WordPress pages in the project, or check the site is publicly reachable.`
     );
     err.status = 502;
     throw err;
@@ -155,28 +292,31 @@ Rules:
 - Queries must be what a real customer would ask ChatGPT / Google for local services.
 - Include the target market city/region in each query when provided (e.g. "commercial electrical contractors in milwaukee").
 - Prefer commercial / B2B service intents from landing and service pages.
+- When possible, map each query to a real page via sourcePage (use that page's url).
 - Do NOT include brand navigational queries (company name alone).
 - Do NOT invent unrelated services not supported by the page content.
 - Lowercase queries; natural phrasing; no quotes.`;
 
   const userPayload = {
     targetMarket: market || null,
-    brandNamesToAvoid: brands.slice(0, 20),
+    brandNamesToAvoid: brands.slice(0, 12),
     businessName: project.client?.agencyName || project.name,
+    pagesSource,
     pages: pages.map((p) => ({
       url: p.url,
       title: p.title,
       metaDescription: p.metaDescription,
       h1: p.h1,
-      h2s: p.h2s,
+      h2s: p.h2s || [],
+      text: p.text || undefined,
     })),
   };
 
   const { parsed, text } = await generateChat({
     system,
-    user: sanitizeUserInputForPrompt(JSON.stringify(userPayload), 14000),
+    user: sanitizeUserInputForPrompt(JSON.stringify(userPayload), 6000),
     json: true,
-    maxTokens: 2000,
+    maxTokens: 1600,
     temperature: 0.25,
     feature: 'ai_visibility_site_keywords',
     clientId: project.clientId || null,
@@ -191,7 +331,7 @@ Rules:
     }
   }
   if (!Array.isArray(keywords) || keywords.length === 0) {
-    const err = new Error('Claude returned no keywords from the site crawl');
+    const err = new Error('Claude returned no keywords from the site context');
     err.status = 502;
     throw err;
   }
@@ -199,6 +339,7 @@ Rules:
   const marketLower = (market || '').toLowerCase();
   const brandLower = brands.map((b) => String(b).toLowerCase()).filter((b) => b.length >= 3);
   const queries = [];
+  const keptMeta = [];
   const seen = new Set();
 
   for (const k of keywords) {
@@ -216,6 +357,10 @@ Rules:
     if (seen.has(key)) continue;
     seen.add(key);
     queries.push(q.slice(0, 500));
+    keptMeta.push({
+      sourcePage: k.sourcePage || null,
+      reason: k.reason || null,
+    });
     if (queries.length >= MAX_KEYWORDS) break;
   }
 
@@ -229,13 +374,14 @@ Rules:
     siteUrl,
     targetMarket: market,
     marketSource,
+    pagesSource,
     pagesCrawled: pages.length,
     pageUrls: pages.map((p) => p.url),
     queries,
     keywords: queries.map((query, i) => ({
       query,
-      sourcePage: keywords[i]?.sourcePage || null,
-      reason: keywords[i]?.reason || null,
+      sourcePage: keptMeta[i]?.sourcePage || null,
+      reason: keptMeta[i]?.reason || null,
     })),
   };
 }
