@@ -716,14 +716,18 @@ enum ReportStatus {
 }
 
 model MonthlyReport {
-  id          String       @id @default(uuid())
-  clientId    String
-  month       Int
-  year        Int
-  status      ReportStatus @default(DRAFT)
-  aiContent   Json?
-  workCycleId String?
-  createdAt   DateTime     @default(now())
+  id             String       @id @default(uuid())
+  clientId       String
+  month          Int
+  year           Int
+  status         ReportStatus @default(DRAFT)
+  aiContent      Json?
+  workCycleId    String?
+  pdfStoredPath  String?      @db.VarChar(500)
+  pdfFileName    String?      @db.VarChar(255)
+  pdfFileSize    Int?
+  pdfGeneratedAt DateTime?
+  createdAt      DateTime     @default(now())
 
   client    ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
   workCycle WorkCycle?    @relation(fields: [workCycleId], references: [id], onDelete: SetNull)

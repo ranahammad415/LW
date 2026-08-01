@@ -1,13 +1,98 @@
 import { z } from 'zod';
+import { mkdirSync, writeFileSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { randomUUID } from 'crypto';
 import { prisma } from '../../lib/prisma.js';
 import { notify } from '../../lib/notificationService.js';
 import { generateClientReport } from '../../lib/monthlyReport/generateForCycle.js';
+import {
+  generateAndStoreFormalPdf,
+  getFormalReportHtmlPreview,
+  readMonthlyReportPdf,
+} from '../../lib/monthlyReport/renderFormalPdf.js';
+import {
+  REPORT_ASSET_FOLDERS,
+  getClientReportAssets,
+} from '../../lib/monthlyReport/reportAssets.js';
+import {
+  resolveUploadBaseUrl,
+  validateUpload,
+  sanitizeUploadFilename,
+  MAX_UPLOAD_SIZE_BYTES,
+} from '../../lib/uploadUrl.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const UPLOADS_ROOT = join(__dirname, '..', '..', '..', 'uploads');
 
 const generateBodySchema = z.object({
   clientId: z.string().uuid(),
   month: z.number().int().min(1).max(12),
   year: z.number().int().min(2020).max(2100),
 });
+
+const formalAiContentSchema = z
+  .object({
+    coverSummary: z.string().optional(),
+    preparedBy: z.string().optional(),
+    executive: z
+      .object({
+        strategicApproach: z.string().optional(),
+        performanceGains: z.string().optional(),
+        localVisibility: z.string().optional(),
+        technicalHealth: z.string().optional(),
+        nextSteps: z.string().optional(),
+      })
+      .optional(),
+    sections: z
+      .array(
+        z.object({
+          number: z.number().optional(),
+          title: z.string().optional(),
+          intro: z.string().optional(),
+          blocks: z
+            .array(
+              z.object({
+                heading: z.string().optional(),
+                bullets: z.array(z.string()).optional(),
+              }),
+            )
+            .optional(),
+          valueDelivered: z.string().optional(),
+        }),
+      )
+      .optional(),
+    conclusion: z.string().optional(),
+    // legacy
+    executiveSummary: z.string().optional(),
+    seoPerformance: z.string().optional(),
+    highlights: z.array(z.string()).optional(),
+  })
+  .passthrough();
+
+function serializeReport(r, extras = {}) {
+  return {
+    id: r.id,
+    clientId: r.clientId,
+    month: r.month,
+    year: r.year,
+    status: r.status,
+    aiContent: r.aiContent,
+    createdAt: r.createdAt?.toISOString?.() ?? r.createdAt,
+    pdfFileName: r.pdfFileName ?? null,
+    pdfFileSize: r.pdfFileSize ?? null,
+    pdfGeneratedAt: r.pdfGeneratedAt?.toISOString?.() ?? r.pdfGeneratedAt ?? null,
+    hasPdf: Boolean(r.pdfStoredPath),
+    ...extras,
+  };
+}
+
+async function assertPmClientAccess(user, client) {
+  if (user.role === 'OWNER') return true;
+  if (user.role !== 'PM') return false;
+  return client.leadPmId === user.id || client.secondaryPmId === user.id;
+}
 
 export async function pmReportRoutes(app) {
   app.get(
@@ -18,24 +103,6 @@ export async function pmReportRoutes(app) {
         querystring: {
           type: 'object',
           properties: { clientId: { type: 'string', format: 'uuid' } },
-        },
-        response: {
-          200: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                id: { type: 'string' },
-                clientId: { type: 'string' },
-                month: { type: 'integer' },
-                year: { type: 'integer' },
-                status: { type: 'string' },
-                aiContent: { type: 'object', nullable: true },
-                createdAt: { type: 'string' },
-                client: { type: 'object' },
-              },
-            },
-          },
         },
       },
     },
@@ -62,18 +129,117 @@ export async function pmReportRoutes(app) {
       });
 
       return reply.send(
-        reports.map((r) => ({
-          id: r.id,
-          clientId: r.clientId,
-          month: r.month,
-          year: r.year,
-          status: r.status,
-          aiContent: r.aiContent,
-          createdAt: r.createdAt.toISOString(),
-          client: r.client,
-        }))
+        reports.map((r) =>
+          serializeReport(r, { client: r.client }),
+        ),
       );
-    }
+    },
+  );
+
+  app.get(
+    '/reports/assets',
+    {
+      onRequest: [app.verifyJwt, app.requirePM],
+      schema: {
+        querystring: {
+          type: 'object',
+          properties: { clientId: { type: 'string', format: 'uuid' } },
+          required: ['clientId'],
+        },
+      },
+    },
+    async (request, reply) => {
+      const { clientId } = request.query;
+      const user = request.user;
+      const client = await prisma.clientAccount.findUnique({
+        where: { id: clientId },
+        select: { id: true, agencyName: true, leadPmId: true, secondaryPmId: true, websiteUrl: true },
+      });
+      if (!client) return reply.status(404).send({ message: 'Client not found' });
+      if (!(await assertPmClientAccess(user, client))) {
+        return reply.status(403).send({ message: 'Forbidden' });
+      }
+      const assets = await getClientReportAssets(clientId);
+      return reply.send({
+        clientId,
+        agencyName: client.agencyName,
+        websiteUrl: client.websiteUrl,
+        folders: REPORT_ASSET_FOLDERS,
+        ...assets,
+      });
+    },
+  );
+
+  app.post(
+    '/reports/assets',
+    {
+      onRequest: [app.verifyJwt, app.requirePM],
+    },
+    async (request, reply) => {
+      const user = request.user;
+      const data = await request.file();
+      if (!data) return reply.status(400).send({ message: 'No file uploaded' });
+
+      const buffer = await data.toBuffer();
+      const fileName = data.filename || 'asset';
+      const validation = validateUpload({
+        mimetype: data.mimetype,
+        filename: fileName,
+        size: buffer.length,
+      });
+      if (!validation.ok) return reply.status(400).send({ message: validation.message });
+      if (buffer.length > MAX_UPLOAD_SIZE_BYTES) {
+        return reply.status(413).send({ message: 'File too large' });
+      }
+
+      const clientId = data.fields.clientId?.value;
+      const folder = data.fields.folder?.value;
+      if (!clientId) return reply.status(400).send({ message: 'clientId is required' });
+      if (![REPORT_ASSET_FOLDERS.LOGO, REPORT_ASSET_FOLDERS.FOLD].includes(folder)) {
+        return reply.status(400).send({
+          message: `folder must be ${REPORT_ASSET_FOLDERS.LOGO} or ${REPORT_ASSET_FOLDERS.FOLD}`,
+        });
+      }
+
+      const client = await prisma.clientAccount.findUnique({
+        where: { id: clientId },
+        select: { id: true, leadPmId: true, secondaryPmId: true },
+      });
+      if (!client) return reply.status(404).send({ message: 'Client not found' });
+      if (!(await assertPmClientAccess(user, client))) {
+        return reply.status(403).send({ message: 'Forbidden' });
+      }
+
+      const now = new Date();
+      const year = String(now.getFullYear());
+      const monthDay = `${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const dir = join(UPLOADS_ROOT, year, monthDay);
+      mkdirSync(dir, { recursive: true });
+      const safeName = sanitizeUploadFilename(fileName);
+      const storedName = `${randomUUID()}-${safeName}`;
+      writeFileSync(join(dir, storedName), buffer);
+      const baseUrl = resolveUploadBaseUrl(request);
+      const relPath = `/uploads/${year}/${monthDay}/${storedName}`;
+      const fileUrl = baseUrl ? `${baseUrl}${relPath}` : relPath;
+
+      const asset = await prisma.clientAsset.create({
+        data: {
+          clientId,
+          projectId: null,
+          folder,
+          filename: fileName,
+          fileUrl,
+          uploadNote: data.fields.uploadNote?.value || `Monthly report ${folder}`,
+        },
+      });
+
+      return reply.status(201).send({
+        id: asset.id,
+        fileUrl: asset.fileUrl,
+        filename: asset.filename,
+        folder: asset.folder,
+      });
+    },
   );
 
   app.get(
@@ -86,20 +252,6 @@ export async function pmReportRoutes(app) {
           properties: { id: { type: 'string', format: 'uuid' } },
           required: ['id'],
         },
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              id: { type: 'string' },
-              clientId: { type: 'string' },
-              month: { type: 'integer' },
-              year: { type: 'integer' },
-              status: { type: 'string' },
-              aiContent: { type: 'object', nullable: true },
-              client: { type: 'object' },
-            },
-          },
-        },
       },
     },
     async (request, reply) => {
@@ -108,26 +260,35 @@ export async function pmReportRoutes(app) {
 
       const report = await prisma.monthlyReport.findUnique({
         where: { id },
-        include: { client: { select: { agencyName: true, leadPmId: true, secondaryPmId: true } } },
+        include: {
+          client: {
+            select: {
+              agencyName: true,
+              websiteUrl: true,
+              leadPmId: true,
+              secondaryPmId: true,
+            },
+          },
+        },
       });
       if (!report) return reply.status(404).send({ message: 'Report not found' });
 
-      if (user.role === 'PM') {
-        const isAssigned =
-          report.client.leadPmId === user.id || report.client.secondaryPmId === user.id;
-        if (!isAssigned) return reply.status(403).send({ message: 'Forbidden' });
+      if (!(await assertPmClientAccess(user, report.client))) {
+        return reply.status(403).send({ message: 'Forbidden' });
       }
 
-      return reply.send({
-        id: report.id,
-        clientId: report.clientId,
-        month: report.month,
-        year: report.year,
-        status: report.status,
-        aiContent: report.aiContent,
-        client: { agencyName: report.client.agencyName },
-      });
-    }
+      const assets = await getClientReportAssets(report.clientId);
+
+      return reply.send(
+        serializeReport(report, {
+          client: {
+            agencyName: report.client.agencyName,
+            websiteUrl: report.client.websiteUrl,
+          },
+          reportAssets: assets,
+        }),
+      );
+    },
   );
 
   app.post(
@@ -143,19 +304,6 @@ export async function pmReportRoutes(app) {
             year: { type: 'integer' },
           },
           required: ['clientId', 'month', 'year'],
-        },
-        response: {
-          201: {
-            type: 'object',
-            properties: {
-              id: { type: 'string' },
-              clientId: { type: 'string' },
-              month: { type: 'integer' },
-              year: { type: 'integer' },
-              status: { type: 'string' },
-              aiContent: { type: 'object' },
-            },
-          },
         },
       },
     },
@@ -178,15 +326,10 @@ export async function pmReportRoutes(app) {
         return reply.status(404).send({ message: 'Client not found' });
       }
 
-      if (user.role === 'PM') {
-        const isAssigned = client.leadPmId === user.id || client.secondaryPmId === user.id;
-        if (!isAssigned) {
-          return reply.status(403).send({ message: 'You are not assigned to this client' });
-        }
+      if (!(await assertPmClientAccess(user, client))) {
+        return reply.status(403).send({ message: 'You are not assigned to this client' });
       }
 
-      // Unified rich report generation (tasks + content + keyword wins +
-      // AI-search visibility + search KPIs), keyed to the month's work cycle.
       const cycle = await prisma.workCycle
         .findUnique({ where: { month_year: { month, year } } })
         .catch(() => null);
@@ -199,8 +342,8 @@ export async function pmReportRoutes(app) {
         log: request.log,
       });
 
-      return reply.status(201).send(report);
-    }
+      return reply.status(201).send(serializeReport(report, { client: { agencyName: client.agencyName } }));
+    },
   );
 
   app.patch(
@@ -213,27 +356,6 @@ export async function pmReportRoutes(app) {
           properties: { id: { type: 'string', format: 'uuid' } },
           required: ['id'],
         },
-        body: {
-          type: 'object',
-          properties: {
-            aiContent: {
-              type: 'object',
-              properties: {
-                executiveSummary: { type: 'string' },
-                seoPerformance: { type: 'string' },
-              },
-            },
-          },
-        },
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              id: { type: 'string' },
-              status: { type: 'string' },
-            },
-          },
-        },
       },
     },
     async (request, reply) => {
@@ -243,31 +365,38 @@ export async function pmReportRoutes(app) {
 
       const report = await prisma.monthlyReport.findUnique({
         where: { id },
-        include: { client: { select: { leadPmId: true, secondaryPmId: true } } },
+        include: { client: { select: { leadPmId: true, secondaryPmId: true, agencyName: true } } },
       });
       if (!report) {
         return reply.status(404).send({ message: 'Report not found' });
       }
 
-      if (user.role === 'PM') {
-        const isAssigned =
-          report.client.leadPmId === user.id || report.client.secondaryPmId === user.id;
-        if (!isAssigned) {
-          return reply.status(403).send({ message: 'You are not assigned to this client' });
-        }
+      if (!(await assertPmClientAccess(user, report.client))) {
+        return reply.status(403).send({ message: 'You are not assigned to this client' });
       }
 
-      const updateData = { status: 'DELIVERED' };
+      let nextAi = report.aiContent;
       if (body.aiContent && typeof body.aiContent === 'object') {
-        updateData.aiContent = body.aiContent;
+        const parsed = formalAiContentSchema.safeParse(body.aiContent);
+        if (!parsed.success) {
+          return reply.status(400).send({ message: 'Invalid aiContent' });
+        }
+        nextAi = { ...(report.aiContent || {}), ...parsed.data };
       }
 
-      const updated = await prisma.monthlyReport.update({
+      await prisma.monthlyReport.update({
         where: { id },
-        data: updateData,
+        data: { aiContent: nextAi, status: 'DELIVERED' },
       });
 
-      // Notify client contacts about the published report
+      let pdfError = null;
+      try {
+        await generateAndStoreFormalPdf(id, { log: request.log });
+      } catch (err) {
+        pdfError = err?.message || 'PDF generation failed';
+        request.log?.error?.({ err }, 'Formal PDF generation failed on approve');
+      }
+
       try {
         const fullReport = await prisma.monthlyReport.findUnique({
           where: { id },
@@ -285,9 +414,125 @@ export async function pmReportRoutes(app) {
             metadata: { reportId: id },
           }).catch(() => {});
         }
-      } catch (_) { /* don't fail report publish if notification fails */ }
+      } catch (_) {
+        /* ignore */
+      }
 
-      return reply.send({ id: updated.id, status: updated.status });
-    }
+      const updated = await prisma.monthlyReport.findUnique({ where: { id } });
+      return reply.send({
+        id: updated.id,
+        status: updated.status,
+        hasPdf: Boolean(updated.pdfStoredPath),
+        pdfFileName: updated.pdfFileName,
+        pdfError,
+      });
+    },
+  );
+
+  app.post(
+    '/reports/:id/regenerate-pdf',
+    {
+      onRequest: [app.verifyJwt, app.requirePM],
+      schema: {
+        params: {
+          type: 'object',
+          properties: { id: { type: 'string', format: 'uuid' } },
+          required: ['id'],
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+      const user = request.user;
+      const report = await prisma.monthlyReport.findUnique({
+        where: { id },
+        include: { client: { select: { leadPmId: true, secondaryPmId: true } } },
+      });
+      if (!report) return reply.status(404).send({ message: 'Report not found' });
+      if (!(await assertPmClientAccess(user, report.client))) {
+        return reply.status(403).send({ message: 'Forbidden' });
+      }
+
+      if (request.body?.aiContent && typeof request.body.aiContent === 'object') {
+        await prisma.monthlyReport.update({
+          where: { id },
+          data: { aiContent: { ...(report.aiContent || {}), ...request.body.aiContent } },
+        });
+      }
+
+      try {
+        const updated = await generateAndStoreFormalPdf(id, { log: request.log });
+        return reply.send(serializeReport(updated));
+      } catch (err) {
+        return reply.status(err.statusCode || 500).send({
+          message: err.message || 'PDF generation failed',
+        });
+      }
+    },
+  );
+
+  app.get(
+    '/reports/:id/pdf',
+    {
+      onRequest: [app.verifyJwt, app.requirePM],
+      schema: {
+        params: {
+          type: 'object',
+          properties: { id: { type: 'string', format: 'uuid' } },
+          required: ['id'],
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+      const user = request.user;
+      const report = await prisma.monthlyReport.findUnique({
+        where: { id },
+        include: { client: { select: { leadPmId: true, secondaryPmId: true } } },
+      });
+      if (!report) return reply.status(404).send({ message: 'Report not found' });
+      if (!(await assertPmClientAccess(user, report.client))) {
+        return reply.status(403).send({ message: 'Forbidden' });
+      }
+      if (!report.pdfStoredPath) {
+        return reply.status(404).send({ message: 'PDF not generated yet' });
+      }
+      const buf = readMonthlyReportPdf(report.pdfStoredPath);
+      if (!buf) return reply.status(404).send({ message: 'PDF file missing' });
+      const safeName = (report.pdfFileName || 'report.pdf').replace(/[^\w.\-() ]+/g, '_');
+      return reply
+        .header('Content-Type', 'application/pdf')
+        .header('Content-Disposition', `attachment; filename="${safeName}"`)
+        .send(buf);
+    },
+  );
+
+  app.get(
+    '/reports/:id/html-preview',
+    {
+      onRequest: [app.verifyJwt, app.requirePM],
+      schema: {
+        params: {
+          type: 'object',
+          properties: { id: { type: 'string', format: 'uuid' } },
+          required: ['id'],
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+      const user = request.user;
+      const report = await prisma.monthlyReport.findUnique({
+        where: { id },
+        include: { client: { select: { leadPmId: true, secondaryPmId: true } } },
+      });
+      if (!report) return reply.status(404).send({ message: 'Report not found' });
+      if (!(await assertPmClientAccess(user, report.client))) {
+        return reply.status(403).send({ message: 'Forbidden' });
+      }
+      const html = await getFormalReportHtmlPreview(id);
+      if (!html) return reply.status(404).send({ message: 'Report not found' });
+      return reply.type('text/html').send(html);
+    },
   );
 }

@@ -6,6 +6,7 @@ import {
   serializeHtmlReport,
 } from '../../lib/projectHtmlReport.js';
 import { HTML_REPORT_VIEW_CSP } from '../../lib/htmlReportUpload.js';
+import { readMonthlyReportPdf } from '../../lib/monthlyReport/renderFormalPdf.js';
 
 export async function clientReportRoutes(app) {
   app.get(
@@ -26,6 +27,9 @@ export async function clientReportRoutes(app) {
                 status: { type: 'string' },
                 aiContent: { type: 'object', nullable: true },
                 createdAt: { type: 'string' },
+                hasPdf: { type: 'boolean' },
+                pdfFileName: { type: 'string', nullable: true },
+                pdfFileSize: { type: 'integer', nullable: true },
               },
             },
           },
@@ -56,8 +60,45 @@ export async function clientReportRoutes(app) {
           status: r.status,
           aiContent: r.aiContent,
           createdAt: r.createdAt.toISOString(),
+          hasPdf: Boolean(r.pdfStoredPath),
+          pdfFileName: r.pdfFileName ?? null,
+          pdfFileSize: r.pdfFileSize ?? null,
         })),
       );
+    },
+  );
+
+  app.get(
+    '/reports/:id/pdf',
+    {
+      onRequest: [app.verifyJwt, app.requireClient],
+      schema: {
+        params: {
+          type: 'object',
+          properties: { id: { type: 'string', format: 'uuid' } },
+          required: ['id'],
+        },
+      },
+    },
+    async (request, reply) => {
+      const clientIds = request.clientAccountIds || [];
+      const report = await prisma.monthlyReport.findUnique({ where: { id: request.params.id } });
+      if (!report || report.status !== 'DELIVERED') {
+        return reply.status(404).send({ message: 'Report not found' });
+      }
+      if (!clientIds.includes(report.clientId)) {
+        return reply.status(403).send({ message: 'Access denied' });
+      }
+      if (!report.pdfStoredPath) {
+        return reply.status(404).send({ message: 'PDF not available' });
+      }
+      const buf = readMonthlyReportPdf(report.pdfStoredPath);
+      if (!buf) return reply.status(404).send({ message: 'PDF file missing' });
+      const safeName = (report.pdfFileName || 'report.pdf').replace(/[^\w.\-() ]+/g, '_');
+      return reply
+        .header('Content-Type', 'application/pdf')
+        .header('Content-Disposition', `attachment; filename="${safeName}"`)
+        .send(buf);
     },
   );
 
