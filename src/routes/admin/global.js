@@ -1,8 +1,10 @@
+import bcrypt from 'bcrypt';
 import { prisma } from '../../lib/prisma.js';
 import { createMeetingBodySchema } from '../../schemas/admin.js';
 import { notify } from '../../lib/notificationService.js';
 import { extractMentionedUserIds } from '../../lib/mentionParser.js';
 import { resolveCycle } from '../../lib/workCycle.js';
+import { BCRYPT_ROUNDS } from '../../lib/passwordPolicy.js';
 
 async function buildCycleWhere(query = {}) {
   if (query.cycle === 'all') return {};
@@ -12,6 +14,16 @@ async function buildCycleWhere(query = {}) {
 
 const ACTIVE_TASK_STATUSES = ['IN_PROGRESS', 'TO_DO', 'NEEDS_REVIEW'];
 const TEAM_ROLES = ['PM', 'TEAM_MEMBER', 'CONTRACTOR'];
+const TEMP_PASSWORD_LENGTH = 16;
+
+function generateTemporaryPassword() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+  let s = '';
+  for (let i = 0; i < TEMP_PASSWORD_LENGTH; i++) {
+    s += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return s;
+}
 
 export async function adminGlobalRoutes(app) {
   // GET /api/admin/projects/all
@@ -667,7 +679,7 @@ export async function adminGlobalRoutes(app) {
     async (request, reply) => {
       const users = await prisma.user.findMany({
         where: { role: { in: TEAM_ROLES }, isActive: true },
-        select: { id: true, name: true, role: true, avatarUrl: true },
+        select: { id: true, name: true, email: true, role: true, avatarUrl: true },
       });
 
       // GET /api/admin/team/workload — count active tasks per user (multi-assignee)
@@ -688,12 +700,187 @@ export async function adminGlobalRoutes(app) {
       const result = users.map((u) => ({
         id: u.id,
         name: u.name,
+        email: u.email,
         role: u.role,
         avatarUrl: u.avatarUrl,
         activeTaskCount: countByUser[u.id] ?? 0,
       }));
 
       return reply.send(result);
+    }
+  );
+
+  // POST /api/admin/team/members — create agency staff (PM / TEAM_MEMBER / CONTRACTOR)
+  app.post(
+    '/team/members',
+    { onRequest: [app.verifyJwt, app.requireOwner] },
+    async (request, reply) => {
+      try {
+        const name = String(request.body?.name || '').trim();
+        const email = String(request.body?.email || '').trim().toLowerCase();
+        const role = String(request.body?.role || '').trim().toUpperCase();
+
+        if (!name || name.length > 255) {
+          return reply.status(400).send({ message: 'Name is required' });
+        }
+        if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          return reply.status(400).send({ message: 'A valid email is required' });
+        }
+        if (!TEAM_ROLES.includes(role)) {
+          return reply.status(400).send({ message: 'Role must be PM, TEAM_MEMBER, or CONTRACTOR' });
+        }
+
+        const existing = await prisma.user.findUnique({ where: { email } });
+        if (existing) {
+          if (existing.isActive && TEAM_ROLES.includes(existing.role)) {
+            return reply.status(400).send({ message: 'A team member with this email already exists' });
+          }
+          if (existing.isActive) {
+            return reply.status(400).send({ message: 'This email is already used by another account' });
+          }
+          // Reactivate a previously deactivated staff user with the new details.
+          const updated = await prisma.user.update({
+            where: { id: existing.id },
+            data: { name, role, isActive: true },
+            select: { id: true, name: true, email: true, role: true, avatarUrl: true },
+          });
+          return reply.status(201).send({ ...updated, activeTaskCount: 0, tempPassword: null });
+        }
+
+        const plainPassword =
+          request.body?.password && String(request.body.password).trim().length >= 8
+            ? String(request.body.password).trim()
+            : generateTemporaryPassword();
+        const passwordHash = await bcrypt.hash(plainPassword, BCRYPT_ROUNDS);
+
+        const user = await prisma.user.create({
+          data: {
+            email,
+            passwordHash,
+            role,
+            name,
+          },
+          select: { id: true, name: true, email: true, role: true, avatarUrl: true },
+        });
+
+        return reply.status(201).send({ ...user, activeTaskCount: 0, tempPassword: plainPassword });
+      } catch (err) {
+        request.log.error(err);
+        return reply.status(500).send({ message: 'Failed to create team member' });
+      }
+    }
+  );
+
+  // PATCH /api/admin/team/members/:id
+  app.patch(
+    '/team/members/:id',
+    { onRequest: [app.verifyJwt, app.requireOwner] },
+    async (request, reply) => {
+      try {
+        const { id } = request.params;
+        const user = await prisma.user.findUnique({
+          where: { id },
+          select: { id: true, role: true, isActive: true, email: true },
+        });
+        if (!user || !user.isActive || !TEAM_ROLES.includes(user.role)) {
+          return reply.status(404).send({ message: 'Team member not found' });
+        }
+
+        const data = {};
+        if (request.body?.name !== undefined) {
+          const name = String(request.body.name || '').trim();
+          if (!name || name.length > 255) {
+            return reply.status(400).send({ message: 'Name is required' });
+          }
+          data.name = name;
+        }
+        if (request.body?.email !== undefined) {
+          const email = String(request.body.email || '').trim().toLowerCase();
+          if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            return reply.status(400).send({ message: 'A valid email is required' });
+          }
+          if (email !== user.email) {
+            const clash = await prisma.user.findUnique({ where: { email } });
+            if (clash) {
+              return reply.status(400).send({ message: 'This email is already used by another account' });
+            }
+            data.email = email;
+          }
+        }
+        if (request.body?.role !== undefined) {
+          const role = String(request.body.role || '').trim().toUpperCase();
+          if (!TEAM_ROLES.includes(role)) {
+            return reply.status(400).send({ message: 'Role must be PM, TEAM_MEMBER, or CONTRACTOR' });
+          }
+          data.role = role;
+        }
+
+        if (Object.keys(data).length === 0) {
+          return reply.status(400).send({ message: 'No fields to update' });
+        }
+
+        const updated = await prisma.user.update({
+          where: { id },
+          data,
+          select: { id: true, name: true, email: true, role: true, avatarUrl: true },
+        });
+        return reply.send(updated);
+      } catch (err) {
+        request.log.error(err);
+        return reply.status(500).send({ message: 'Failed to update team member' });
+      }
+    }
+  );
+
+  // DELETE /api/admin/team/members/:id — soft-deactivate
+  app.delete(
+    '/team/members/:id',
+    { onRequest: [app.verifyJwt, app.requireOwner] },
+    async (request, reply) => {
+      try {
+        const { id } = request.params;
+        const user = await prisma.user.findUnique({
+          where: { id },
+          select: { id: true, role: true, isActive: true, name: true },
+        });
+        if (!user || !user.isActive || !TEAM_ROLES.includes(user.role)) {
+          return reply.status(404).send({ message: 'Team member not found' });
+        }
+
+        // Block remove when this user is the sole lead PM on active client accounts
+        // or projects (no secondary / replacement assigned).
+        if (user.role === 'PM') {
+          const soleLeadClients = await prisma.clientAccount.count({
+            where: {
+              leadPmId: id,
+              isActive: true,
+              OR: [{ secondaryPmId: null }, { secondaryPmId: id }],
+            },
+          });
+          const soleLeadProjects = await prisma.project.count({
+            where: {
+              leadPmId: id,
+              status: { not: 'ARCHIVED' },
+            },
+          });
+          if (soleLeadClients > 0 || soleLeadProjects > 0) {
+            return reply.status(400).send({
+              message:
+                'Cannot remove this PM while they are the sole lead on active clients or projects. Reassign lead PM first.',
+            });
+          }
+        }
+
+        await prisma.user.update({
+          where: { id },
+          data: { isActive: false },
+        });
+
+        return reply.send({ success: true, id, name: user.name });
+      } catch (err) {
+        request.log.error(err);
+        return reply.status(500).send({ message: 'Failed to remove team member' });
+      }
     }
   );
 }

@@ -4,6 +4,9 @@ import { deferEmail } from './emailDeferralQueue.js';
 import { wrapInBrandedLayout } from './emailLayout.js';
 import { actionHeader, ctaButton, commentBlock, taskDetailCard, issueDetailCard, commentThread } from './emailComponents.js';
 import { enrichTaskData, enrichRecentComments, enrichIssueData, enrichIssueComments } from './emailDataEnricher.js';
+import { notificationEmailsPaused, PAUSED_EMAIL_ERROR } from './notificationEmailPause.js';
+
+export { notificationEmailsPaused } from './notificationEmailPause.js';
 
 /**
  * Replace {{key}} placeholders in a template string with values from the variables object.
@@ -437,13 +440,34 @@ export async function notify({ slug, recipientIds, variables = {}, actionUrl = n
     const userEmailEnabled = pref ? pref.emailEnabled : true;
     const inAppEnabled = pref ? pref.inAppEnabled : true;
 
-    const emailEnabled = userEmailEnabled && roleAllowsEmail(user);
+    const emailsPaused = notificationEmailsPaused();
+    const emailEnabled = userEmailEnabled && roleAllowsEmail(user) && !emailsPaused;
 
     let emailSentAt = null;
-    let emailError = null;
+    let emailError = emailsPaused && userEmailEnabled && roleAllowsEmail(user) ? PAUSED_EMAIL_ERROR : null;
     const channel = emailEnabled && inAppEnabled ? 'both' : emailEnabled ? 'email' : inAppEnabled ? 'in_app' : 'none';
 
-    if (channel === 'none') continue;
+    if (channel === 'none') {
+      // Still log a pause skip when email would have been the only channel.
+      if (emailsPaused && userEmailEnabled && roleAllowsEmail(user) && !inAppEnabled) {
+        try {
+          await prisma.notificationLog.create({
+            data: {
+              recipientId: user.id,
+              templateSlug: slug,
+              channel: 'none',
+              subject: '',
+              message: '',
+              emailError: PAUSED_EMAIL_ERROR,
+              emailDeferred: false,
+              actionUrl: actionUrl ? actionUrl.slice(0, 500) : null,
+              metadata,
+            },
+          });
+        } catch { /* ignore */ }
+      }
+      continue;
+    }
 
     // Resolve per-audience copy (variant if present, otherwise base template)
     const audience = audienceForUser(user);
@@ -632,6 +656,11 @@ export async function notifyTest({ slug, variables = {}, actionUrl = null, metad
       '<strong>⚠️ TEST EMAIL</strong> — Sent to <code>' + email + '</code> as audience <strong>' + audience + '</strong>. No real recipients were notified; no logs were recorded.' +
       '</div>';
     const htmlWithBanner = brandedHtml.replace(/<body([^>]*)>/i, (m) => m + testBanner);
+
+    if (notificationEmailsPaused()) {
+      results.push({ email, audience, success: false, error: PAUSED_EMAIL_ERROR });
+      continue;
+    }
 
     try {
       const result = await sendEmail({ to: email, subject, html: htmlWithBanner, text: renderedText });

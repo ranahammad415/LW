@@ -1,5 +1,6 @@
 import { prisma } from './prisma.js';
 import { sendEmail } from './mailer.js';
+import { notificationEmailsPaused, PAUSED_EMAIL_ERROR } from './notificationEmailPause.js';
 
 /**
  * In-memory email deferral queue.
@@ -45,6 +46,14 @@ export function deferEmail({ logId, alertId, to, subject, html, text }) {
           }).catch(() => {});
           return;
         }
+      }
+
+      if (notificationEmailsPaused()) {
+        await prisma.notificationLog.update({
+          where: { id: logId },
+          data: { emailError: PAUSED_EMAIL_ERROR, emailDeferred: false },
+        }).catch(() => {});
+        return;
       }
 
       // User hasn't read it — send the email

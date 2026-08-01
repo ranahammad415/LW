@@ -706,7 +706,7 @@ export async function pmPipelineRoutes(app) {
             /no route was found/i.test(wpMsg);
           return reply.status(missingRoute ? 502 : res.status >= 400 && res.status < 600 ? res.status : 502).send({
             message: missingRoute
-              ? 'WordPress is missing the regenerate-links endpoint. Update the Localwave Agent (agency-os-bridge) plugin on that site to 1.9.3+, then try again.'
+              ? 'WordPress is missing the regenerate-links endpoint. Update the Localwave Agent (agency-os-bridge) plugin on that site to 1.9.4+, then try again.'
               : wpMsg || 'WordPress could not regenerate preview links.',
           });
         }
@@ -788,32 +788,50 @@ export async function pmPipelineRoutes(app) {
         // NOTE: the WP path deliberately avoids the literal token "content-type"
         // because some hosts' WAF/ModSecurity rules reset connections to URLs
         // containing it (flagged as header-injection), causing ECONNRESET.
-        const url = `${baseUrl}/wp-json/lwa/v1/pipeline/${wpPipelineId}/change-type`;
+        const url = `${baseUrl}/wp-json/lwa/v1/pipeline/${pipelineId}/change-type`;
 
         let res;
         try {
-          res = await fetch(url, {
-            method: 'POST',
-            headers: {
-              ...wpHeaders(project.wpApiKey),
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ content_type: contentType, actor: request.user.name || '' }),
-            signal: AbortSignal.timeout(15000),
-          });
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 15000);
+          try {
+            res = await fetch(url, {
+              method: 'POST',
+              headers: {
+                ...wpHeaders(project.wpApiKey),
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ content_type: contentType, actor: request.user.name || '' }),
+              signal: controller.signal,
+            });
+          } finally {
+            clearTimeout(timer);
+          }
         } catch (fetchErr) {
           request.log.error({ err: fetchErr, url }, 'WP content-type fetch failed');
           const isTimeout = fetchErr?.name === 'TimeoutError' || fetchErr?.name === 'AbortError';
           return reply.status(502).send({
             message: isTimeout
               ? 'WordPress did not respond in time. Please try again.'
-              : 'Unable to reach WordPress site.',
+              : 'Unable to reach WordPress site. Check the project WP URL and that the Localwave Agent plugin is active.',
           });
         }
 
         const json = await res.json().catch(() => ({}));
         if (!res.ok) {
-          return reply.status(res.status).send({ message: json.message || 'WP API error' });
+          const wpCode = json.code || json.data?.status;
+          const wpMsg = json.message || '';
+          const missingRoute =
+            res.status === 404 ||
+            wpCode === 'rest_no_route' ||
+            /no route was found/i.test(wpMsg);
+          return reply
+            .status(missingRoute ? 502 : res.status >= 400 && res.status < 600 ? res.status : 502)
+            .send({
+              message: missingRoute
+                ? 'WordPress is missing the change-type endpoint. Update the Localwave Agent (agency-os-bridge) plugin on that site to 1.9.4+, then try again.'
+                : wpMsg || 'WordPress could not change the content type.',
+            });
         }
 
         // Optimistically mirror the new type locally (the webhook adds the event).
