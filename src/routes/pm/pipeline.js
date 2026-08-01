@@ -71,6 +71,12 @@ function wpHeaders(apiKey) {
   };
 }
 
+/**
+ * Abort OS→WP sooner than typical edge proxy_read_timeout so Fastify can
+ * always return CORS-safe JSON (502) before the browser connection is reset.
+ */
+const WP_MUTATION_TIMEOUT_MS = 8000;
+
 function commentRoleLabel(role) {
   if (role === 'OWNER') return 'Admin';
   if (role === 'CLIENT') return 'Client';
@@ -670,9 +676,10 @@ export async function pmPipelineRoutes(app) {
         const url = `${baseUrl}/wp-json/lwa/v1/pipeline/${pipelineId}/regenerate-links`;
 
         let res;
+        const wpStartedAt = Date.now();
         try {
           const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 15000);
+          const timer = setTimeout(() => controller.abort(), WP_MUTATION_TIMEOUT_MS);
           try {
             res = await fetch(url, {
               method: 'POST',
@@ -687,7 +694,11 @@ export async function pmPipelineRoutes(app) {
             clearTimeout(timer);
           }
         } catch (fetchErr) {
-          request.log.error({ err: fetchErr, url }, 'WP regenerate-links fetch failed');
+          const elapsedMs = Date.now() - wpStartedAt;
+          request.log.error(
+            { err: fetchErr, url, elapsedMs, timeoutMs: WP_MUTATION_TIMEOUT_MS },
+            'WP regenerate-links fetch failed'
+          );
           const isTimeout = fetchErr?.name === 'TimeoutError' || fetchErr?.name === 'AbortError';
           return reply.status(502).send({
             message: isTimeout
@@ -791,9 +802,10 @@ export async function pmPipelineRoutes(app) {
         const url = `${baseUrl}/wp-json/lwa/v1/pipeline/${pipelineId}/change-type`;
 
         let res;
+        const wpStartedAt = Date.now();
         try {
           const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 15000);
+          const timer = setTimeout(() => controller.abort(), WP_MUTATION_TIMEOUT_MS);
           try {
             res = await fetch(url, {
               method: 'POST',
@@ -808,7 +820,11 @@ export async function pmPipelineRoutes(app) {
             clearTimeout(timer);
           }
         } catch (fetchErr) {
-          request.log.error({ err: fetchErr, url }, 'WP content-type fetch failed');
+          const elapsedMs = Date.now() - wpStartedAt;
+          request.log.error(
+            { err: fetchErr, url, elapsedMs, timeoutMs: WP_MUTATION_TIMEOUT_MS },
+            'WP content-type fetch failed'
+          );
           const isTimeout = fetchErr?.name === 'TimeoutError' || fetchErr?.name === 'AbortError';
           return reply.status(502).send({
             message: isTimeout
