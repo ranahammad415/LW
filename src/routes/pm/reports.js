@@ -32,6 +32,9 @@ const generateBodySchema = z.object({
   year: z.number().int().min(2020).max(2100),
 });
 
+/** Reply before proxies drop long AI calls; generation keeps running in-process. */
+const GENERATE_SOFT_TIMEOUT_MS = Number(process.env.REPORT_GENERATE_SOFT_TIMEOUT_MS || 25000);
+
 const formalAiContentSchema = z
   .object({
     coverSummary: z.string().optional(),
@@ -334,7 +337,9 @@ export async function pmReportRoutes(app) {
         .findUnique({ where: { month_year: { month, year } } })
         .catch(() => null);
 
-      const report = await generateClientReport({
+      // AI drafting can exceed nginx/Cloudflare idle limits. Race a soft timeout so we
+      // can return 202 while generation continues; the client polls the reports list.
+      const reportPromise = generateClientReport({
         clientId,
         month,
         year,
@@ -342,7 +347,48 @@ export async function pmReportRoutes(app) {
         log: request.log,
       });
 
-      return reply.status(201).send(serializeReport(report, { client: { agencyName: client.agencyName } }));
+      const outcome = await Promise.race([
+        reportPromise.then(
+          (report) => ({ kind: 'done', report }),
+          (err) => ({ kind: 'error', err }),
+        ),
+        new Promise((resolve) =>
+          setTimeout(() => resolve({ kind: 'pending' }), GENERATE_SOFT_TIMEOUT_MS),
+        ),
+      ]);
+
+      if (outcome.kind === 'pending') {
+        reportPromise
+          .then((report) => {
+            request.log.info(
+              { reportId: report?.id, clientId, month, year },
+              'Report generate finished after soft timeout',
+            );
+          })
+          .catch((err) => {
+            request.log.error({ err, clientId, month, year }, 'Report generate failed after soft timeout');
+          });
+        return reply.status(202).send({
+          status: 'generating',
+          clientId,
+          month,
+          year,
+          message: 'Draft is still generating. Poll GET /pm/reports until it appears.',
+        });
+      }
+
+      if (outcome.kind === 'error') {
+        request.log.error({ err: outcome.err, clientId, month, year }, 'Report generate failed');
+        return reply.status(500).send({ message: 'Failed to generate report draft' });
+      }
+
+      if (!outcome.report) {
+        return reply.status(404).send({ message: 'Client not found' });
+      }
+
+      return reply.status(201).send(
+        serializeReport(outcome.report, { client: { agencyName: client.agencyName } }),
+      );
     },
   );
 
