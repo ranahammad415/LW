@@ -10,6 +10,7 @@ import {
   generateAndStoreFormalPdf,
   getFormalReportHtmlPreview,
   readMonthlyReportPdf,
+  deleteMonthlyReportPdf,
 } from '../../lib/monthlyReport/renderFormalPdf.js';
 import {
   REPORT_ASSET_FOLDERS,
@@ -291,6 +292,47 @@ export async function pmReportRoutes(app) {
           reportAssets: assets,
         }),
       );
+    },
+  );
+
+  app.delete(
+    '/reports/:id',
+    {
+      onRequest: [app.verifyJwt, app.requirePM],
+      schema: {
+        params: {
+          type: 'object',
+          properties: { id: { type: 'string', format: 'uuid' } },
+          required: ['id'],
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+      const user = request.user;
+
+      const report = await prisma.monthlyReport.findUnique({
+        where: { id },
+        include: {
+          client: { select: { leadPmId: true, secondaryPmId: true, agencyName: true } },
+        },
+      });
+      if (!report) return reply.status(404).send({ message: 'Report not found' });
+
+      if (!(await assertPmClientAccess(user, report.client))) {
+        return reply.status(403).send({ message: 'Forbidden' });
+      }
+
+      if (report.pdfStoredPath) {
+        try {
+          deleteMonthlyReportPdf(report.pdfStoredPath);
+        } catch (err) {
+          request.log.warn({ err, reportId: id }, 'Failed to delete report PDF file');
+        }
+      }
+
+      await prisma.monthlyReport.delete({ where: { id } });
+      return reply.status(204).send();
     },
   );
 
