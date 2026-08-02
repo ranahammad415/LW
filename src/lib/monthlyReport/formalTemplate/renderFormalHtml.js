@@ -21,9 +21,10 @@ const MONTHS = [
 /** Approx printable body lines that fit a section page under header+footer. */
 const SECTION_PAGE_LINES = 36;
 /** Approx lines available under fold on exec page. */
-const EXEC_FIRST_PAGE_LINES = 18;
-const EXEC_CONT_PAGE_LINES = 40;
+const EXEC_FIRST_PAGE_LINES = 22;
+const EXEC_CONT_PAGE_LINES = 42;
 const CHARS_PER_LINE = 92;
+const HEADING_TYPES = new Set(['dash-heading', 'subhead']);
 
 function pad2(n) {
   return String(n).padStart(2, '0');
@@ -102,7 +103,7 @@ function renderUnits(units) {
   return units
     .map((u) => {
       if (u.type === 'dash-heading') return `<h3 class="exec-sub dashed">– ${esc(u.text)} –</h3>`;
-      if (u.type === 'subhead') return `<p class="subhead">--- ${esc(u.text)} ---</p>`;
+      if (u.type === 'subhead') return `<p class="subhead dashed">– ${esc(u.text)} –</p>`;
       if (u.type === 'p') return `<p class="body">${esc(u.text)}</p>`;
       if (u.type === 'li') return `<ul class="bullets single"><li>${esc(u.text)}</li></ul>`;
       if (u.type === 'value') {
@@ -113,28 +114,133 @@ function renderUnits(units) {
     .join('');
 }
 
+/**
+ * Bundle headings with their following body so pagination cannot orphan a heading.
+ * - dash-heading + following paragraph
+ * - subhead + following bullets
+ * - value prefers to travel with the previous group when packing
+ */
+function groupUnits(units) {
+  const groups = [];
+  let i = 0;
+  while (i < units.length) {
+    const u = units[i];
+    if (u.type === 'dash-heading') {
+      const parts = [u];
+      let cost = u.cost || 1;
+      i += 1;
+      if (i < units.length && units[i].type === 'p') {
+        parts.push(units[i]);
+        cost += units[i].cost || 1;
+        i += 1;
+      }
+      groups.push({ units: parts, cost });
+      continue;
+    }
+    if (u.type === 'subhead') {
+      const parts = [u];
+      let cost = u.cost || 1;
+      i += 1;
+      while (i < units.length && units[i].type === 'li') {
+        parts.push(units[i]);
+        cost += units[i].cost || 1;
+        i += 1;
+      }
+      groups.push({ units: parts, cost });
+      continue;
+    }
+    if (u.type === 'value') {
+      groups.push({ units: [u], cost: u.cost || 1, preferWithPrev: true });
+      i += 1;
+      continue;
+    }
+    groups.push({ units: [u], cost: u.cost || 1 });
+    i += 1;
+  }
+  return groups;
+}
+
+function endsWithOrphanHeading(pageUnits) {
+  if (!pageUnits.length) return false;
+  return HEADING_TYPES.has(pageUnits[pageUnits.length - 1].type);
+}
+
+/**
+ * Paginate content units without leaving a heading alone at the end of a page.
+ * Oversized subhead+bullet groups may split across pages, but the heading always
+ * keeps at least one bullet on the same page.
+ */
 function paginateUnits(units, firstCap, contCap) {
+  const groups = groupUnits(units);
   const pages = [];
   let bucket = [];
   let used = 0;
   let cap = firstCap;
-  for (const unit of units) {
-    const cost = unit.cost || 1;
-    if (bucket.length && used + cost > cap) {
-      pages.push(bucket);
-      bucket = [];
-      used = 0;
+
+  const flush = () => {
+    if (!bucket.length) return;
+    pages.push(bucket);
+    bucket = [];
+    used = 0;
+    cap = contCap;
+  };
+
+  const pushGroup = (groupUnits, groupCost) => {
+    if (bucket.length && used + groupCost > cap) flush();
+    if (groupCost > cap && !bucket.length) {
+      // Split large subhead groups: keep heading with first fitting bullets.
+      if (groupUnits[0]?.type === 'subhead' && groupUnits.length > 2) {
+        let part = [];
+        let partUsed = 0;
+        for (let j = 0; j < groupUnits.length; j += 1) {
+          const u = groupUnits[j];
+          const c = u.cost || 1;
+          if (part.length && partUsed + c > cap) {
+            pages.push(part);
+            part = [];
+            partUsed = 0;
+            cap = contCap;
+          }
+          part.push(u);
+          partUsed += c;
+        }
+        bucket = part;
+        used = partUsed;
+        return;
+      }
+      pages.push(groupUnits);
       cap = contCap;
+      return;
     }
-    if (cost > cap && !bucket.length) {
-      pages.push([unit]);
-      cap = contCap;
-      continue;
+    bucket.push(...groupUnits);
+    used += groupCost;
+  };
+
+  for (const g of groups) {
+    if (g.preferWithPrev) {
+      if (bucket.length && used + g.cost <= cap) {
+        bucket.push(...g.units);
+        used += g.cost;
+        continue;
+      }
+      if (bucket.length) flush();
     }
-    bucket.push(unit);
-    used += cost;
+    pushGroup(g.units, g.cost);
   }
   if (bucket.length) pages.push(bucket);
+
+  // Safety: if any page still ends on a bare heading, pull it onto the next page.
+  for (let p = 0; p < pages.length - 1; p += 1) {
+    while (endsWithOrphanHeading(pages[p]) && pages[p].length) {
+      const orphan = pages[p].pop();
+      pages[p + 1].unshift(orphan);
+    }
+    if (!pages[p].length) {
+      pages.splice(p, 1);
+      p -= 1;
+    }
+  }
+
   return pages.length ? pages : [[]];
 }
 
@@ -276,9 +382,9 @@ export function renderFormalReportHtml(opts) {
   const agencyEmail = agency.email || '';
   const agencyPhone = agency.phone || '';
   const agencyAddress = agency.address || '';
-  const agencyLogo = agency.logoDataUrl
-    ? `<img class="agency-logo" src="${agency.logoDataUrl}" alt="${esc(agency.agencyName || 'Local Waves')}" />`
-    : localWavesWordmark();
+  // Conclusion center mark is always the Local Waves wordmark (design lock).
+  // Agency uploaded logos are often mark-only and look sparse on this panel.
+  const conclBrand = localWavesWordmark();
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -426,7 +532,8 @@ export function renderFormalReportHtml(opts) {
   .sec-head { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 0.22in; }
   .sec-title { font-size: 21px; font-weight: 800; color: #003087; letter-spacing: 0.5px; line-height: 1.2; }
   .sec-rule { width: 0.5in; height: 4px; background: #FFB81C; margin-top: 6px; }
-  .subhead { font-size: 12.5px; font-weight: 700; color: #333; margin: 0.16in 0 0.08in; }
+  .subhead { font-size: 12.5px; font-weight: 700; color: #1e293b; margin: 0.16in 0 0.08in; }
+  .subhead.dashed { color: #1e293b; }
   .bullets { margin: 0.04in 0 0.1in 0.15in; padding-left: 0.2in; }
   .bullets.single { margin-bottom: 0.04in; }
   .bullets li { font-size: 12px; line-height: 1.5; color: #444; margin-bottom: 4px; }
@@ -520,7 +627,7 @@ ${sectionPagesHtml(content.sections, footerLabel)}
     <div class="concl-rule"></div>
     <p class="concl-body">${esc(content.conclusion)}</p>
     <div class="concl-logo-wrap">
-      <div class="concl-logo-card">${agencyLogo}</div>
+      <div class="concl-logo-card">${conclBrand}</div>
     </div>
   </div>
   <div class="concl-footer">
@@ -549,4 +656,4 @@ ${sectionPagesHtml(content.sections, footerLabel)}
 </html>`;
 }
 
-export { normalizeAiContent, esc };
+export { normalizeAiContent, esc, paginateUnits, groupUnits };

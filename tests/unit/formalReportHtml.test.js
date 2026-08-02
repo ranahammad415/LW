@@ -5,6 +5,8 @@ import {
   esc,
   buildExecPagination,
   sectionPagesHtml,
+  paginateUnits,
+  groupUnits,
 } from '../../src/lib/monthlyReport/formalTemplate/renderFormalHtml.js';
 
 describe('formalTemplate/renderFormalHtml', () => {
@@ -38,6 +40,7 @@ describe('formalTemplate/renderFormalHtml', () => {
         email: 'ops@example.com',
         phone: '+1 555',
         address: 'Milwaukee, WI',
+        logoDataUrl: 'data:image/png;base64,aaa',
       },
       aiContent: {
         coverSummary: 'June was productive for Test Client.',
@@ -75,7 +78,13 @@ describe('formalTemplate/renderFormalHtml', () => {
     expect(html).toContain('example.com');
     expect(html).toContain('lw-wordmark');
     expect(html).toContain('– Strategic Approach –');
+    expect(html).toContain('– Work completed –');
+    expect(html).not.toContain('--- Work completed ---');
     expect(html).toContain('footer-left');
+    // Conclusion always uses wordmark, not agency logo data URL
+    expect(html).toContain('concl-logo-card');
+    expect(html.match(/lw-wordmark/g)?.length || 0).toBeGreaterThanOrEqual(2);
+    expect(html).not.toContain('data:image/png;base64,aaa');
     expect(html).not.toContain('<script>');
     expect(html).not.toContain('📍');
   });
@@ -96,6 +105,75 @@ describe('formalTemplate/renderFormalHtml', () => {
     expect(contHtml).toContain('(continued)');
   });
 
+  it('never orphans a dash-heading from its following paragraph', () => {
+    const long = 'X'.repeat(750);
+    const nextBody = 'August will reverse the Growth Index decline with content and links.';
+    const { firstHtml, contHtml } = buildExecPagination(
+      {
+        strategicApproach: long,
+        performanceGains: long,
+        localVisibility: long,
+        technicalHealth: long,
+        nextSteps: nextBody,
+      },
+      '2026 July - SEO & Performance Report',
+    );
+
+    const pages = [firstHtml, ...contHtml.split(/(?=<section class="page )/)];
+    for (const page of pages) {
+      if (page.includes('– Next Steps –')) {
+        expect(page).toContain(nextBody);
+      }
+      const body = page.split('page-footer')[0] || page;
+      expect(body.trim().endsWith('</h3>')).toBe(false);
+    }
+
+    const units = [
+      { type: 'dash-heading', text: 'Next Steps', cost: 2 },
+      { type: 'p', text: nextBody, cost: 3 },
+    ];
+    // Force a tiny first page so heading would orphan without keep-together
+    const padded = [
+      { type: 'dash-heading', text: 'A', cost: 2 },
+      { type: 'p', text: 'a'.repeat(200), cost: 4 },
+      { type: 'dash-heading', text: 'B', cost: 2 },
+      { type: 'p', text: 'b'.repeat(200), cost: 4 },
+      ...units,
+    ];
+    const pages2 = paginateUnits(padded, 8, 20);
+    for (const page of pages2) {
+      expect(page[page.length - 1].type).not.toBe('dash-heading');
+    }
+    const nextPage = pages2.find((p) => p.some((u) => u.text === 'Next Steps'));
+    expect(nextPage?.some((u) => u.text === nextBody)).toBe(true);
+  });
+
+  it('groups subheads with bullets and keeps VALUE DELIVERED with prior content when it fits', () => {
+    const grouped = groupUnits([
+      { type: 'p', text: 'Intro', cost: 2 },
+      { type: 'subhead', text: 'Work', cost: 2 },
+      { type: 'li', text: 'Bullet one', cost: 1 },
+      { type: 'li', text: 'Bullet two', cost: 1 },
+      { type: 'value', text: 'Value text', cost: 2 },
+    ]);
+    expect(grouped).toHaveLength(3);
+    expect(grouped[1].units.map((u) => u.type)).toEqual(['subhead', 'li', 'li']);
+    expect(grouped[2].preferWithPrev).toBe(true);
+
+    const pages = paginateUnits(
+      [
+        { type: 'p', text: 'Intro', cost: 2 },
+        { type: 'subhead', text: 'Work', cost: 2 },
+        { type: 'li', text: 'Bullet one', cost: 1 },
+        { type: 'value', text: 'Value text', cost: 2 },
+      ],
+      40,
+      40,
+    );
+    expect(pages).toHaveLength(1);
+    expect(pages[0].map((u) => u.type)).toEqual(['p', 'subhead', 'li', 'value']);
+  });
+
   it('paginates long section bullet lists across pages', () => {
     const bullets = Array.from({ length: 40 }, (_, i) => `Published citation link number ${i + 1} https://example.com/listing/${i}`);
     const html = sectionPagesHtml(
@@ -112,5 +190,6 @@ describe('formalTemplate/renderFormalHtml', () => {
     );
     expect(html.match(/\(continued\)/g)?.length || 0).toBeGreaterThan(0);
     expect((html.match(/class="page /g) || []).length).toBeGreaterThan(1);
+    expect(html).toContain('– Live listings –');
   });
 });

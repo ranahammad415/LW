@@ -75,15 +75,21 @@ export function readUploadAsDataUrl(fileUrl) {
 
 /**
  * Agency footer contact block for conclusion page.
+ * Uses emailFromAddress only when it looks like a public contact (not noreply@).
  */
 export async function getAgencyReportFooter() {
   try {
     const s = await prisma.agencySetting.findFirst();
     if (s) {
+      const rawEmail = s.emailFromAddress || null;
+      const email =
+        rawEmail && !/^(noreply|no-reply|donotreply|do-not-reply)(\+.*)?@/i.test(String(rawEmail).trim())
+          ? rawEmail
+          : null;
       return {
         agencyName: s.agencyName || 'Local Waves',
         logoUrl: s.logoUrl || null,
-        email: s.emailFromAddress || null,
+        email,
         phone: s.phone || null,
         address: s.address || null,
         website: s.website || null,
