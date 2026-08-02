@@ -4,6 +4,8 @@
  * Long sections are chunked onto continuation pages (no overflow clipping).
  */
 
+import { getLocalWavesLogoDataUrl, LOCAL_WAVES_CONTACT } from './brandAssets.js';
+
 function esc(s) {
   return String(s ?? '')
     .replace(/&/g, '&amp;')
@@ -19,11 +21,11 @@ const MONTHS = [
 ];
 
 /** Approx printable body lines that fit a section page under header+footer. */
-const SECTION_PAGE_LINES = 36;
+const SECTION_PAGE_LINES = 30;
 /** Approx lines available under fold on exec page. */
-const EXEC_FIRST_PAGE_LINES = 22;
-const EXEC_CONT_PAGE_LINES = 42;
-const CHARS_PER_LINE = 92;
+const EXEC_FIRST_PAGE_LINES = 16;
+const EXEC_CONT_PAGE_LINES = 34;
+const CHARS_PER_LINE = 80;
 const HEADING_TYPES = new Set(['dash-heading', 'subhead']);
 
 function pad2(n) {
@@ -77,7 +79,12 @@ function localWavesMark(size = 36) {
 </svg>`;
 }
 
-function localWavesWordmark() {
+/** Official Local Waves wordmark image (falls back to SVG mark + text). */
+function localWavesWordmark({ height = 42 } = {}) {
+  const src = getLocalWavesLogoDataUrl();
+  if (src) {
+    return `<img class="lw-wordmark lw-logo-img" src="${src}" alt="Local Waves" height="${height}" style="height:${height}px;width:auto;max-width:300px;object-fit:contain;" />`;
+  }
   return `<div class="lw-wordmark" aria-label="Local Waves">
   <span class="lw-local">LOCAL</span>
   ${localWavesMark(28)}
@@ -379,12 +386,12 @@ export function renderFormalReportHtml(opts) {
         </div>
       </div>`;
 
-  const agencyEmail = agency.email || '';
-  const agencyPhone = agency.phone || '';
-  const agencyAddress = agency.address || '';
-  // Conclusion center mark is always the Local Waves wordmark (design lock).
-  // Agency uploaded logos are often mark-only and look sparse on this panel.
-  const conclBrand = localWavesWordmark();
+  const agencyEmail = agency.email || LOCAL_WAVES_CONTACT.email;
+  const agencyPhone = agency.phone || LOCAL_WAVES_CONTACT.phone;
+  const agencyAddress = agency.address || LOCAL_WAVES_CONTACT.address;
+  // Conclusion + cover use the official Local Waves wordmark asset.
+  const conclBrand = localWavesWordmark({ height: 48 });
+  const coverBrand = localWavesWordmark({ height: 44 });
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -435,38 +442,39 @@ export function renderFormalReportHtml(opts) {
     background: #FFB81C;
     clip-path: polygon(0 0, 100% 20%, 100% 100%, 0 80%);
   }
-  .brand-row { display: flex; align-items: center; gap: 8px; margin-bottom: 0.48in; }
+  .brand-row { display: flex; align-items: center; gap: 8px; margin-bottom: 0.42in; }
   .lw-wordmark { display: inline-flex; align-items: center; gap: 6px; }
+  .lw-logo-img { display: block; height: auto; max-height: 52px; }
   .lw-local { font-size: 17px; font-weight: 800; color: #003087; letter-spacing: 1px; }
   .lw-waves { font-size: 17px; font-weight: 800; color: #2b6cb0; letter-spacing: 1px; }
   .lw-mark { display: block; flex-shrink: 0; }
   .cover-month {
-    font-size: 44px; font-weight: 800; color: #FFB81C; letter-spacing: 1px;
+    font-size: 46px; font-weight: 800; color: #FFB81C; letter-spacing: 1px;
     line-height: 1.02; margin-bottom: 4px;
   }
   .cover-title {
-    font-size: 28px; font-weight: 800; color: #003087; letter-spacing: 0.5px;
-    line-height: 1.12; margin-bottom: 0.28in;
+    font-size: 30px; font-weight: 800; color: #003087; letter-spacing: 0.5px;
+    line-height: 1.12; margin-bottom: 0.26in;
   }
   .cover-summary {
-    font-size: 12.5px; line-height: 1.65; color: #555; max-width: 6.2in;
-    margin-bottom: 0.38in;
+    font-size: 15px; line-height: 1.65; color: #444; max-width: 6.3in;
+    margin-bottom: 0.34in;
   }
   .prep-band {
     background: #ececec; margin: 0 -0.7in 0 -0.95in; padding: 0.3in 0.7in 0.3in 0.95in;
     display: flex; justify-content: space-between; align-items: center; gap: 24px;
     min-height: 1.3in;
   }
-  .prep-labels { font-size: 13px; color: #003087; }
+  .prep-labels { font-size: 14px; color: #003087; }
   .prep-labels strong { display: block; margin-bottom: 2px; }
-  .prep-labels .val { color: #444; font-weight: 500; margin-bottom: 10px; }
-  .client-logo { max-height: 72px; max-width: 200px; object-fit: contain; }
-  .client-logo-text { font-size: 15px; font-weight: 800; color: #003087; text-align: right; max-width: 220px; }
+  .prep-labels .val { color: #444; font-weight: 500; margin-bottom: 10px; font-size: 14px; }
+  .client-logo { max-height: 78px; max-width: 220px; object-fit: contain; }
+  .client-logo-text { font-size: 16px; font-weight: 800; color: #003087; text-align: right; max-width: 220px; }
   .cover-url {
-    margin-top: 0.5in; font-size: 15px; font-weight: 700; color: #FFB81C;
+    margin-top: 0.45in; font-size: 16px; font-weight: 700; color: #FFB81C;
     text-decoration: underline; text-underline-offset: 3px;
   }
-  .cover-stamp { margin-top: 6px; font-size: 11px; color: #888; }
+  .cover-stamp { margin-top: 6px; font-size: 12px; color: #888; }
   .cover-dots {
     position: absolute; right: 0.85in; bottom: 0.95in;
     display: grid; grid-template-columns: repeat(4, 8px); gap: 7px;
@@ -510,34 +518,34 @@ export function renderFormalReportHtml(opts) {
   .exec-body { padding: 0.32in 0.7in 0.55in; position: relative; }
   .exec-num { position: absolute; top: -0.34in; left: 0.55in; z-index: 2; }
   .exec-title {
-    font-size: 25px; font-weight: 800; color: #003087; margin: 0.18in 0 0.06in 0.95in;
+    font-size: 27px; font-weight: 800; color: #003087; margin: 0.18in 0 0.06in 0.95in;
   }
   .exec-title.cont { margin-left: 0; }
-  .cont-label { font-size: 14px; font-weight: 600; color: #64748b; text-transform: none; letter-spacing: 0; }
+  .cont-label { font-size: 15px; font-weight: 600; color: #64748b; text-transform: none; letter-spacing: 0; }
   .exec-rule {
     width: 0.55in; height: 4px; background: #FFB81C; margin: 0 0 0.18in 0.95in;
   }
   .content-page .exec-rule { margin-left: 0; }
-  .exec-sub { font-size: 13px; font-weight: 700; color: #222; margin: 0.14in 0 0.06in; }
+  .exec-sub { font-size: 15px; font-weight: 700; color: #222; margin: 0.14in 0 0.06in; }
   .exec-sub.dashed { color: #1e293b; }
-  .body { font-size: 12px; line-height: 1.6; color: #444; margin-bottom: 0.06in; }
+  .body { font-size: 14px; line-height: 1.62; color: #333; margin-bottom: 0.08in; }
   .page-footer {
     position: absolute; left: 0.75in; right: 0.75in; bottom: 0.28in;
     border-top: 1px solid #bbb; padding-top: 8px;
-    font-size: 11px; color: #888; font-style: italic;
+    font-size: 12px; color: #888; font-style: italic;
   }
   .footer-left { text-align: left; }
   .exec-page .page-footer { left: 0.7in; right: 0.7in; }
 
   .sec-head { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 0.22in; }
-  .sec-title { font-size: 21px; font-weight: 800; color: #003087; letter-spacing: 0.5px; line-height: 1.2; }
+  .sec-title { font-size: 23px; font-weight: 800; color: #003087; letter-spacing: 0.5px; line-height: 1.2; }
   .sec-rule { width: 0.5in; height: 4px; background: #FFB81C; margin-top: 6px; }
-  .subhead { font-size: 12.5px; font-weight: 700; color: #1e293b; margin: 0.16in 0 0.08in; }
+  .subhead { font-size: 14.5px; font-weight: 700; color: #1e293b; margin: 0.16in 0 0.08in; }
   .subhead.dashed { color: #1e293b; }
   .bullets { margin: 0.04in 0 0.1in 0.15in; padding-left: 0.2in; }
   .bullets.single { margin-bottom: 0.04in; }
-  .bullets li { font-size: 12px; line-height: 1.5; color: #444; margin-bottom: 4px; }
-  .value { font-size: 12px; line-height: 1.55; color: #333; margin-top: 0.18in; }
+  .bullets li { font-size: 14px; line-height: 1.55; color: #333; margin-bottom: 5px; }
+  .value { font-size: 14px; line-height: 1.58; color: #222; margin-top: 0.18in; }
   .value strong { color: #003087; }
 
   .conclusion-page { display: flex; flex-direction: column; height: 11in; }
@@ -546,15 +554,15 @@ export function renderFormalReportHtml(opts) {
     position: relative; overflow: hidden;
   }
   .concl-head { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 0.12in; }
-  .concl-title { font-size: 28px; font-weight: 800; color: #fff; }
+  .concl-title { font-size: 30px; font-weight: 800; color: #fff; }
   .concl-rule { width: 0.55in; height: 4px; background: #FFB81C; margin: 8px 0 0.2in 0.84in; }
   .concl-body {
-    font-size: 13px; line-height: 1.7; color: #f0f4fa; max-width: 6.4in;
+    font-size: 15px; line-height: 1.7; color: #f0f4fa; max-width: 6.4in;
     max-height: 4.8in; overflow: hidden;
   }
   .concl-logo-wrap { margin-top: 0.55in; display: flex; justify-content: center; }
   .concl-logo-card {
-    background: #fff; padding: 12px 26px; border-radius: 4px;
+    background: #fff; padding: 14px 28px; border-radius: 6px;
     display: inline-flex; align-items: center; justify-content: center;
   }
   .agency-logo { max-height: 48px; max-width: 220px; object-fit: contain; }
@@ -571,8 +579,8 @@ export function renderFormalReportHtml(opts) {
     display: inline-flex; align-items: center; justify-content: center;
     margin-bottom: 8px;
   }
-  .contact-label { font-size: 13px; font-weight: 800; color: #003087; margin-bottom: 4px; }
-  .contact-val { font-size: 11.5px; color: #003087; font-style: italic; text-decoration: underline; word-break: break-all; }
+  .contact-label { font-size: 14px; font-weight: 800; color: #003087; margin-bottom: 4px; }
+  .contact-val { font-size: 13px; color: #003087; font-style: italic; text-decoration: underline; word-break: break-all; }
   .contact-val.addr { text-decoration: none; }
 </style>
 </head>
@@ -582,7 +590,7 @@ export function renderFormalReportHtml(opts) {
   <div class="cover-gold-top"></div>
   <div class="cover-sidebar"></div>
   <div class="cover-gold-bot"></div>
-  <div class="brand-row">${localWavesWordmark()}</div>
+  <div class="brand-row">${coverBrand}</div>
   <div class="cover-month">${esc(monthYear)}</div>
   <div class="cover-title">SEO &amp; PERFORMANCE<br/>REPORT</div>
   <p class="cover-summary">${esc(content.coverSummary)}</p>

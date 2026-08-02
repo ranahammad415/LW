@@ -1,12 +1,14 @@
 import { mkdirSync, writeFileSync, unlinkSync, existsSync, readFileSync } from 'fs';
 import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
+import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { prisma } from '../prisma.js';
 import { renderFormalReportHtml } from './formalTemplate/renderFormalHtml.js';
 import {
   getClientReportAssets,
   getAgencyReportFooter,
+  readUploadForPdfHtml,
   readUploadAsDataUrl,
 } from './reportAssets.js';
 
@@ -30,7 +32,7 @@ export function deleteMonthlyReportPdf(storedPath) {
   if (absolute && existsSync(absolute)) unlinkSync(absolute);
 }
 
-async function buildHtmlForReport(report) {
+async function buildHtmlForReport(report, { forPlaywright = false } = {}) {
   const client = await prisma.clientAccount.findUnique({
     where: { id: report.clientId },
     select: { id: true, agencyName: true, websiteUrl: true },
@@ -40,9 +42,13 @@ async function buildHtmlForReport(report) {
   const assets = await getClientReportAssets(client.id);
   const agency = await getAgencyReportFooter();
 
-  const clientLogoDataUrl = assets.logo ? readUploadAsDataUrl(assets.logo.fileUrl) : null;
-  const foldDataUrl = assets.fold ? readUploadAsDataUrl(assets.fold.fileUrl) : null;
-  const agencyLogoDataUrl = agency.logoUrl ? readUploadAsDataUrl(agency.logoUrl) : null;
+  const readAsset = forPlaywright
+    ? (url) => readUploadForPdfHtml(url, { preferFileUrl: true })
+    : readUploadAsDataUrl;
+
+  const clientLogoDataUrl = assets.logo ? readAsset(assets.logo.fileUrl) : null;
+  const foldDataUrl = assets.fold ? readAsset(assets.fold.fileUrl) : null;
+  const agencyLogoDataUrl = agency.logoUrl ? readAsset(agency.logoUrl) : null;
 
   const html = renderFormalReportHtml({
     aiContent: report.aiContent,
@@ -80,10 +86,14 @@ export async function renderFormalPdfBuffer(html) {
     );
   }
 
+  // Write to a temp file so file:// image assets (large fold snaps) can load.
+  const tmpHtml = join(tmpdir(), `lw-formal-report-${randomUUID()}.html`);
+  writeFileSync(tmpHtml, html, 'utf8');
+
   const browser = await playwright.chromium.launch({ headless: true });
   try {
     const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'load', timeout: 60000 });
+    await page.goto(pathToFileURL(tmpHtml).href, { waitUntil: 'load', timeout: 90000 });
     const pdf = await page.pdf({
       format: 'Letter',
       printBackground: true,
@@ -92,6 +102,11 @@ export async function renderFormalPdfBuffer(html) {
     return Buffer.from(pdf);
   } finally {
     await browser.close();
+    try {
+      unlinkSync(tmpHtml);
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -102,7 +117,7 @@ export async function generateAndStoreFormalPdf(reportId, { log = console } = {}
   const report = await prisma.monthlyReport.findUnique({ where: { id: reportId } });
   if (!report) throw Object.assign(new Error('Report not found'), { statusCode: 404 });
 
-  const { html, client } = await buildHtmlForReport(report);
+  const { html, client } = await buildHtmlForReport(report, { forPlaywright: true });
   const buffer = await renderFormalPdfBuffer(html);
 
   if (report.pdfStoredPath) {
@@ -135,6 +150,6 @@ export async function generateAndStoreFormalPdf(reportId, { log = console } = {}
 export async function getFormalReportHtmlPreview(reportId) {
   const report = await prisma.monthlyReport.findUnique({ where: { id: reportId } });
   if (!report) return null;
-  const { html } = await buildHtmlForReport(report);
+  const { html } = await buildHtmlForReport(report, { forPlaywright: false });
   return html;
 }

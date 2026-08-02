@@ -14,18 +14,27 @@ import {
 } from '../../lib/monthlyReport/renderFormalPdf.js';
 import {
   REPORT_ASSET_FOLDERS,
+  REPORT_ASSET_MAX_BYTES,
   getClientReportAssets,
 } from '../../lib/monthlyReport/reportAssets.js';
 import {
   resolveUploadBaseUrl,
   validateUpload,
   sanitizeUploadFilename,
-  MAX_UPLOAD_SIZE_BYTES,
 } from '../../lib/uploadUrl.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const UPLOADS_ROOT = join(__dirname, '..', '..', '..', 'uploads');
+
+function multipartField(fields, name) {
+  const raw = fields?.[name];
+  if (raw == null) return null;
+  if (typeof raw === 'string') return raw;
+  if (typeof raw.value === 'string') return raw.value;
+  if (Array.isArray(raw) && raw.length) return multipartField({ [name]: raw[0] }, name);
+  return null;
+}
 
 const generateBodySchema = z.object({
   clientId: z.string().uuid(),
@@ -186,18 +195,26 @@ export async function pmReportRoutes(app) {
 
       const buffer = await data.toBuffer();
       const fileName = data.filename || 'asset';
+      if (buffer.length > REPORT_ASSET_MAX_BYTES) {
+        return reply.status(413).send({
+          message: `File too large. Report assets (logo / website snap) must be ${Math.round(REPORT_ASSET_MAX_BYTES / 1024 / 1024)}MB or less.`,
+        });
+      }
       const validation = validateUpload({
         mimetype: data.mimetype,
         filename: fileName,
         size: buffer.length,
       });
       if (!validation.ok) return reply.status(400).send({ message: validation.message });
-      if (buffer.length > MAX_UPLOAD_SIZE_BYTES) {
-        return reply.status(413).send({ message: 'File too large' });
+      const mt = String(data.mimetype || '').toLowerCase();
+      if (!mt.startsWith('image/')) {
+        return reply.status(400).send({
+          message: 'Upload an image file (PNG, JPG, WEBP, or GIF). Screenshots work best as PNG or JPG under 10MB.',
+        });
       }
 
-      const clientId = data.fields.clientId?.value;
-      const folder = data.fields.folder?.value;
+      const clientId = multipartField(data.fields, 'clientId');
+      const folder = multipartField(data.fields, 'folder');
       if (!clientId) return reply.status(400).send({ message: 'clientId is required' });
       if (![REPORT_ASSET_FOLDERS.LOGO, REPORT_ASSET_FOLDERS.FOLD].includes(folder)) {
         return reply.status(400).send({
@@ -233,7 +250,7 @@ export async function pmReportRoutes(app) {
           folder,
           filename: fileName,
           fileUrl,
-          uploadNote: data.fields.uploadNote?.value || `Monthly report ${folder}`,
+          uploadNote: multipartField(data.fields, 'uploadNote') || `Monthly report ${folder}`,
         },
       });
 

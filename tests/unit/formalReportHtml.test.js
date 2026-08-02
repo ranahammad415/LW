@@ -77,14 +77,16 @@ describe('formalTemplate/renderFormalHtml', () => {
     expect(html).toContain('ops@example.com');
     expect(html).toContain('example.com');
     expect(html).toContain('lw-wordmark');
+    expect(html).toContain('lw-logo-img');
     expect(html).toContain('– Strategic Approach –');
     expect(html).toContain('– Work completed –');
     expect(html).not.toContain('--- Work completed ---');
     expect(html).toContain('footer-left');
-    // Conclusion always uses wordmark, not agency logo data URL
+    // Conclusion always uses official LW wordmark, not agency logo data URL
     expect(html).toContain('concl-logo-card');
     expect(html.match(/lw-wordmark/g)?.length || 0).toBeGreaterThanOrEqual(2);
     expect(html).not.toContain('data:image/png;base64,aaa');
+    expect(html).toContain('font-size: 14px');
     expect(html).not.toContain('<script>');
     expect(html).not.toContain('📍');
   });
