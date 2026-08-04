@@ -1,5 +1,5 @@
 import { prisma } from './prisma.js';
-import { cloneMissingIncompleteTasks, DONE_STATUSES } from './taskClone.js';
+import { cloneMissingRecurringTasks, DONE_STATUSES } from './taskClone.js';
 
 export function monthLabel(month, year) {
   const d = new Date(Date.UTC(year, month - 1, 1));
@@ -95,7 +95,8 @@ export async function resolveCycle({ cycleId, month, year } = {}) {
 
 /**
  * Preview of what opening the next month will do, for the admin confirm dialog.
- * carryOverCount = incomplete roots on current cycle that still need cloning.
+ * carryOverCount = non-cancelled roots on current cycle that still need cloning
+ * (includes COMPLETED so recurring work seeds the new month as To-do).
  */
 export async function previewOpenNext() {
   const current = await prisma.workCycle.findFirst({ where: { status: 'OPEN' } });
@@ -114,26 +115,26 @@ export async function previewOpenNext() {
 
   let carryOverCount = 0;
   if (current) {
-    const incompleteRoots = await prisma.task.findMany({
+    const recurringRoots = await prisma.task.findMany({
       where: {
         workCycleId: current.id,
         parentTaskId: null,
-        status: { notIn: DONE_STATUSES },
+        status: { not: 'CANCELLED' },
       },
       select: { id: true },
     });
-    if (existingTarget && incompleteRoots.length) {
+    if (existingTarget && recurringRoots.length) {
       const alreadyCloned = await prisma.task.findMany({
         where: {
           workCycleId: existingTarget.id,
-          clonedFromTaskId: { in: incompleteRoots.map((t) => t.id) },
+          clonedFromTaskId: { in: recurringRoots.map((t) => t.id) },
         },
         select: { clonedFromTaskId: true },
       });
       const clonedSet = new Set(alreadyCloned.map((t) => t.clonedFromTaskId));
-      carryOverCount = incompleteRoots.filter((t) => !clonedSet.has(t.id)).length;
+      carryOverCount = recurringRoots.filter((t) => !clonedSet.has(t.id)).length;
     } else {
-      carryOverCount = incompleteRoots.length;
+      carryOverCount = recurringRoots.length;
     }
   }
 
@@ -151,8 +152,8 @@ export async function previewOpenNext() {
 
 /**
  * Close the current cycle and open the next one (agency-wide).
- * Incomplete tasks stay on the closed cycle (history). Any incomplete roots
- * without a clone in the new cycle are cloned as a safety net.
+ * Closed-cycle tasks stay as history. Non-cancelled roots without a clone in
+ * the new cycle are cloned as fresh TO_DO (including COMPLETED recurring work).
  */
 export async function openNextCycle({ userId = null, log = console } = {}) {
   const current = await prisma.workCycle.findFirst({ where: { status: 'OPEN' } });
@@ -194,7 +195,7 @@ export async function openNextCycle({ userId = null, log = console } = {}) {
 
     let carried = 0;
     if (closedCycle) {
-      const cloneResult = await cloneMissingIncompleteTasks(closedCycle.id, newCycle.id, {
+      const cloneResult = await cloneMissingRecurringTasks(closedCycle.id, newCycle.id, {
         tx,
         createdById: userId,
       });

@@ -35,6 +35,7 @@ vi.mock('../../src/lib/taskClone.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
+    cloneMissingRecurringTasks: mocks.cloneMissing,
     cloneMissingIncompleteTasks: mocks.cloneMissing,
     DONE_STATUSES: actual.DONE_STATUSES,
   };
@@ -88,7 +89,7 @@ describe('previewOpenNext', () => {
     vi.clearAllMocks();
   });
 
-  it('counts incomplete roots that are not yet cloned', async () => {
+  it('counts non-cancelled roots (incl. completed) that are not yet cloned', async () => {
     mocks.findFirst.mockResolvedValue({
       id: 'c1',
       month: 7,
@@ -97,7 +98,7 @@ describe('previewOpenNext', () => {
     });
     mocks.findUnique.mockResolvedValue({ id: 'c2', month: 8, year: 2026 });
     mocks.findMany
-      .mockResolvedValueOnce([{ id: 't1' }, { id: 't2' }]) // incomplete roots
+      .mockResolvedValueOnce([{ id: 't1' }, { id: 't2' }]) // recurring roots
       .mockResolvedValueOnce([{ clonedFromTaskId: 't1' }]); // already cloned
     mocks.clientCount.mockResolvedValue(3);
 
@@ -105,6 +106,7 @@ describe('previewOpenNext', () => {
     expect(preview.carryOverCount).toBe(1);
     expect(preview.reportsToGenerate).toBe(3);
     expect(preview.nextCycle.month).toBe(8);
+    expect(mocks.findMany.mock.calls[0][0].where.status).toEqual({ not: 'CANCELLED' });
   });
 });
 
@@ -113,7 +115,7 @@ describe('openNextCycle', () => {
     vi.clearAllMocks();
   });
 
-  it('clones missing incomplete tasks instead of moving workCycleId', async () => {
+  it('clones missing recurring tasks instead of moving workCycleId', async () => {
     const closed = { id: 'c1', month: 7, year: 2026, status: 'CLOSED' };
     const opened = { id: 'c2', month: 8, year: 2026, status: 'OPEN', label: 'August 2026' };
 

@@ -159,15 +159,17 @@ export async function cloneTaskTreeIntoCycle(rootTaskId, targetCycleId, { tx = p
 }
 
 /**
- * Clone every incomplete root task from `fromCycleId` into `toCycleId` that
+ * Clone every non-cancelled root task from `fromCycleId` into `toCycleId` that
  * does not already have a clone (agency-wide safety net on month close).
+ * Includes COMPLETED roots so recurring work reappears as fresh TO_DO copies.
+ * Skips CANCELLED roots.
  */
-export async function cloneMissingIncompleteTasks(fromCycleId, toCycleId, { tx = prisma, createdById = null } = {}) {
+export async function cloneMissingRecurringTasks(fromCycleId, toCycleId, { tx = prisma, createdById = null } = {}) {
   const roots = await tx.task.findMany({
     where: {
       workCycleId: fromCycleId,
       parentTaskId: null,
-      status: { notIn: DONE_STATUSES },
+      status: { not: 'CANCELLED' },
     },
     select: { id: true },
   });
@@ -180,6 +182,11 @@ export async function cloneMissingIncompleteTasks(fromCycleId, toCycleId, { tx =
     else cloned += result.cloned;
   }
   return { cloned, skipped, rootCount: roots.length };
+}
+
+/** @deprecated Use cloneMissingRecurringTasks — kept as alias for older imports. */
+export async function cloneMissingIncompleteTasks(fromCycleId, toCycleId, opts = {}) {
+  return cloneMissingRecurringTasks(fromCycleId, toCycleId, opts);
 }
 
 /**
