@@ -4,6 +4,7 @@ import { generateChat, isAiConfigured } from '../lib/ai.js';
 import { syncProjectPages } from '../lib/wpSync.js';
 import { ensureProjectAccess } from '../lib/ensureProjectAccess.js';
 import { notify } from '../lib/notificationService.js';
+import { resolveCycle } from '../lib/workCycle.js';
 
 const SUGGEST_TASKS_SYSTEM = `You are a Senior Digital Strategist at a premium agency. Your job is to suggest the next high-impact tasks to keep a client campaign moving forward.
 
@@ -25,6 +26,13 @@ Respond with a JSON object only, no markdown or explanation. The JSON must have 
 }
 
 Provide exactly 3 suggestions. Use priority "MEDIUM" for all unless one is clearly urgent. taskType should be a short slug like the examples.`;
+
+function cycleDateRange(cycle) {
+  if (!cycle) return null;
+  const from = new Date(Date.UTC(cycle.year, cycle.month - 1, 1));
+  const to = new Date(Date.UTC(cycle.year, cycle.month, 1));
+  return { from, to };
+}
 
 export async function projectRoutes(app) {
   app.get(
@@ -228,17 +236,43 @@ export async function projectRoutes(app) {
       const canAccess = await ensureProjectAccess(project, user);
       if (!canAccess) return reply.status(403).send({ message: 'You do not have access to this project' });
 
+      let dateFilter = {};
+      if (request.query.cycle && request.query.cycle !== 'all') {
+        const cycle = await resolveCycle({
+          cycleId: request.query.cycle,
+          month: request.query.month,
+          year: request.query.year,
+        });
+        const range = cycleDateRange(cycle);
+        if (range) {
+          dateFilter = { submittedAt: { gte: range.from, lt: range.to } };
+        }
+      } else if (request.query.month && request.query.year) {
+        const cycle = await resolveCycle({
+          month: request.query.month,
+          year: request.query.year,
+        });
+        const range = cycleDateRange(cycle);
+        if (range) {
+          dateFilter = { submittedAt: { gte: range.from, lt: range.to } };
+        }
+      }
+
+      const assetDateFilter = dateFilter.submittedAt
+        ? { uploadedAt: dateFilter.submittedAt }
+        : {};
+
       const [assets, keywords, updates] = await Promise.all([
         prisma.clientAsset.findMany({
-          where: { projectId: id },
+          where: { projectId: id, ...assetDateFilter },
           orderBy: { uploadedAt: 'desc' },
         }),
         prisma.keywordSuggestion.findMany({
-          where: { projectId: id },
+          where: { projectId: id, ...dateFilter },
           orderBy: { submittedAt: 'desc' },
         }),
         prisma.businessUpdate.findMany({
-          where: { projectId: id },
+          where: { projectId: id, ...dateFilter },
           orderBy: { submittedAt: 'desc' },
         }),
       ]);
@@ -308,6 +342,28 @@ export async function projectRoutes(app) {
       const { user } = request;
       const { id } = request.params;
 
+      let taskWhere = { parentTaskId: null };
+      let businessUpdateWhere = undefined;
+      if (request.query.cycle === 'all') {
+        // no cycle filter
+      } else {
+        const cycle = await resolveCycle({
+          cycleId: request.query.cycle,
+          month: request.query.month,
+          year: request.query.year,
+        });
+        if (request.query.cycle || (request.query.month && request.query.year)) {
+          if (!cycle) return reply.status(404).send({ message: 'Work cycle not found' });
+        }
+        if (cycle) {
+          taskWhere = { parentTaskId: null, workCycleId: cycle.id };
+          const range = cycleDateRange(cycle);
+          if (range) {
+            businessUpdateWhere = { submittedAt: { gte: range.from, lt: range.to } };
+          }
+        }
+      }
+
       const project = await prisma.project.findUnique({
         where: { id },
         include: {
@@ -315,9 +371,9 @@ export async function projectRoutes(app) {
           leadPm: { select: { id: true, name: true, email: true } },
           clientAssets: true,
           keywordSuggestions: true,
-          businessUpdates: true,
+          businessUpdates: businessUpdateWhere ? { where: businessUpdateWhere } : true,
           tasks: {
-            where: { parentTaskId: null },
+            where: taskWhere,
             orderBy: [{ status: 'asc' }, { dueDate: 'asc' }],
             include: {
               assignees: { select: { id: true, name: true, email: true, avatarUrl: true } },

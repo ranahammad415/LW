@@ -593,10 +593,13 @@ model Task {
   parentTaskId     String?
   wpAccessPresetId String?
   workCycleId      String?
+  clonedFromTaskId String?
   parentTask       Task?           @relation("SubTasks", fields: [parentTaskId], references: [id], onDelete: Cascade)
   subTasks         Task[]          @relation("SubTasks")
   wpAccessPreset   WpAccessPreset? @relation(fields: [wpAccessPresetId], references: [id], onDelete: SetNull)
   workCycle        WorkCycle?      @relation(fields: [workCycleId], references: [id], onDelete: SetNull)
+  clonedFromTask   Task?           @relation("TaskClones", fields: [clonedFromTaskId], references: [id], onDelete: SetNull)
+  clones           Task[]          @relation("TaskClones")
 
   milestone String? @db.VarChar(100)
 
@@ -618,6 +621,7 @@ model Task {
   clientInputRequests ClientInputRequest[]
 
   @@index([workCycleId])
+  @@index([clonedFromTaskId])
   @@map("task")
 }
 

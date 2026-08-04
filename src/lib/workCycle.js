@@ -1,7 +1,5 @@
 import { prisma } from './prisma.js';
-
-// Statuses that count as "done" and therefore do NOT carry forward to the next cycle.
-const DONE_STATUSES = ['COMPLETED', 'CANCELLED'];
+import { cloneMissingIncompleteTasks, DONE_STATUSES } from './taskClone.js';
 
 export function monthLabel(month, year) {
   const d = new Date(Date.UTC(year, month - 1, 1));
@@ -49,6 +47,37 @@ export async function ensureCurrentCycle({ userId = null } = {}) {
 }
 
 /**
+ * Ensure the calendar month *after* the current OPEN cycle exists as a row
+ * without opening it (stays CLOSED until agency Start next month). Used by
+ * per-project next-month prepare so tasks can be staged early.
+ */
+export async function ensureNextCycle({ userId = null } = {}) {
+  const current = await ensureCurrentCycle({ userId });
+  const target = nextMonthYear(current.month, current.year);
+
+  const existing = await prisma.workCycle.findUnique({
+    where: { month_year: { month: target.month, year: target.year } },
+  });
+
+  if (existing) {
+    return { current, next: existing };
+  }
+
+  const next = await prisma.workCycle.create({
+    data: {
+      month: target.month,
+      year: target.year,
+      status: 'CLOSED',
+      closedAt: null,
+      openedById: userId,
+      label: monthLabel(target.month, target.year),
+    },
+  });
+
+  return { current, next };
+}
+
+/**
  * Resolve which cycle a request is asking about.
  * - explicit cycleId, or month+year → that cycle
  * - nothing → the current (OPEN) cycle
@@ -66,24 +95,49 @@ export async function resolveCycle({ cycleId, month, year } = {}) {
 
 /**
  * Preview of what opening the next month will do, for the admin confirm dialog.
+ * carryOverCount = incomplete roots on current cycle that still need cloning.
  */
 export async function previewOpenNext() {
   const current = await prisma.workCycle.findFirst({ where: { status: 'OPEN' } });
-  const [carryOverCount, activeClientCount] = await Promise.all([
-    current
-      ? prisma.task.count({
-          where: { workCycleId: current.id, status: { notIn: DONE_STATUSES } },
-        })
-      : Promise.resolve(0),
-    prisma.clientAccount.count({ where: { isActive: true } }),
-  ]);
-
   const target = current
     ? nextMonthYear(current.month, current.year)
     : (() => {
         const now = new Date();
         return { month: now.getUTCMonth() + 1, year: now.getUTCFullYear() };
       })();
+
+  const existingTarget = current
+    ? await prisma.workCycle.findUnique({
+        where: { month_year: { month: target.month, year: target.year } },
+      })
+    : null;
+
+  let carryOverCount = 0;
+  if (current) {
+    const incompleteRoots = await prisma.task.findMany({
+      where: {
+        workCycleId: current.id,
+        parentTaskId: null,
+        status: { notIn: DONE_STATUSES },
+      },
+      select: { id: true },
+    });
+    if (existingTarget && incompleteRoots.length) {
+      const alreadyCloned = await prisma.task.findMany({
+        where: {
+          workCycleId: existingTarget.id,
+          clonedFromTaskId: { in: incompleteRoots.map((t) => t.id) },
+        },
+        select: { clonedFromTaskId: true },
+      });
+      const clonedSet = new Set(alreadyCloned.map((t) => t.clonedFromTaskId));
+      carryOverCount = incompleteRoots.filter((t) => !clonedSet.has(t.id)).length;
+    } else {
+      carryOverCount = incompleteRoots.length;
+    }
+  }
+
+  const activeClientCount = await prisma.clientAccount.count({ where: { isActive: true } });
 
   return {
     currentCycle: current
@@ -97,9 +151,8 @@ export async function previewOpenNext() {
 
 /**
  * Close the current cycle and open the next one (agency-wide).
- * - carries incomplete tasks forward into the new cycle
- * - triggers per-client report drafts + a frozen analytics snapshot for the
- *   just-closed cycle (best-effort; wired up in later phases)
+ * Incomplete tasks stay on the closed cycle (history). Any incomplete roots
+ * without a clone in the new cycle are cloned as a safety net.
  */
 export async function openNextCycle({ userId = null, log = console } = {}) {
   const current = await prisma.workCycle.findFirst({ where: { status: 'OPEN' } });
@@ -141,19 +194,17 @@ export async function openNextCycle({ userId = null, log = console } = {}) {
 
     let carried = 0;
     if (closedCycle) {
-      const res = await tx.task.updateMany({
-        where: { workCycleId: closedCycle.id, status: { notIn: DONE_STATUSES } },
-        data: { workCycleId: newCycle.id },
+      const cloneResult = await cloneMissingIncompleteTasks(closedCycle.id, newCycle.id, {
+        tx,
+        createdById: userId,
       });
-      carried = res.count;
+      carried = cloneResult.cloned;
     }
 
     return { closedCycle, newCycle, carried };
   });
 
-  // Post-close automation for the month that just ended (best-effort — these
-  // modules are added in the reporting/analytics phases). Never block the
-  // month roll on a downstream failure.
+  // Post-close automation for the month that just ended (best-effort).
   if (result.closedCycle) {
     try {
       const { generateReportsForCycle } = await import('./monthlyReport/generateForCycle.js');
@@ -173,3 +224,5 @@ export async function openNextCycle({ userId = null, log = console } = {}) {
 
   return result;
 }
+
+export { DONE_STATUSES };

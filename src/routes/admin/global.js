@@ -35,13 +35,15 @@ export async function adminGlobalRoutes(app) {
       const limit = Math.min(100, Math.max(1, parseInt(request.query.limit) || 50));
       const skip = (page - 1) * limit;
 
+      const cycleWhere = await buildCycleWhere(request.query);
+
       const [projects, total] = await Promise.all([
         prisma.project.findMany({
           orderBy: { updatedAt: 'desc' },
           include: {
             client: { select: { id: true, agencyName: true } },
             leadPm: { select: { id: true, name: true } },
-            tasks: { select: { id: true, status: true } },
+            tasks: { where: cycleWhere, select: { id: true, status: true } },
           },
           skip,
           take: limit,

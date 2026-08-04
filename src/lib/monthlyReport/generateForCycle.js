@@ -196,11 +196,28 @@ export function shapeIssues({ resolvedList, openedList }) {
 /**
  * Gather client-wide facts for a reporting month (client-visible work only).
  */
-export async function gatherClientFacts({ clientId, agencyName, websiteUrl, month, year }) {
+export async function gatherClientFacts({ clientId, agencyName, websiteUrl, month, year, workCycleId = null }) {
   const from = new Date(Date.UTC(year, month - 1, 1));
   const to = new Date(Date.UTC(year, month, 1));
 
   const clientVisibleTask = { project: { clientId }, clientVisible: true };
+  // Prefer work-cycle membership so reports match the task board after clone-based history.
+  const taskCycleFilter = workCycleId
+    ? { workCycleId }
+    : {};
+  const completedInPeriod = workCycleId
+    ? { ...clientVisibleTask, ...taskCycleFilter, status: 'COMPLETED' }
+    : {
+        ...clientVisibleTask,
+        status: 'COMPLETED',
+        updatedAt: { gte: from, lt: to },
+      };
+  const createdInPeriod = workCycleId
+    ? { ...clientVisibleTask, ...taskCycleFilter }
+    : { ...clientVisibleTask, createdAt: { gte: from, lt: to } };
+  const openTasksWhere = workCycleId
+    ? { ...clientVisibleTask, ...taskCycleFilter, status: { in: ACTIVE_TASK_STATUSES } }
+    : { ...clientVisibleTask, status: { in: ACTIVE_TASK_STATUSES } };
 
   const [
     tasksCompleted,
@@ -218,24 +235,16 @@ export async function gatherClientFacts({ clientId, agencyName, websiteUrl, mont
     issuesOpenedList,
   ] = await Promise.all([
     prisma.task.count({
-      where: {
-        ...clientVisibleTask,
-        status: 'COMPLETED',
-        updatedAt: { gte: from, lt: to },
-      },
+      where: completedInPeriod,
     }),
     prisma.task.count({
-      where: { ...clientVisibleTask, createdAt: { gte: from, lt: to } },
+      where: createdInPeriod,
     }),
     prisma.task.count({
-      where: { ...clientVisibleTask, status: { in: ACTIVE_TASK_STATUSES } },
+      where: openTasksWhere,
     }),
     prisma.task.findMany({
-      where: {
-        ...clientVisibleTask,
-        status: 'COMPLETED',
-        updatedAt: { gte: from, lt: to },
-      },
+      where: completedInPeriod,
       select: {
         title: true,
         taskType: true,
@@ -251,7 +260,7 @@ export async function gatherClientFacts({ clientId, agencyName, websiteUrl, mont
         comments: {
           where: {
             parentId: null,
-            createdAt: { gte: from, lt: to },
+            ...(workCycleId ? {} : { createdAt: { gte: from, lt: to } }),
           },
           orderBy: { createdAt: 'desc' },
           take: 3,
@@ -284,8 +293,12 @@ export async function gatherClientFacts({ clientId, agencyName, websiteUrl, mont
     prisma.taskComment.count({
       where: {
         parentId: null,
-        createdAt: { gte: from, lt: to },
-        task: { project: { clientId }, clientVisible: true },
+        ...(workCycleId
+          ? { task: { project: { clientId }, clientVisible: true, workCycleId } }
+          : {
+              createdAt: { gte: from, lt: to },
+              task: { project: { clientId }, clientVisible: true },
+            }),
       },
     }),
     prisma.clientIssue.findMany({
@@ -569,6 +582,7 @@ export async function generateClientReport({
     websiteUrl: client.websiteUrl,
     month,
     year,
+    workCycleId,
   });
   const aiContent = await buildNarrative({ ...facts, clientId });
 

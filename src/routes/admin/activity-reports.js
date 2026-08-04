@@ -88,8 +88,8 @@ export async function adminActivityReportRoutes(app) {
       let facts;
       try {
         facts = projectId
-          ? await aggregateProject({ projectId, from: range.from, to: range.to })
-          : await aggregateAgency({ from: range.from, to: range.to });
+          ? await aggregateProject({ projectId, from: range.from, to: range.to, month })
+          : await aggregateAgency({ from: range.from, to: range.to, month });
       } catch (err) {
         if (err.message === 'Project not found') {
           return reply.status(404).send({ message: 'Project not found' });

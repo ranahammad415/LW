@@ -546,10 +546,17 @@ Return the id of the single most restrictive preset that still allows this task 
         include: {
           project: { include: { client: true } },
           assignees: { select: { id: true } },
+          workCycle: { select: { id: true, status: true, label: true } },
         },
       });
       if (!task) {
         return reply.status(404).send({ message: 'Task not found' });
+      }
+
+      if (task.workCycle?.status === 'CLOSED') {
+        return reply.status(403).send({
+          message: `Tasks from ${task.workCycle.label || 'a closed month'} are read-only`,
+        });
       }
 
       const isAssignee = task.assignees.some((a) => a.id === user.id);

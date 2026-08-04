@@ -16,6 +16,18 @@ export function monthToRange(month) {
   return { from, to };
 }
 
+async function resolveWorkCycleIdForMonth(monthStr) {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(monthStr || ''));
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const cycle = await prisma.workCycle.findUnique({
+    where: { month_year: { month, year } },
+    select: { id: true },
+  });
+  return cycle?.id ?? null;
+}
+
 function countBy(list, key) {
   const out = {};
   for (const row of list) {
@@ -27,8 +39,9 @@ function countBy(list, key) {
 
 /**
  * Aggregate raw activity for a single project over a date range.
+ * When a matching WorkCycle exists for the month, task stats use workCycleId.
  */
-export async function aggregateProject({ projectId, from, to }) {
+export async function aggregateProject({ projectId, from, to, month = null }) {
   const project = await prisma.project.findUnique({
     where: { id: projectId },
     include: {
@@ -37,6 +50,23 @@ export async function aggregateProject({ projectId, from, to }) {
     },
   });
   if (!project) throw new Error('Project not found');
+
+  const monthStr =
+    month ||
+    `${from.getUTCFullYear()}-${String(from.getUTCMonth() + 1).padStart(2, '0')}`;
+  const workCycleId = await resolveWorkCycleIdForMonth(monthStr);
+  const taskScope = workCycleId
+    ? { projectId, workCycleId }
+    : { projectId, OR: [{ createdAt: { gte: from, lt: to } }, { updatedAt: { gte: from, lt: to } }] };
+  const completedScope = workCycleId
+    ? { projectId, workCycleId, status: 'COMPLETED' }
+    : { projectId, status: 'COMPLETED', updatedAt: { gte: from, lt: to } };
+  const createdScope = workCycleId
+    ? { projectId, workCycleId }
+    : { projectId, createdAt: { gte: from, lt: to } };
+  const openScope = workCycleId
+    ? { projectId, workCycleId, status: { in: ACTIVE_TASK_STATUSES } }
+    : { projectId, status: { in: ACTIVE_TASK_STATUSES } };
 
   const [
     tasksCreated,
@@ -64,18 +94,18 @@ export async function aggregateProject({ projectId, from, to }) {
     recentCompletedTasksList,
     recentBlockersList,
   ] = await Promise.all([
-    prisma.task.count({ where: { projectId, createdAt: { gte: from, lt: to } } }),
-    prisma.task.count({ where: { projectId, status: 'COMPLETED', updatedAt: { gte: from, lt: to } } }),
-    prisma.task.count({ where: { projectId, status: { in: ACTIVE_TASK_STATUSES } } }),
+    prisma.task.count({ where: createdScope }),
+    prisma.task.count({ where: completedScope }),
+    prisma.task.count({ where: openScope }),
     prisma.task.count({
-      where: { projectId, status: { in: ACTIVE_TASK_STATUSES }, dueDate: { lt: to, not: null } },
+      where: { ...openScope, dueDate: { lt: to, not: null } },
     }),
     prisma.task.findMany({
-      where: { projectId, OR: [{ createdAt: { gte: from, lt: to } }, { updatedAt: { gte: from, lt: to } }] },
+      where: taskScope,
       select: { status: true, priority: true },
     }),
     prisma.task.findMany({
-      where: { projectId, status: 'COMPLETED', updatedAt: { gte: from, lt: to } },
+      where: completedScope,
       include: { assignees: { select: { id: true, name: true } } },
       take: 100,
     }),
@@ -121,7 +151,7 @@ export async function aggregateProject({ projectId, from, to }) {
       },
     }).catch(() => 0),
     prisma.task.findMany({
-      where: { projectId, status: 'COMPLETED', updatedAt: { gte: from, lt: to } },
+      where: completedScope,
       select: { id: true, title: true, updatedAt: true, priority: true },
       orderBy: { updatedAt: 'desc' },
       take: ROW_LIMIT,
@@ -217,8 +247,23 @@ export async function aggregateProject({ projectId, from, to }) {
 
 /**
  * Aggregate raw activity across the whole agency for the date range.
+ * When a matching WorkCycle exists, task stats prefer workCycleId.
  */
-export async function aggregateAgency({ from, to }) {
+export async function aggregateAgency({ from, to, month = null }) {
+  const monthStr =
+    month ||
+    `${from.getUTCFullYear()}-${String(from.getUTCMonth() + 1).padStart(2, '0')}`;
+  const workCycleId = await resolveWorkCycleIdForMonth(monthStr);
+  const createdWhere = workCycleId
+    ? { workCycleId }
+    : { createdAt: { gte: from, lt: to } };
+  const completedWhere = workCycleId
+    ? { workCycleId, status: 'COMPLETED' }
+    : { status: 'COMPLETED', updatedAt: { gte: from, lt: to } };
+  const openWhere = workCycleId
+    ? { workCycleId, status: { in: ACTIVE_TASK_STATUSES } }
+    : { status: { in: ACTIVE_TASK_STATUSES } };
+
   const [
     activeClients,
     totalProjects,
@@ -240,9 +285,9 @@ export async function aggregateAgency({ from, to }) {
     prisma.clientAccount.count({ where: { isActive: true } }),
     prisma.project.count(),
     prisma.project.findMany({ select: { status: true } }),
-    prisma.task.count({ where: { createdAt: { gte: from, lt: to } } }),
-    prisma.task.count({ where: { status: 'COMPLETED', updatedAt: { gte: from, lt: to } } }),
-    prisma.task.count({ where: { status: { in: ACTIVE_TASK_STATUSES } } }),
+    prisma.task.count({ where: createdWhere }),
+    prisma.task.count({ where: completedWhere }),
+    prisma.task.count({ where: openWhere }),
     prisma.clientIssue.count({ where: { createdAt: { gte: from, lt: to } } }),
     prisma.clientIssue.count({ where: { resolvedAt: { gte: from, lt: to, not: null }, status: 'RESOLVED' } }),
     prisma.dailyStandup.count({ where: { date: { gte: from, lt: to } } }),
@@ -253,23 +298,35 @@ export async function aggregateAgency({ from, to }) {
     prisma.notificationLog.count({ where: { createdAt: { gte: from, lt: to }, isRead: true } }),
     prisma.task.groupBy({
       by: ['projectId'],
-      where: { status: 'COMPLETED', updatedAt: { gte: from, lt: to } },
+      where: completedWhere,
       _count: { id: true },
       orderBy: { _count: { id: 'desc' } },
       take: ROW_LIMIT,
     }),
-    prisma.$queryRawUnsafe(
-      `SELECT u.id, u.name, COUNT(*) AS completed
-       FROM _TaskAssignees ta
-       JOIN task t ON t.id = ta.A
-       JOIN user u ON u.id = ta.B
-       WHERE t.status = 'COMPLETED' AND t.updatedAt >= ? AND t.updatedAt < ?
-       GROUP BY u.id, u.name
-       ORDER BY completed DESC
-       LIMIT ${ROW_LIMIT}`,
-      from,
-      to,
-    ).catch(() => []),
+    workCycleId
+      ? prisma.$queryRawUnsafe(
+          `SELECT u.id, u.name, COUNT(*) AS completed
+           FROM _TaskAssignees ta
+           JOIN task t ON t.id = ta.A
+           JOIN user u ON u.id = ta.B
+           WHERE t.status = 'COMPLETED' AND t.workCycleId = ?
+           GROUP BY u.id, u.name
+           ORDER BY completed DESC
+           LIMIT ${ROW_LIMIT}`,
+          workCycleId,
+        ).catch(() => [])
+      : prisma.$queryRawUnsafe(
+          `SELECT u.id, u.name, COUNT(*) AS completed
+           FROM _TaskAssignees ta
+           JOIN task t ON t.id = ta.A
+           JOIN user u ON u.id = ta.B
+           WHERE t.status = 'COMPLETED' AND t.updatedAt >= ? AND t.updatedAt < ?
+           GROUP BY u.id, u.name
+           ORDER BY completed DESC
+           LIMIT ${ROW_LIMIT}`,
+          from,
+          to,
+        ).catch(() => []),
   ]);
 
   // Resolve project names for top projects

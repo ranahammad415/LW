@@ -28,6 +28,7 @@ import { adminProjectHtmlReportRoutes } from './routes/admin/project-html-report
 import { adminGoogleExtractRoutes } from './routes/admin/googleExtract.js';
 import { adminAgencyImportRoutes } from './routes/admin/agencyImport.js';
 import { adminWorkCycleRoutes } from './routes/admin/workCycles.js';
+import { adminNextMonthRoutes } from './routes/admin/nextMonth.js';
 import { workCycleRoutes } from './routes/workCycles.js';
 import { projectRoutes } from './routes/projects.js';
 import { taskRoutes } from './routes/tasks.js';
@@ -176,6 +177,7 @@ app.register(adminProjectHtmlReportRoutes, { prefix: '/api/admin' });
 app.register(adminGoogleExtractRoutes, { prefix: '/api/admin' });
 app.register(adminAgencyImportRoutes, { prefix: '/api/admin' });
 app.register(adminWorkCycleRoutes, { prefix: '/api/admin' });
+app.register(adminNextMonthRoutes, { prefix: '/api/admin' });
 app.register(adminAiUsageRoutes, { prefix: '/api/admin' });
 app.register(adminIntegrationsRoutes, { prefix: '/api/admin' });
 app.register(adminAnalyticsRoutes, { prefix: '/api/admin' });
