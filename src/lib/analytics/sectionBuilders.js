@@ -921,3 +921,193 @@ export async function buildLlmView(clientIds, view, query) {
     data: view === 'referrers' ? { llmReferrers, kpis: data.kpis, run: runMeta } : data,
   };
 }
+
+function aggregateLeadRows(rows) {
+  const seriesMap = new Map();
+  const totals = {
+    phoneClicks: 0,
+    emailClicks: 0,
+    formSubmits: 0,
+    thankYouViews: 0,
+    leads: 0,
+  };
+  const ruleMap = new Map();
+  const pathMap = new Map();
+
+  for (const r of rows) {
+    const key = r.date.toISOString().slice(0, 10);
+    const acc = seriesMap.get(key) || {
+      date: key,
+      phoneClicks: 0,
+      emailClicks: 0,
+      formSubmits: 0,
+      thankYouViews: 0,
+      leads: 0,
+      intentClicks: 0,
+    };
+    acc.phoneClicks += r.phoneClicks;
+    acc.emailClicks += r.emailClicks;
+    acc.formSubmits += r.formSubmits;
+    acc.thankYouViews += r.thankYouViews;
+    acc.leads += r.leads;
+    acc.intentClicks += r.phoneClicks + r.emailClicks;
+    seriesMap.set(key, acc);
+
+    totals.phoneClicks += r.phoneClicks;
+    totals.emailClicks += r.emailClicks;
+    totals.formSubmits += r.formSubmits;
+    totals.thankYouViews += r.thankYouViews;
+    totals.leads += r.leads;
+
+    const bd = r.breakdowns && typeof r.breakdowns === 'object' ? r.breakdowns : null;
+    if (bd?.rules && Array.isArray(bd.rules)) {
+      for (const rule of bd.rules) {
+        const rk = `${rule.eventType || ''}::${rule.ruleId || rule.ruleLabel || 'default'}`;
+        const prev = ruleMap.get(rk) || {
+          ruleId: rule.ruleId || null,
+          ruleLabel: rule.ruleLabel || 'Untitled',
+          eventType: rule.eventType || 'unknown',
+          count: 0,
+        };
+        prev.count += Number(rule.count) || 0;
+        if (rule.ruleLabel) prev.ruleLabel = rule.ruleLabel;
+        ruleMap.set(rk, prev);
+      }
+    }
+    if (bd?.paths && Array.isArray(bd.paths)) {
+      for (const p of bd.paths) {
+        if (!p?.path) continue;
+        pathMap.set(p.path, (pathMap.get(p.path) || 0) + (Number(p.count) || 0));
+      }
+    }
+  }
+
+  const series = [...seriesMap.values()].sort((a, b) => a.date.localeCompare(b.date));
+  const rules = [...ruleMap.values()].sort((a, b) => b.count - a.count);
+  const paths = [...pathMap.entries()]
+    .map(([path, count]) => ({ path, count }))
+    .sort((a, b) => b.count - a.count);
+
+  return { series, totals, rules, paths };
+}
+
+/**
+ * First-party Bridge lead / intent analytics (form + thank-you = leads;
+ * phone/email clicks are separate intent metrics).
+ */
+export async function buildLeadsView(clientIds, view, query) {
+  const ctx = await resolveAnalyticsContext(clientIds, query);
+  if (ctx.error) return ctx.error;
+
+  const { start, end } = ctx.range;
+  const prevRange = ctx.prevRange;
+
+  const hasAny = ctx.projectIds.length
+    ? await prisma.siteLeadDailyMetric.count({
+        where: { projectId: { in: ctx.projectIds } },
+      })
+    : 0;
+
+  // Also treat linked WP as "linked" so empty states can guide setup.
+  const wpLinked = (await prisma.project.count({
+    where: { id: { in: ctx.projectIds }, wpApiKey: { not: null } },
+  })) > 0;
+
+  if (!wpLinked && hasAny === 0) {
+    return empty(
+      false,
+      'Connect WordPress via Agency OS Bridge and enable Lead Tracking in plugin settings',
+      ctx.cycle,
+      ctx.source
+    );
+  }
+
+  const [rows, prevRows] = await Promise.all([
+    prisma.siteLeadDailyMetric.findMany({
+      where: { projectId: { in: ctx.projectIds }, date: { gte: start, lte: end } },
+      orderBy: { date: 'asc' },
+    }),
+    prevRange
+      ? prisma.siteLeadDailyMetric.findMany({
+          where: {
+            projectId: { in: ctx.projectIds },
+            date: { gte: prevRange.start, lte: prevRange.end },
+          },
+          orderBy: { date: 'asc' },
+        })
+      : Promise.resolve([]),
+  ]);
+
+  const curr = aggregateLeadRows(rows);
+  const prev = aggregateLeadRows(prevRows);
+  const hasPrev = prevRows.length > 0;
+  const series = attachPrevSeries(curr.series, prev.series, [
+    'leads',
+    'formSubmits',
+    'thankYouViews',
+    'phoneClicks',
+    'emailClicks',
+    'intentClicks',
+  ]);
+
+  const byType = [
+    { type: 'form_submit', label: 'Form submits', count: curr.totals.formSubmits },
+    { type: 'thank_you_page', label: 'Thank-you pages', count: curr.totals.thankYouViews },
+    { type: 'phone_click', label: 'Phone clicks', count: curr.totals.phoneClicks },
+    { type: 'email_click', label: 'Email clicks', count: curr.totals.emailClicks },
+  ];
+
+  const leadMix = [
+    { name: 'Form submits', value: curr.totals.formSubmits },
+    { name: 'Thank-you pages', value: curr.totals.thankYouViews },
+  ].filter((x) => x.value > 0);
+
+  const data = {
+    kpis: {
+      leads: curr.totals.leads,
+      formSubmits: curr.totals.formSubmits,
+      thankYouViews: curr.totals.thankYouViews,
+      phoneClicks: curr.totals.phoneClicks,
+      emailClicks: curr.totals.emailClicks,
+      intentClicks: curr.totals.phoneClicks + curr.totals.emailClicks,
+      leadsDelta: hasPrev ? pctDelta(curr.totals.leads, prev.totals.leads) : null,
+      formSubmitsDelta: hasPrev ? pctDelta(curr.totals.formSubmits, prev.totals.formSubmits) : null,
+      thankYouViewsDelta: hasPrev
+        ? pctDelta(curr.totals.thankYouViews, prev.totals.thankYouViews)
+        : null,
+      phoneClicksDelta: hasPrev ? pctDelta(curr.totals.phoneClicks, prev.totals.phoneClicks) : null,
+      emailClicksDelta: hasPrev ? pctDelta(curr.totals.emailClicks, prev.totals.emailClicks) : null,
+    },
+    series,
+    leadMix,
+    byType,
+    rules: curr.rules,
+    paths: curr.paths,
+    emptyHint:
+      rows.length === 0
+        ? 'No lead events in this period. Enable Lead Tracking in the WordPress plugin and configure forms, thank-you pages, or phone/email buttons.'
+        : null,
+  };
+
+  const viewData =
+    view === 'breakdown'
+      ? {
+          kpis: data.kpis,
+          series,
+          byType,
+          rules: curr.rules,
+          paths: curr.paths,
+          emptyHint: data.emptyHint,
+        }
+      : data;
+
+  return {
+    linked: true,
+    emptyReason: null,
+    cycle: metaCycle(ctx),
+    range: metaRange(ctx),
+    source: ctx.source,
+    data: viewData,
+  };
+}
+

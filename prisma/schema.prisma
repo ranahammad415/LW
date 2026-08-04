@@ -475,6 +475,8 @@ model Project {
   gmbDailyMetrics     GmbDailyMetric[]
   gmbReviews          GmbReview[]
   aiVisibilityRuns    AiVisibilityRun[]
+  siteLeadEvents      SiteLeadEvent[]
+  siteLeadDailyMetrics SiteLeadDailyMetric[]
 
   @@map("project")
 }
@@ -1256,6 +1258,48 @@ model AiVisibilityDfsSnapshot {
   run AiVisibilityRun @relation(fields: [runId], references: [id], onDelete: Cascade)
 
   @@map("aivisibilitydfssnapshot")
+}
+
+/// First-party lead/intent events from Agency OS Bridge (no PII).
+model SiteLeadEvent {
+  id         String   @id @default(uuid())
+  projectId  String
+  eventType  String   @db.VarChar(40) // phone_click | email_click | form_submit | thank_you_page
+  ruleId     String?  @db.VarChar(80)
+  ruleLabel  String?  @db.VarChar(255)
+  pageUrl    String?  @db.VarChar(1000)
+  pagePath   String?  @db.VarChar(500)
+  visitorId  String?  @db.VarChar(80)
+  occurredAt DateTime @default(now())
+  meta       Json?
+  createdAt  DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, occurredAt])
+  @@index([projectId, eventType, occurredAt])
+  @@map("siteleadevent")
+}
+
+/// Daily rollup of Bridge lead/intent events for analytics charts.
+model SiteLeadDailyMetric {
+  id             String   @id @default(uuid())
+  projectId      String
+  date           DateTime @db.Date
+  phoneClicks    Int      @default(0)
+  emailClicks    Int      @default(0)
+  formSubmits    Int      @default(0)
+  thankYouViews  Int      @default(0)
+  leads          Int      @default(0) // formSubmits + thankYouViews
+  /// Per-rule and per-path counts: { rules: [{ruleId,ruleLabel,eventType,count}], paths: [{path,count}] }
+  breakdowns     Json?
+  createdAt      DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, date])
+  @@index([projectId, date])
+  @@map("siteleaddailymetric")
 }
 
 model ClientROIConfig {

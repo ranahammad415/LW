@@ -8,6 +8,7 @@ import {
   buildGmbView,
   buildSeoView,
   buildLlmView,
+  buildLeadsView,
 } from '../../lib/analytics/sectionBuilders.js';
 import { generateAiHtmlReport } from '../../lib/analytics/aiHtmlReport/index.js';
 
@@ -199,6 +200,12 @@ export async function clientAnalyticsRoutes(app) {
     const clientIds = request.clientAccountIds;
     if (!clientIds?.length) return reply.send({ linked: false, data: null, source: 'none' });
     return sendSection(reply, await buildLlmView(clientIds, request.params.view, request.query));
+  });
+
+  app.get('/analytics/leads/:view', { onRequest: [app.verifyJwt, app.requireClient] }, async (request, reply) => {
+    const clientIds = request.clientAccountIds;
+    if (!clientIds?.length) return reply.send({ linked: false, data: null, source: 'none' });
+    return sendSection(reply, await buildLeadsView(clientIds, request.params.view, request.query));
   });
 
   /**

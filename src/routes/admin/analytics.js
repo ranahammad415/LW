@@ -8,6 +8,7 @@ import {
   buildGmbView,
   buildSeoView,
   buildLlmView,
+  buildLeadsView,
 } from '../../lib/analytics/sectionBuilders.js';
 import { generateAiHtmlReport } from '../../lib/analytics/aiHtmlReport/index.js';
 import {
@@ -141,6 +142,16 @@ export async function adminAnalyticsRoutes(app) {
       const { clientId, view } = request.params;
       if (!(await assertClientExists(clientId, reply))) return;
       return sendSection(reply, await buildLlmView([clientId], view, request.query));
+    }
+  );
+
+  app.get(
+    '/analytics/:clientId/leads/:view',
+    { onRequest: [app.verifyJwt, requireOwner] },
+    async (request, reply) => {
+      const { clientId, view } = request.params;
+      if (!(await assertClientExists(clientId, reply))) return;
+      return sendSection(reply, await buildLeadsView([clientId], view, request.query));
     }
   );
 
