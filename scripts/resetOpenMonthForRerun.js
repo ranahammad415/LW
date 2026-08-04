@@ -66,12 +66,14 @@ Refusing to run without --confirm (or use --dry-run first).
     process.exit(1);
   }
 
-  const [taskCount, reportCount, snapshotCount, julyTaskCount] = await Promise.all([
+  const [taskCount, snapshotCount, julyTaskCount] = await Promise.all([
     prisma.task.count({ where: { workCycleId: targetCycle.id } }),
-    prisma.monthlyReport.count({ where: { workCycleId: targetCycle.id } }),
     prisma.workCycleAnalyticsSnapshot.count({ where: { workCycleId: targetCycle.id } }),
     prisma.task.count({ where: { workCycleId: keepCycle.id } }),
   ]);
+
+  // Monthly reports / PDFs are PM-owned — never auto-delete them during reset.
+  const reportCount = await prisma.monthlyReport.count({ where: { workCycleId: targetCycle.id } });
 
   console.log(
     JSON.stringify(
@@ -86,8 +88,11 @@ Refusing to run without --confirm (or use --dry-run first).
             status: targetCycle.status,
           },
           tasks: taskCount,
-          monthlyReports: reportCount,
           analyticsSnapshots: snapshotCount,
+        },
+        willKeep: {
+          monthlyReports: reportCount,
+          note: 'Monthly reports and PDFs are preserved (PM-owned). workCycleId will be cleared when the cycle row is deleted.',
         },
         willKeepAndReopen: {
           cycle: {
@@ -137,7 +142,11 @@ Refusing to run without --confirm (or use --dry-run first).
       await tx.$executeRawUnsafe(`DELETE FROM \`task\` WHERE \`workCycleId\` = ?`, targetCycle.id);
     }
 
-    await tx.monthlyReport.deleteMany({ where: { workCycleId: targetCycle.id } });
+    // Detach monthly reports from the cycle before deleting it (preserve reports/PDFs).
+    await tx.monthlyReport.updateMany({
+      where: { workCycleId: targetCycle.id },
+      data: { workCycleId: null },
+    });
     // snapshots cascade on workcycle delete, but delete explicitly for clarity
     await tx.workCycleAnalyticsSnapshot.deleteMany({ where: { workCycleId: targetCycle.id } });
 

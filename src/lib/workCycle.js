@@ -138,7 +138,8 @@ export async function previewOpenNext() {
     }
   }
 
-  const activeClientCount = await prisma.clientAccount.count({ where: { isActive: true } });
+  // Reports are created only by PMs — Start next month never auto-generates them.
+  const reportsToGenerate = 0;
 
   return {
     currentCycle: current
@@ -146,7 +147,7 @@ export async function previewOpenNext() {
       : null,
     nextCycle: { month: target.month, year: target.year, label: monthLabel(target.month, target.year) },
     carryOverCount,
-    reportsToGenerate: current ? activeClientCount : 0,
+    reportsToGenerate,
   };
 }
 
@@ -206,14 +207,9 @@ export async function openNextCycle({ userId = null, log = console } = {}) {
   });
 
   // Post-close automation for the month that just ended (best-effort).
+  // Monthly reports are PM-owned: never auto-create or overwrite drafts here.
   if (result.closedCycle) {
-    try {
-      const { generateReportsForCycle } = await import('./monthlyReport/generateForCycle.js');
-      const summary = await generateReportsForCycle(result.closedCycle, { log });
-      result.reports = summary;
-    } catch (err) {
-      log?.error?.({ err }, 'Report generation for closed cycle failed');
-    }
+    result.reports = null;
     try {
       const { freezeAnalyticsForCycle } = await import('./analytics/freezeSnapshot.js');
       const snap = await freezeAnalyticsForCycle(result.closedCycle, { log });

@@ -40,6 +40,8 @@ const generateBodySchema = z.object({
   clientId: z.string().uuid(),
   month: z.number().int().min(1).max(12),
   year: z.number().int().min(2020).max(2100),
+  /** When true, replace an existing non-delivered draft. Default preserves drafts. */
+  force: z.boolean().optional().default(false),
 });
 
 /** Reply before proxies drop long AI calls; generation keeps running in-process. */
@@ -312,6 +314,69 @@ export async function pmReportRoutes(app) {
     },
   );
 
+  // Save draft / update content without delivering (works for DRAFT and DELIVERED).
+  app.patch(
+    '/reports/:id',
+    {
+      onRequest: [app.verifyJwt, app.requirePM],
+      schema: {
+        params: {
+          type: 'object',
+          properties: { id: { type: 'string', format: 'uuid' } },
+          required: ['id'],
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+      const body = request.body || {};
+      const user = request.user;
+
+      const report = await prisma.monthlyReport.findUnique({
+        where: { id },
+        include: {
+          client: {
+            select: {
+              agencyName: true,
+              websiteUrl: true,
+              leadPmId: true,
+              secondaryPmId: true,
+            },
+          },
+        },
+      });
+      if (!report) return reply.status(404).send({ message: 'Report not found' });
+      if (!(await assertPmClientAccess(user, report.client))) {
+        return reply.status(403).send({ message: 'Forbidden' });
+      }
+
+      if (!body.aiContent || typeof body.aiContent !== 'object') {
+        return reply.status(400).send({ message: 'aiContent is required' });
+      }
+      const parsed = formalAiContentSchema.safeParse(body.aiContent);
+      if (!parsed.success) {
+        return reply.status(400).send({ message: 'Invalid aiContent' });
+      }
+
+      const nextAi = { ...(report.aiContent || {}), ...parsed.data };
+      const updated = await prisma.monthlyReport.update({
+        where: { id },
+        data: { aiContent: nextAi },
+      });
+
+      const assets = await getClientReportAssets(report.clientId);
+      return reply.send(
+        serializeReport(updated, {
+          client: {
+            agencyName: report.client.agencyName,
+            websiteUrl: report.client.websiteUrl,
+          },
+          reportAssets: assets,
+        }),
+      );
+    },
+  );
+
   app.delete(
     '/reports/:id',
     {
@@ -364,6 +429,7 @@ export async function pmReportRoutes(app) {
             clientId: { type: 'string', format: 'uuid' },
             month: { type: 'integer' },
             year: { type: 'integer' },
+            force: { type: 'boolean' },
           },
           required: ['clientId', 'month', 'year'],
         },
@@ -377,7 +443,7 @@ export async function pmReportRoutes(app) {
           errors: parsed.error.flatten().fieldErrors,
         });
       }
-      const { clientId, month, year } = parsed.data;
+      const { clientId, month, year, force } = parsed.data;
       const user = request.user;
 
       const client = await prisma.clientAccount.findUnique({
@@ -403,12 +469,13 @@ export async function pmReportRoutes(app) {
         month,
         year,
         workCycleId: cycle?.id ?? null,
+        force,
         log: request.log,
       });
 
       const outcome = await Promise.race([
         reportPromise.then(
-          (report) => ({ kind: 'done', report }),
+          (result) => ({ kind: 'done', result }),
           (err) => ({ kind: 'error', err }),
         ),
         new Promise((resolve) =>
@@ -418,9 +485,9 @@ export async function pmReportRoutes(app) {
 
       if (outcome.kind === 'pending') {
         reportPromise
-          .then((report) => {
+          .then((result) => {
             request.log.info(
-              { reportId: report?.id, clientId, month, year },
+              { reportId: result?.report?.id, action: result?.action, clientId, month, year },
               'Report generate finished after soft timeout',
             );
           })
@@ -441,12 +508,31 @@ export async function pmReportRoutes(app) {
         return reply.status(500).send({ message: 'Failed to generate report draft' });
       }
 
-      if (!outcome.report) {
+      if (!outcome.result?.report) {
         return reply.status(404).send({ message: 'Client not found' });
       }
 
+      const { report, action } = outcome.result;
+
+      if (action === 'delivered_unchanged') {
+        return reply.status(409).send({
+          code: 'ALREADY_DELIVERED',
+          message: 'This report was already delivered and cannot be regenerated.',
+          reportId: report.id,
+        });
+      }
+
+      if (action === 'preserved') {
+        return reply.status(409).send({
+          code: 'DRAFT_EXISTS',
+          message:
+            'A draft already exists for this client and month. Pass force: true to regenerate and replace it.',
+          reportId: report.id,
+        });
+      }
+
       return reply.status(201).send(
-        serializeReport(outcome.report, { client: { agencyName: client.agencyName } }),
+        serializeReport(report, { client: { agencyName: client.agencyName } }),
       );
     },
   );
@@ -559,9 +645,13 @@ export async function pmReportRoutes(app) {
       }
 
       if (request.body?.aiContent && typeof request.body.aiContent === 'object') {
+        const parsed = formalAiContentSchema.safeParse(request.body.aiContent);
+        if (!parsed.success) {
+          return reply.status(400).send({ message: 'Invalid aiContent' });
+        }
         await prisma.monthlyReport.update({
           where: { id },
-          data: { aiContent: { ...(report.aiContent || {}), ...request.body.aiContent } },
+          data: { aiContent: { ...(report.aiContent || {}), ...parsed.data } },
         });
       }
 
@@ -573,6 +663,72 @@ export async function pmReportRoutes(app) {
           message: err.message || 'PDF generation failed',
         });
       }
+    },
+  );
+
+  // PM-only: remove stored PDF without deleting the report content.
+  app.delete(
+    '/reports/:id/pdf',
+    {
+      onRequest: [app.verifyJwt, app.requirePM],
+      schema: {
+        params: {
+          type: 'object',
+          properties: { id: { type: 'string', format: 'uuid' } },
+          required: ['id'],
+        },
+      },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+      const user = request.user;
+      const report = await prisma.monthlyReport.findUnique({
+        where: { id },
+        include: {
+          client: {
+            select: {
+              agencyName: true,
+              websiteUrl: true,
+              leadPmId: true,
+              secondaryPmId: true,
+            },
+          },
+        },
+      });
+      if (!report) return reply.status(404).send({ message: 'Report not found' });
+      if (!(await assertPmClientAccess(user, report.client))) {
+        return reply.status(403).send({ message: 'Forbidden' });
+      }
+      if (!report.pdfStoredPath) {
+        return reply.status(404).send({ message: 'No PDF to remove' });
+      }
+
+      try {
+        deleteMonthlyReportPdf(report.pdfStoredPath);
+      } catch (err) {
+        request.log.warn({ err, reportId: id }, 'Failed to delete report PDF file');
+      }
+
+      const updated = await prisma.monthlyReport.update({
+        where: { id },
+        data: {
+          pdfStoredPath: null,
+          pdfFileName: null,
+          pdfFileSize: null,
+          pdfGeneratedAt: null,
+        },
+      });
+
+      const assets = await getClientReportAssets(report.clientId);
+      return reply.send(
+        serializeReport(updated, {
+          client: {
+            agencyName: report.client.agencyName,
+            websiteUrl: report.client.websiteUrl,
+          },
+          reportAssets: assets,
+        }),
+      );
     },
   );
 

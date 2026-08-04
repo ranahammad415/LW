@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   updateMany: vi.fn(),
   $transaction: vi.fn(),
   clientCount: vi.fn(),
+  clientFindMany: vi.fn(),
+  monthlyReportFindMany: vi.fn(),
   cloneMissing: vi.fn(),
 }));
 
@@ -26,6 +28,10 @@ vi.mock('../../src/lib/prisma.js', () => ({
     },
     clientAccount: {
       count: mocks.clientCount,
+      findMany: mocks.clientFindMany,
+    },
+    monthlyReport: {
+      findMany: mocks.monthlyReportFindMany,
     },
     $transaction: mocks.$transaction,
   },
@@ -100,11 +106,13 @@ describe('previewOpenNext', () => {
     mocks.findMany
       .mockResolvedValueOnce([{ id: 't1' }, { id: 't2' }]) // recurring roots
       .mockResolvedValueOnce([{ clonedFromTaskId: 't1' }]); // already cloned
-    mocks.clientCount.mockResolvedValue(3);
+    mocks.clientFindMany.mockResolvedValue([{ id: 'a' }, { id: 'b' }, { id: 'c' }]);
+    // Two clients already have drafts — only one report still needed
+    mocks.monthlyReportFindMany.mockResolvedValue([{ clientId: 'a' }, { clientId: 'b' }]);
 
     const preview = await previewOpenNext();
     expect(preview.carryOverCount).toBe(1);
-    expect(preview.reportsToGenerate).toBe(3);
+    expect(preview.reportsToGenerate).toBe(0);
     expect(preview.nextCycle.month).toBe(8);
     expect(mocks.findMany.mock.calls[0][0].where.status).toEqual({ not: 'CANCELLED' });
   });

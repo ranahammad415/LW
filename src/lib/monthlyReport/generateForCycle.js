@@ -562,12 +562,19 @@ async function buildNarrative(facts) {
 
 /**
  * Generate (or regenerate) one client's monthly report for a given month/year.
+ *
+ * By default, existing non-DELIVERED drafts are preserved (not overwritten).
+ * Pass `force: true` to replace draft content (PM explicit regenerate).
+ * DELIVERED reports are never overwritten.
+ *
+ * @returns {{ report: object, action: 'created'|'preserved'|'regenerated'|'delivered_unchanged' } | null}
  */
 export async function generateClientReport({
   clientId,
   month,
   year,
   workCycleId = null,
+  force = false,
   log = console,
 }) {
   const client = await prisma.clientAccount.findUnique({
@@ -575,6 +582,19 @@ export async function generateClientReport({
     select: { id: true, agencyName: true, websiteUrl: true },
   });
   if (!client) return null;
+
+  const existing = await prisma.monthlyReport.findUnique({
+    where: { clientId_month_year: { clientId, month, year } },
+  });
+
+  if (existing?.status === 'DELIVERED') {
+    return { report: existing, action: 'delivered_unchanged' };
+  }
+
+  // Preserve PM-edited / previously generated drafts unless force regenerate.
+  if (existing && !force) {
+    return { report: existing, action: 'preserved' };
+  }
 
   const facts = await gatherClientFacts({
     clientId,
@@ -586,25 +606,24 @@ export async function generateClientReport({
   });
   const aiContent = await buildNarrative({ ...facts, clientId });
 
-  const existing = await prisma.monthlyReport.findUnique({
-    where: { clientId_month_year: { clientId, month, year } },
-  });
-
   if (existing) {
-    if (existing.status === 'DELIVERED') return existing;
-    return prisma.monthlyReport.update({
+    const report = await prisma.monthlyReport.update({
       where: { id: existing.id },
       data: { aiContent, status: 'DRAFT', workCycleId: workCycleId ?? existing.workCycleId },
     });
+    return { report, action: 'regenerated' };
   }
 
-  return prisma.monthlyReport.create({
+  const report = await prisma.monthlyReport.create({
     data: { clientId, month, year, status: 'DRAFT', aiContent, workCycleId },
   });
+  return { report, action: 'created' };
 }
 
 /**
  * Auto-generate DRAFT reports for every active client for a just-closed cycle.
+ * Kept for manual/ops use; Start next month does NOT call this — reports are PM-owned.
+ * Skips clients that already have a report for that month (preserves drafts).
  */
 export async function generateReportsForCycle(cycle, { log = console } = {}) {
   const { id: workCycleId, month, year } = cycle;
@@ -614,18 +633,28 @@ export async function generateReportsForCycle(cycle, { log = console } = {}) {
   });
 
   const results = [];
+  let created = 0;
+  let preserved = 0;
   for (const client of clients) {
     try {
-      const report = await generateClientReport({
+      const outcome = await generateClientReport({
         clientId: client.id,
         month,
         year,
         workCycleId,
+        force: false,
         log,
       });
-      if (!report) continue;
-      results.push({ clientId: client.id, reportId: report.id });
+      if (!outcome?.report) continue;
+      const { report, action } = outcome;
+      results.push({ clientId: client.id, reportId: report.id, action });
 
+      if (action === 'preserved' || action === 'delivered_unchanged') {
+        preserved += 1;
+        continue;
+      }
+
+      created += 1;
       const pmIds = [...new Set([client.leadPmId, client.secondaryPmId].filter(Boolean))];
       for (const pmId of pmIds) {
         await prisma.systemAlert
@@ -644,6 +673,6 @@ export async function generateReportsForCycle(cycle, { log = console } = {}) {
     }
   }
 
-  log?.info?.({ generated: results.length }, 'Cycle report drafts generated');
-  return { generated: results.length, results };
+  log?.info?.({ generated: created, preserved, total: results.length }, 'Cycle report drafts generated');
+  return { generated: created, preserved, results };
 }
