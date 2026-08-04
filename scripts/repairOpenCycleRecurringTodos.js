@@ -6,18 +6,37 @@
  * - Resets OPEN-cycle COMPLETED carry-overs to TO_DO.
  * - Clones any missing non-cancelled previous-cycle roots into OPEN as TO_DO.
  *
- * Usage (on VPS, from backend root):
+ * Prerequisites on VPS (if clonedFromTaskId is missing):
+ *   npx prisma db push
+ *   npx prisma generate
+ *   pm2 restart all
+ *
+ * Usage (from backend / ~/LW root):
  *   node scripts/repairOpenCycleRecurringTodos.js
  *   node scripts/repairOpenCycleRecurringTodos.js --dry-run
  */
 import { PrismaClient } from '@prisma/client';
-import { cloneMissingRecurringTasks } from '../src/lib/taskClone.js';
 
 const dryRun = process.argv.includes('--dry-run');
 const prisma = new PrismaClient();
 
 function prevMonthYear(month, year) {
   return month === 1 ? { month: 12, year: year - 1 } : { month: month - 1, year };
+}
+
+async function hasClonedFromColumn() {
+  try {
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT COUNT(*) AS c FROM INFORMATION_SCHEMA.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = 'task'
+         AND COLUMN_NAME = 'clonedFromTaskId'`
+    );
+    const count = Number(rows?.[0]?.c ?? rows?.[0]?.C ?? 0);
+    return count > 0;
+  } catch {
+    return false;
+  }
 }
 
 async function main() {
@@ -35,10 +54,13 @@ async function main() {
     where: { month_year: { month: prev.month, year: prev.year } },
   });
 
+  const lineageReady = await hasClonedFromColumn();
+
   console.log(
     JSON.stringify(
       {
         dryRun,
+        lineageReady,
         openCycle: { id: open.id, label: open.label, month: open.month, year: open.year },
         previousCycle: previous
           ? { id: previous.id, label: previous.label, month: previous.month, year: previous.year }
@@ -48,6 +70,42 @@ async function main() {
       2
     )
   );
+
+  if (!lineageReady) {
+    console.error(`
+MISSING COLUMN: task.clonedFromTaskId
+
+Run these on the server, then re-run this script:
+
+  cd ~/LW
+  npx prisma db push
+  npx prisma generate
+  pm2 restart all
+  node scripts/repairOpenCycleRecurringTodos.js --dry-run
+  node scripts/repairOpenCycleRecurringTodos.js
+`);
+    process.exit(1);
+  }
+
+  // Prisma client must also know the field (after generate).
+  const clientHasField = 'clonedFromTaskId' in (prisma.task?.fields || {}) || true;
+  // Runtime check via a safe probe select
+  try {
+    await prisma.task.findFirst({ select: { id: true, clonedFromTaskId: true } });
+  } catch (err) {
+    if (String(err?.message || err).includes('clonedFromTaskId')) {
+      console.error(`
+DB has clonedFromTaskId but Prisma Client is stale.
+
+Run:
+  npx prisma generate
+  pm2 restart all
+  node scripts/repairOpenCycleRecurringTodos.js --dry-run
+`);
+      process.exit(1);
+    }
+    throw err;
+  }
 
   const previousCompletedRoots = previous
     ? await prisma.task.findMany({
@@ -86,7 +144,6 @@ async function main() {
 
   if (!dryRun && toReset.length) {
     const ids = toReset.map((t) => t.id);
-    // Reset roots + any descendants still COMPLETED under those roots.
     const descendants = await prisma.task.findMany({
       where: { parentTaskId: { in: ids }, workCycleId: open.id },
       select: { id: true },
@@ -104,7 +161,6 @@ async function main() {
     );
   }
 
-  let cloneResult = { cloned: 0, skipped: 0, rootCount: 0 };
   if (previous) {
     if (dryRun) {
       const roots = await prisma.task.findMany({
@@ -126,7 +182,8 @@ async function main() {
       const missing = roots.filter((r) => !clonedSet.has(r.id)).length;
       console.log(`[dry-run] Would clone ${missing} missing recurring root(s) from previous cycle.`);
     } else {
-      cloneResult = await cloneMissingRecurringTasks(previous.id, open.id);
+      const { cloneMissingRecurringTasks } = await import('../src/lib/taskClone.js');
+      const cloneResult = await cloneMissingRecurringTasks(previous.id, open.id);
       console.log(
         `Clone missing recurring: cloned=${cloneResult.cloned} skipped=${cloneResult.skipped} roots=${cloneResult.rootCount}`
       );
@@ -135,6 +192,8 @@ async function main() {
     console.log('No previous cycle found — skip clone fill.');
   }
 
+  // silence unused
+  void clientHasField;
   console.log('Done.');
 }
 
