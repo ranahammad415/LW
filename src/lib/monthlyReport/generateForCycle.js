@@ -60,13 +60,14 @@ Hard rules:
 - Paraphrase task comments and issue notes — never paste raw internal chat.
 - Explain any technical term in plain English on first use, or avoid the term.
 - Do NOT dump raw internal score names (e.g. "Master Visibility Score", "Growth Index", "Competitor Threat", "AI Search Readiness") unless you immediately add one plain-English line about what it means for the business. Prefer everyday wording.
-- Prefer 2–6 denser sections over many thin ones. Merge related work when evidence is light.
+- Prefer 2–6 denser sections over many thin ones. Merge related workstreams when evidence is light — but NEVER collapse a main task's completed subtasks into one vague summary line.
+- When a task in facts.tasks.recentCompleted includes subTasks, create a block (or bullets) for that main task and list EVERY completed subtask: use the subtask title plus paraphrased detail from its description / deliverables / commentSnippets. Do not invent work; do not omit subtasks that appear in facts.
 - Section titles must be customer-friendly outcome titles (ALL CAPS is OK), NOT raw internal taskType codes when a clearer title exists.
 - Every section needs VALUE DELIVERED: 1–2 sentences of business benefit.
 - Bullets = concrete outcomes (what changed + why it helps). Not ticket IDs or jargon-only lines like "301 redirects" without explanation.
 - Use facts.issues / facts.collaboration / facts.clientInputs when present for responsiveness / support narrative.
 - preparedBy should be "Local Waves" unless facts.preparedBy is set.
-- Only cite URLs that appear in facts (task descriptions or deliverable notes/fileUrl).
+- Only cite URLs that appear in facts (task descriptions, subtask descriptions, or deliverable notes/fileUrl).
 
 Return ONLY valid JSON with exactly this shape:
 {
@@ -136,22 +137,38 @@ export function plainLabelForKpi(metricType, label) {
   return byLabel || key || 'Search performance indicator';
 }
 
+function shapeCommentSnippets(comments, { from, to } = {}) {
+  return (comments || [])
+    .filter((c) => {
+      if (c.parentId) return false;
+      if (!from || !to || !c.createdAt) return true;
+      const ts = new Date(c.createdAt).getTime();
+      return ts >= from.getTime() && ts < to.getTime();
+    })
+    .slice(0, 3)
+    .map((c) => snippet(c.content, 180))
+    .filter(Boolean);
+}
+
+function shapeDeliverables(deliverables) {
+  return (deliverables || []).map((d) => ({
+    fileUrl: d.fileUrl,
+    notes: snippet(d.notes, 160),
+  }));
+}
+
 /**
- * Shape completed tasks + comments into the facts.tasks.recentCompleted list.
+ * Shape completed tasks + nested subtasks into facts.tasks.recentCompleted.
  * Exported for unit tests.
  */
 export function shapeCompletedTasks(completedList, { from, to } = {}) {
   return (completedList || []).map((t) => {
-    const comments = (t.comments || [])
-      .filter((c) => {
-        if (c.parentId) return false;
-        if (!from || !to || !c.createdAt) return true;
-        const ts = new Date(c.createdAt).getTime();
-        return ts >= from.getTime() && ts < to.getTime();
-      })
-      .slice(0, 3)
-      .map((c) => snippet(c.content, 180))
-      .filter(Boolean);
+    const subTasks = (t.subTasks || []).map((st) => ({
+      title: st.title,
+      description: snippet(st.description, 500),
+      commentSnippets: shapeCommentSnippets(st.comments, { from, to }),
+      deliverables: shapeDeliverables(st.deliverables),
+    }));
 
     return {
       title: t.title,
@@ -160,11 +177,9 @@ export function shapeCompletedTasks(completedList, { from, to } = {}) {
       description: snippet(t.description, 320),
       clientRequestNote: snippet(t.clientRequestNote, 200) || null,
       clientProvidedResponse: snippet(t.clientProvidedResponse, 200) || null,
-      commentSnippets: comments,
-      deliverables: (t.deliverables || []).map((d) => ({
-        fileUrl: d.fileUrl,
-        notes: snippet(d.notes, 160),
-      })),
+      commentSnippets: shapeCommentSnippets(t.comments, { from, to }),
+      deliverables: shapeDeliverables(t.deliverables),
+      subTasks,
     };
   });
 }
@@ -244,7 +259,8 @@ export async function gatherClientFacts({ clientId, agencyName, websiteUrl, mont
       where: openTasksWhere,
     }),
     prisma.task.findMany({
-      where: completedInPeriod,
+      // Root tasks only — nest completed subtasks so the report keeps hierarchy.
+      where: { ...completedInPeriod, parentTaskId: null },
       select: {
         title: true,
         taskType: true,
@@ -265,6 +281,33 @@ export async function gatherClientFacts({ clientId, agencyName, websiteUrl, mont
           orderBy: { createdAt: 'desc' },
           take: 3,
           select: { content: true, createdAt: true, parentId: true },
+        },
+        subTasks: {
+          where: {
+            status: 'COMPLETED',
+            clientVisible: true,
+            ...(workCycleId ? { workCycleId } : {}),
+          },
+          select: {
+            title: true,
+            description: true,
+            deliverables: {
+              orderBy: { createdAt: 'desc' },
+              take: 3,
+              select: { fileUrl: true, notes: true },
+            },
+            comments: {
+              where: {
+                parentId: null,
+                ...(workCycleId ? {} : { createdAt: { gte: from, lt: to } }),
+              },
+              orderBy: { createdAt: 'desc' },
+              take: 3,
+              select: { content: true, createdAt: true, parentId: true },
+            },
+          },
+          orderBy: { updatedAt: 'desc' },
+          take: 30,
         },
       },
       orderBy: { updatedAt: 'desc' },
@@ -390,6 +433,17 @@ export async function gatherClientFacts({ clientId, agencyName, websiteUrl, mont
   };
 }
 
+function bulletForTaskOrSubtask(item) {
+  const urls = (item.deliverables || [])
+    .map((d) => d.fileUrl)
+    .filter(Boolean)
+    .slice(0, 2);
+  const urlSuffix = urls.length ? ` — ${urls.join(', ')}` : '';
+  const detail = snippet(item.description, 220);
+  if (detail) return `${item.title}: ${detail}${urlSuffix}`;
+  return `${item.title}${urlSuffix}`;
+}
+
 export function groupTasksIntoSections(facts) {
   const byType = new Map();
   for (const t of facts.tasks.recentCompleted) {
@@ -402,19 +456,44 @@ export function groupTasksIntoSections(facts) {
   const sections = [];
   for (const [taskType, items] of byType) {
     const plain = plainTitleForTaskType(taskType);
-    const bullets = items.slice(0, 10).map((t) => {
-      const urls = (t.deliverables || [])
-        .map((d) => d.fileUrl)
-        .filter(Boolean)
-        .slice(0, 2);
-      const urlSuffix = urls.length ? ` — ${urls.join(', ')}` : '';
-      return `${t.title}${urlSuffix}`;
-    });
+    const blocks = [];
+    for (const t of items.slice(0, 10)) {
+      const subs = t.subTasks || [];
+      if (subs.length > 0) {
+        blocks.push({
+          heading: t.title,
+          bullets: subs.slice(0, 12).map((st) => bulletForTaskOrSubtask(st)),
+        });
+      } else {
+        blocks.push({
+          heading: 'What we completed',
+          bullets: [bulletForTaskOrSubtask(t)],
+        });
+      }
+    }
+    // Merge thin "What we completed" blocks into one for cleaner fallback PDFs.
+    const merged = [];
+    let looseBullets = [];
+    for (const b of blocks) {
+      if (b.heading === 'What we completed') {
+        looseBullets.push(...b.bullets);
+      } else {
+        if (looseBullets.length) {
+          merged.push({ heading: 'What we completed', bullets: looseBullets });
+          looseBullets = [];
+        }
+        merged.push(b);
+      }
+    }
+    if (looseBullets.length) {
+      merged.push({ heading: 'What we completed', bullets: looseBullets });
+    }
+
     sections.push({
       number: number++,
       title: plain.toUpperCase(),
       intro: `This month we focused on ${plain.toLowerCase()} for ${facts.clientName}.`,
-      blocks: [{ heading: 'What we completed', bullets }],
+      blocks: merged.length ? merged : [{ heading: 'What we completed', bullets: [] }],
       valueDelivered: `We finished ${items.length} item(s) in this area to help ${facts.clientName} get found by the right customers.`,
     });
     if (sections.length >= 6) break;

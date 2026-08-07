@@ -17,6 +17,7 @@ describe('monthlyReport/generateForCycle customer content', () => {
     expect(CLIENT_SYSTEM_PROMPT).toMatch(/Never invent/i);
     expect(CLIENT_SYSTEM_PROMPT).toMatch(/VALUE DELIVERED/i);
     expect(CLIENT_SYSTEM_PROMPT).toMatch(/Master Visibility Score|Growth Index|score names/i);
+    expect(CLIENT_SYSTEM_PROMPT).toMatch(/EVERY completed subtask|subTasks/i);
   });
 
   it('snippets truncate without inventing content', () => {
@@ -64,7 +65,41 @@ describe('monthlyReport/generateForCycle customer content', () => {
     expect(shaped[0].commentSnippets).toHaveLength(2);
     expect(shaped[0].commentSnippets[1].endsWith('…')).toBe(true);
     expect(shaped[0].clientRequestNote).toContain('header');
+    expect(shaped[0].subTasks).toEqual([]);
     expect(JSON.stringify(shaped[0])).not.toMatch(/userId|author/i);
+  });
+
+  it('nests completed subtask details under each main task', () => {
+    const shaped = shapeCompletedTasks([
+      {
+        title: 'Technical SEO',
+        taskType: 'Technical SEO',
+        description: 'Overview of technical work this month',
+        deliverables: [],
+        comments: [],
+        subTasks: [
+          {
+            title: 'Fix 404s on product pages',
+            description: 'Mapped broken URLs and added 301 redirects to live equivalents.',
+            deliverables: [{ fileUrl: 'https://example.com/redirects.csv', notes: 'export' }],
+            comments: [{ parentId: null, content: 'Verified in Search Console', createdAt: new Date() }],
+          },
+          {
+            title: 'Compress hero images',
+            description: 'Reduced homepage LCP images without quality loss.',
+            deliverables: [],
+            comments: [],
+          },
+        ],
+      },
+    ]);
+
+    expect(shaped[0].subTasks).toHaveLength(2);
+    expect(shaped[0].subTasks[0].title).toMatch(/404/);
+    expect(shaped[0].subTasks[0].description).toMatch(/301 redirects/i);
+    expect(shaped[0].subTasks[0].commentSnippets[0]).toMatch(/Search Console/i);
+    expect(shaped[0].subTasks[0].deliverables[0].fileUrl).toContain('redirects.csv');
+    expect(shaped[0].subTasks[1].description).toMatch(/LCP/i);
   });
 
   it('shapes issues with resolution notes only', () => {
@@ -104,6 +139,7 @@ describe('monthlyReport/generateForCycle customer content', () => {
             description: 'Crawl done',
             deliverables: [],
             commentSnippets: [],
+            subTasks: [],
           },
         ],
       },
@@ -133,5 +169,64 @@ describe('monthlyReport/generateForCycle customer content', () => {
     expect(fallback.coverSummary).not.toMatch(/workstream/i);
     expect(fallback.executive.performanceGains).toMatch(/plain terms|visibility|trending/i);
     expect(fallback.sections.some((s) => /RESOLVED/i.test(s.title))).toBe(true);
+  });
+
+  it('fallback sections list each subtask under its main task heading', () => {
+    const facts = {
+      clientName: 'Milwaukee Signs',
+      preparedBy: 'Local Waves',
+      month: 7,
+      year: 2026,
+      tasks: {
+        completed: 3,
+        created: 3,
+        stillOpen: 0,
+        recentCompleted: [
+          {
+            title: 'On-Page SEO',
+            taskType: 'On-Page SEO',
+            description: 'Page optimization program',
+            deliverables: [],
+            commentSnippets: [],
+            subTasks: [
+              {
+                title: 'Rewrite service H1s',
+                description: 'Aligned titles to primary keywords on three service pages.',
+                deliverables: [],
+                commentSnippets: [],
+              },
+              {
+                title: 'Add FAQ schema',
+                description: 'Implemented FAQ structured data on the contact page.',
+                deliverables: [{ fileUrl: 'https://example.com/faq', notes: '' }],
+                commentSnippets: [],
+              },
+            ],
+          },
+        ],
+      },
+      content: { published: 0 },
+      keywords: { accepted: 0 },
+      aiVisibility: { promptsTested: 0, cited: 0, citationRate: 0, platforms: [] },
+      searchKpis: [],
+      collaboration: { commentActivityCount: 0, tasksWithComments: 0 },
+      issues: { resolvedCount: 0, openedCount: 0, resolved: [], opened: [] },
+      clientInputs: [],
+    };
+
+    const sections = groupTasksIntoSections(facts);
+    const seoSection = sections.find((s) => /pages visitors|ON-PAGE|IMPROVING/i.test(s.title));
+    expect(seoSection).toBeTruthy();
+    const mainBlock = seoSection.blocks.find((b) => b.heading === 'On-Page SEO');
+    expect(mainBlock).toBeTruthy();
+    expect(mainBlock.bullets.some((b) => /Rewrite service H1s/i.test(b) && /primary keywords/i.test(b))).toBe(
+      true
+    );
+    expect(mainBlock.bullets.some((b) => /Add FAQ schema/i.test(b) && /structured data/i.test(b))).toBe(true);
+
+    const fallback = buildFallbackFormalContent(facts);
+    const flat = JSON.stringify(fallback.sections);
+    expect(flat).toMatch(/Rewrite service H1s/);
+    expect(flat).toMatch(/Add FAQ schema/);
   });
 });

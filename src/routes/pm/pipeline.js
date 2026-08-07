@@ -74,8 +74,56 @@ function wpHeaders(apiKey) {
 /**
  * Abort OS→WP sooner than typical edge proxy_read_timeout so Fastify can
  * always return CORS-safe JSON (502) before the browser connection is reset.
+ * Kept under ~5s so common edge/nginx read timeouts do not drop the browser
+ * connection as a bare "Failed to fetch".
  */
-const WP_MUTATION_TIMEOUT_MS = 8000;
+const WP_MUTATION_TIMEOUT_MS = 4500;
+
+/** Short budget for a best-effort preview-URL heal after a failed mutate. */
+const WP_HEAL_TIMEOUT_MS = 2000;
+
+/**
+ * Best-effort: pull PM/client preview URLs for one pipeline from WordPress.
+ * Used when regenerate times out/fails so OS can still backfill any URLs WP
+ * is able to display (or when legacy rows omit token_plain until regenerate).
+ */
+async function fetchWpPipelinePreviewUrls({ baseUrl, apiKey, pipelineId, wpPostId }) {
+  const headers = wpHeaders(apiKey);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), WP_HEAL_TIMEOUT_MS);
+  try {
+    let item = null;
+    if (wpPostId) {
+      const res = await fetch(`${baseUrl}/wp-json/lwa/v1/pipeline/${wpPostId}`, {
+        headers,
+        signal: controller.signal,
+      });
+      if (res.ok) {
+        const json = await res.json().catch(() => null);
+        if (json && Number(json.id) === pipelineId) item = json;
+      }
+    }
+    if (!item) {
+      const res = await fetch(
+        `${baseUrl}/wp-json/lwa/v1/pipeline?page=1&per_page=100`,
+        { headers, signal: controller.signal }
+      );
+      if (!res.ok) return null;
+      const json = await res.json().catch(() => null);
+      const batch = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : [];
+      item = batch.find((p) => Number(p.id) === pipelineId) || null;
+    }
+    if (!item) return null;
+    const pmPreviewUrl = String(item.pmPreviewUrl || '').slice(0, 1000) || null;
+    const clientPreviewUrl = String(item.clientPreviewUrl || '').slice(0, 1000) || null;
+    if (!pmPreviewUrl && !clientPreviewUrl) return null;
+    return { pmPreviewUrl, clientPreviewUrl };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function commentRoleLabel(role) {
   if (role === 'OWNER') return 'Admin';
@@ -661,7 +709,7 @@ export async function pmPipelineRoutes(app) {
 
         const existing = await prisma.wpContentReview.findUnique({
           where: { projectId_wpPipelineId: { projectId, wpPipelineId: pipelineId } },
-          select: { id: true, isPublished: true, status: true },
+          select: { id: true, isPublished: true, status: true, wpPostId: true },
         });
         if (!existing) {
           return reply.status(404).send({ message: 'Content review not found' });
@@ -674,6 +722,31 @@ export async function pmPipelineRoutes(app) {
 
         const baseUrl = project.wpUrl.replace(/\/$/, '');
         const url = `${baseUrl}/wp-json/lwa/v1/pipeline/${pipelineId}/regenerate-links`;
+
+        const reviewInclude = {
+          events: { orderBy: { createdAt: 'desc' }, take: 50 },
+          project: { select: { name: true, client: { select: { agencyName: true } } } },
+        };
+
+        /** Persist any preview URLs WP can still return after a failed rotate. */
+        const tryHealPreviewUrls = async () => {
+          const healed = await fetchWpPipelinePreviewUrls({
+            baseUrl,
+            apiKey: project.wpApiKey,
+            pipelineId,
+            wpPostId: existing.wpPostId || null,
+          });
+          if (!healed) return null;
+          return prisma.wpContentReview.update({
+            where: { id: existing.id },
+            data: {
+              ...(healed.pmPreviewUrl ? { pmPreviewUrl: healed.pmPreviewUrl } : {}),
+              ...(healed.clientPreviewUrl ? { clientPreviewUrl: healed.clientPreviewUrl } : {}),
+              wpUpdatedAt: new Date(),
+            },
+            include: reviewInclude,
+          });
+        };
 
         let res;
         const wpStartedAt = Date.now();
@@ -700,6 +773,22 @@ export async function pmPipelineRoutes(app) {
             'WP regenerate-links fetch failed'
           );
           const isTimeout = fetchErr?.name === 'TimeoutError' || fetchErr?.name === 'AbortError';
+          // On immediate network errors, try a short GET heal. On abort/timeout we
+          // already spent the mutation budget — still attempt a brief heal so the
+          // browser always gets JSON (and any existing WP URLs) instead of a reset.
+          const healedRow = await tryHealPreviewUrls().catch(() => null);
+          if (healedRow?.pmPreviewUrl || healedRow?.clientPreviewUrl) {
+            return reply.send({
+              success: true,
+              healedFromSync: true,
+              pmPreviewUrl: healedRow.pmPreviewUrl,
+              clientPreviewUrl: healedRow.clientPreviewUrl,
+              pipeline: formatReview(healedRow),
+              message: isTimeout
+                ? 'WordPress did not finish rotating links in time; refreshed existing preview URLs from the site.'
+                : 'Could not reach WordPress to rotate links; refreshed existing preview URLs from the site.',
+            });
+          }
           return reply.status(502).send({
             message: isTimeout
               ? 'WordPress did not respond in time. Please try again.'
@@ -715,6 +804,19 @@ export async function pmPipelineRoutes(app) {
             res.status === 404 ||
             wpCode === 'rest_no_route' ||
             /no route was found/i.test(wpMsg);
+          const healedRow = await tryHealPreviewUrls().catch(() => null);
+          if (healedRow?.pmPreviewUrl || healedRow?.clientPreviewUrl) {
+            return reply.send({
+              success: true,
+              healedFromSync: true,
+              pmPreviewUrl: healedRow.pmPreviewUrl,
+              clientPreviewUrl: healedRow.clientPreviewUrl,
+              pipeline: formatReview(healedRow),
+              message: missingRoute
+                ? 'WordPress is missing the regenerate-links endpoint; refreshed existing preview URLs. Update the Localwave Agent plugin to 1.9.4+ to rotate links.'
+                : (wpMsg || 'WordPress could not regenerate preview links; refreshed existing URLs instead.'),
+            });
+          }
           return reply.status(missingRoute ? 502 : res.status >= 400 && res.status < 600 ? res.status : 502).send({
             message: missingRoute
               ? 'WordPress is missing the regenerate-links endpoint. Update the Localwave Agent (agency-os-bridge) plugin on that site to 1.9.4+, then try again.'
@@ -722,9 +824,22 @@ export async function pmPipelineRoutes(app) {
           });
         }
 
-        const pmPreviewUrl = String(json.pmPreviewUrl || json.pipeline?.pmPreviewUrl || '').slice(0, 1000) || null;
-        const clientPreviewUrl =
+        let pmPreviewUrl = String(json.pmPreviewUrl || json.pipeline?.pmPreviewUrl || '').slice(0, 1000) || null;
+        let clientPreviewUrl =
           String(json.clientPreviewUrl || json.pipeline?.clientPreviewUrl || '').slice(0, 1000) || null;
+
+        if (!pmPreviewUrl && !clientPreviewUrl) {
+          const healed = await fetchWpPipelinePreviewUrls({
+            baseUrl,
+            apiKey: project.wpApiKey,
+            pipelineId,
+            wpPostId: existing.wpPostId || null,
+          }).catch(() => null);
+          if (healed) {
+            pmPreviewUrl = healed.pmPreviewUrl;
+            clientPreviewUrl = healed.clientPreviewUrl;
+          }
+        }
 
         const updated = await prisma.wpContentReview.update({
           where: { id: existing.id },
@@ -734,10 +849,7 @@ export async function pmPipelineRoutes(app) {
             lastEventType: 'pipeline_links_regenerated',
             wpUpdatedAt: new Date(),
           },
-          include: {
-            events: { orderBy: { createdAt: 'desc' }, take: 50 },
-            project: { select: { name: true, client: { select: { agencyName: true } } } },
-          },
+          include: reviewInclude,
         });
 
         return reply.send({
@@ -748,6 +860,7 @@ export async function pmPipelineRoutes(app) {
         });
       } catch (err) {
         request.log.error(err);
+        // Always return JSON — never let an unexpected throw become a dropped connection.
         return reply.status(500).send({ message: 'Failed to regenerate preview links' });
       }
     }
