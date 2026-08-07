@@ -680,12 +680,14 @@ export async function pmPipelineRoutes(app) {
     }
   );
 
+  // Soft-await budget so we usually return 200 with real URLs/errors before the
+  // edge kills the browser connection. Never use HTTP 502 (CORS stripped).
+  const RENEW_SOFT_TIMEOUT_MS = Number(process.env.PIPELINE_RENEW_SOFT_TIMEOUT_MS || 3500);
+
   // POST /api/pm/pipeline/:projectId/:wpPipelineId/renew-preview
   // Rotate PM + client preview tokens on WordPress, persist URLs on OS.
-  // ALWAYS returns 202 immediately after auth/validation — never waits on WP and
-  // never returns 502 (Hostinger/edge often strips CORS from upstream 502s,
-  // which the browser surfaces as "Failed to fetch"). Client polls for URLs.
-  // Legacy alias: regenerate-preview-links (same handler).
+  // Race WP work ~3.5s → 200 success | 200 success:false (real code/message) |
+  // 202 regenerating (background). Legacy alias: regenerate-preview-links.
   const renewPreviewHandler = async (request, reply) => {
       try {
         const { projectId, wpPipelineId } = request.params;
@@ -709,7 +711,13 @@ export async function pmPipelineRoutes(app) {
 
         const existing = await prisma.wpContentReview.findUnique({
           where: { projectId_wpPipelineId: { projectId, wpPipelineId: pipelineId } },
-          select: { id: true, isPublished: true, status: true, wpPostId: true },
+          select: {
+            id: true,
+            isPublished: true,
+            status: true,
+            wpPostId: true,
+            revisionNumber: true,
+          },
         });
         if (!existing) {
           return reply.status(404).send({ message: 'Content review not found' });
@@ -721,20 +729,19 @@ export async function pmPipelineRoutes(app) {
         }
 
         const baseUrl = project.wpUrl.replace(/\/$/, '');
-        // Try several WAF-safe shapes. milwaukee-signs.com resets regenerate-links
-        // (and sometimes renew-preview); change-type already works on that host.
+        // change-type first — already known to pass Milwaukee Signs WAF.
         const wpAttempts = [
+          {
+            method: 'POST',
+            url: `${baseUrl}/wp-json/lwa/v1/pipeline/${pipelineId}/change-type`,
+            body: JSON.stringify({ rotate_links: true }),
+          },
           { method: 'POST', url: `${baseUrl}/wp-json/lwa/v1/pipeline/${pipelineId}/rotate`, body: '{}' },
           { method: 'GET', url: `${baseUrl}/wp-json/lwa/v1/pipeline/${pipelineId}/rotate` },
           {
             method: 'POST',
             url: `${baseUrl}/?rest_route=/lwa/v1/pipeline/${pipelineId}/rotate`,
             body: '{}',
-          },
-          {
-            method: 'POST',
-            url: `${baseUrl}/wp-json/lwa/v1/pipeline/${pipelineId}/change-type`,
-            body: JSON.stringify({ rotate_links: true }),
           },
           { method: 'POST', url: `${baseUrl}/wp-json/lwa/v1/pipeline/${pipelineId}/renew-preview`, body: '{}' },
           { method: 'POST', url: `${baseUrl}/wp-json/lwa/v1/pipeline/${pipelineId}/regenerate-links`, body: '{}' },
@@ -745,7 +752,28 @@ export async function pmPipelineRoutes(app) {
           project: { select: { name: true, client: { select: { agencyName: true } } } },
         };
 
-        /** Persist any preview URLs WP can still return after a failed rotate. */
+        const recordRenewFailed = async (message, code = 'WP_RENEW_FAILED') => {
+          const msg = String(message || 'Preview link renew failed').slice(0, 500);
+          try {
+            await prisma.wpContentReviewEvent.create({
+              data: {
+                contentReviewId: existing.id,
+                eventType: 'pipeline_links_renew_failed',
+                status: existing.status || 'pending_pm_review',
+                revisionNumber: existing.revisionNumber || 1,
+                message: msg,
+              },
+            });
+            await prisma.wpContentReview.update({
+              where: { id: existing.id },
+              data: { lastEventType: 'pipeline_links_renew_failed' },
+            });
+          } catch (err) {
+            request.log.error({ err, reviewId: existing.id }, 'Failed to record renew_failed event');
+          }
+          return { ok: false, body: { success: false, code, message: msg } };
+        };
+
         const tryHealPreviewUrls = async () => {
           const healed = await fetchWpPipelinePreviewUrls({
             baseUrl,
@@ -787,6 +815,8 @@ export async function pmPipelineRoutes(app) {
           let res = null;
           let lastFetchErr = null;
           let usedUrl = wpAttempts[0].url;
+          let sawMissingRoute = false;
+          let lastWpMsg = '';
 
           for (let i = 0; i < wpAttempts.length; i += 1) {
             const attempt = wpAttempts[i];
@@ -799,16 +829,20 @@ export async function pmPipelineRoutes(app) {
                 const probe = await res.clone().json().catch(() => ({}));
                 const wpCode = probe.code || probe.data?.status;
                 const wpMsg = probe.message || '';
+                lastWpMsg = wpMsg;
                 const missingRoute =
                   res.status === 404 ||
                   wpCode === 'rest_no_route' ||
                   /no route was found/i.test(wpMsg);
-                if (missingRoute && i < wpAttempts.length - 1) {
-                  request.log.warn(
-                    { url: attempt.url, method: attempt.method, status: res.status },
-                    'WP rotate path missing; trying next'
-                  );
-                  continue;
+                if (missingRoute) {
+                  sawMissingRoute = true;
+                  if (i < wpAttempts.length - 1) {
+                    request.log.warn(
+                      { url: attempt.url, method: attempt.method, status: res.status },
+                      'WP rotate path missing; trying next'
+                    );
+                    continue;
+                  }
                 }
               }
               break;
@@ -832,6 +866,9 @@ export async function pmPipelineRoutes(app) {
           if (lastFetchErr && !res) {
             const isTimeout =
               lastFetchErr?.name === 'TimeoutError' || lastFetchErr?.name === 'AbortError';
+            const isReset = /ECONNRESET|ECONNREFUSED|ENOTFOUND|fetch failed/i.test(
+              String(lastFetchErr?.message || lastFetchErr?.cause?.message || '')
+            );
             const healedRow = await tryHealPreviewUrls().catch(() => null);
             if (healedRow?.pmPreviewUrl || healedRow?.clientPreviewUrl) {
               return {
@@ -848,21 +885,26 @@ export async function pmPipelineRoutes(app) {
                 },
               };
             }
-            return {
-              ok: false,
-              body: {
-                message: isTimeout
-                  ? 'WordPress did not respond in time. Please try again.'
-                  : 'Unable to reach WordPress to rotate preview links (connection reset by site WAF). Update the Localwave Agent plugin on that site to 1.9.8+, then try again.',
-              },
-            };
+            if (isTimeout) {
+              return recordRenewFailed(
+                'WordPress did not respond in time while rotating preview links. Please try again.',
+                'WP_TIMEOUT'
+              );
+            }
+            return recordRenewFailed(
+              isReset
+                ? 'WordPress connection was reset while rotating preview links (site firewall/WAF). Ask the host to allow Agency OS API calls to /wp-json/lwa/v1/pipeline/*/change-type and /rotate.'
+                : `Unable to reach WordPress to rotate preview links: ${lastFetchErr?.message || 'network error'}`,
+              'WP_CONNECTION_RESET'
+            );
           }
 
           const json = await res.json().catch(() => ({}));
           if (!res.ok) {
             const wpCode = json.code || json.data?.status;
-            const wpMsg = json.message || '';
+            const wpMsg = json.message || lastWpMsg || '';
             const missingRoute =
+              sawMissingRoute ||
               res.status === 404 ||
               wpCode === 'rest_no_route' ||
               /no route was found/i.test(wpMsg);
@@ -883,14 +925,16 @@ export async function pmPipelineRoutes(app) {
                 },
               };
             }
-            return {
-              ok: false,
-              body: {
-                message: missingRoute
-                  ? 'WordPress is missing the rotate endpoint. Update the Localwave Agent (agency-os-bridge) plugin on that site to 1.9.8+, then try again.'
-                  : wpMsg || 'WordPress could not regenerate preview links.',
-              },
-            };
+            if (missingRoute) {
+              return recordRenewFailed(
+                'WordPress is missing the rotate / change-type rotate_links endpoint. Update the Localwave Agent (agency-os-bridge) plugin on that site to 1.9.8+, then try again.',
+                'PLUGIN_MISSING_ROUTE'
+              );
+            }
+            return recordRenewFailed(
+              wpMsg || `WordPress could not regenerate preview links (HTTP ${res.status}).`,
+              'WP_RENEW_FAILED'
+            );
           }
 
           let pmPreviewUrl =
@@ -912,6 +956,13 @@ export async function pmPipelineRoutes(app) {
             }
           }
 
+          if (!pmPreviewUrl && !clientPreviewUrl) {
+            return recordRenewFailed(
+              'WordPress accepted the renew request but returned no preview URLs (legacy links without display tokens). Open the page in WP admin and regenerate preview links there, or re-submit the pipeline.',
+              'WP_EMPTY_URLS'
+            );
+          }
+
           const updated = await prisma.wpContentReview.update({
             where: { id: existing.id },
             data: {
@@ -922,6 +973,20 @@ export async function pmPipelineRoutes(app) {
             },
             include: reviewInclude,
           });
+
+          try {
+            await prisma.wpContentReviewEvent.create({
+              data: {
+                contentReviewId: existing.id,
+                eventType: 'pipeline_links_regenerated',
+                status: existing.status || 'pending_pm_review',
+                revisionNumber: existing.revisionNumber || 1,
+                message: 'Review links regenerated',
+              },
+            });
+          } catch {
+            // non-fatal
+          }
 
           request.log.info(
             { reviewId: existing.id, usedUrl, pmPreviewUrl: !!updated.pmPreviewUrl },
@@ -939,50 +1004,87 @@ export async function pmPipelineRoutes(app) {
           };
         };
 
-        // Fire-and-forget: never hold the browser on WP (and never return 502).
-        runRegenerateWork()
-          .then((result) => {
-            if (result?.ok) {
-              request.log.info(
-                {
-                  reviewId: existing.id,
-                  projectId,
-                  wpPipelineId: pipelineId,
-                  healedFromSync: !!result.body?.healedFromSync,
-                },
-                'Preview links renew finished in background',
-              );
-            } else {
-              request.log.warn(
-                {
-                  reviewId: existing.id,
-                  projectId,
-                  wpPipelineId: pipelineId,
-                  message: result?.body?.message,
-                },
-                'Preview links renew failed in background',
-              );
-            }
-          })
-          .catch((err) => {
-            request.log.error(
-              { err, reviewId: existing.id, projectId, wpPipelineId: pipelineId },
-              'Preview links renew crashed in background',
-            );
-          });
+        const workPromise = runRegenerateWork();
+        const outcome = await Promise.race([
+          workPromise.then(
+            (result) => ({ kind: 'done', result }),
+            (err) => ({ kind: 'error', err }),
+          ),
+          new Promise((resolve) =>
+            setTimeout(() => resolve({ kind: 'pending' }), RENEW_SOFT_TIMEOUT_MS),
+          ),
+        ]);
 
-        return reply.status(202).send({
-          status: 'regenerating',
-          projectId,
-          wpPipelineId: pipelineId,
-          reviewId: existing.id,
-          message:
-            'Review links are regenerating. Poll until preview URLs appear.',
+        if (outcome.kind === 'pending') {
+          workPromise
+            .then((result) => {
+              if (result?.ok) {
+                request.log.info(
+                  {
+                    reviewId: existing.id,
+                    projectId,
+                    wpPipelineId: pipelineId,
+                    healedFromSync: !!result.body?.healedFromSync,
+                  },
+                  'Preview links renew finished after soft timeout',
+                );
+              } else {
+                request.log.warn(
+                  {
+                    reviewId: existing.id,
+                    projectId,
+                    wpPipelineId: pipelineId,
+                    code: result?.body?.code,
+                    message: result?.body?.message,
+                  },
+                  'Preview links renew failed after soft timeout',
+                );
+              }
+            })
+            .catch(async (err) => {
+              request.log.error(
+                { err, reviewId: existing.id, projectId, wpPipelineId: pipelineId },
+                'Preview links renew crashed after soft timeout',
+              );
+              await recordRenewFailed(
+                err?.message || 'Preview link renew crashed unexpectedly.',
+                'WP_RENEW_FAILED'
+              ).catch(() => null);
+            });
+
+          return reply.status(202).send({
+            status: 'regenerating',
+            projectId,
+            wpPipelineId: pipelineId,
+            reviewId: existing.id,
+            message: 'Review links are regenerating. Poll until preview URLs appear.',
+          });
+        }
+
+        if (outcome.kind === 'error') {
+          request.log.error(outcome.err);
+          // Never 502 — return CORS-safe JSON the browser can read.
+          return reply.send({
+            success: false,
+            code: 'WP_RENEW_FAILED',
+            message: outcome.err?.message || 'Failed to regenerate preview links',
+          });
+        }
+
+        const { result } = outcome;
+        // Always HTTP 200 with success true/false so edge proxies keep CORS headers.
+        return reply.send(result?.body || {
+          success: false,
+          code: 'WP_RENEW_FAILED',
+          message: 'Failed to regenerate preview links',
         });
       } catch (err) {
         request.log.error(err);
-        // Prefer 400-family JSON over 502 — edge often strips CORS from 502 pages.
-        return reply.status(500).send({ message: 'Failed to regenerate preview links' });
+        return reply.send({
+          success: false,
+          code: 'WP_RENEW_FAILED',
+          message: err?.message || 'Failed to regenerate preview links',
+        });
       }
   };
 
