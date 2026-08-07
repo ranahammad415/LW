@@ -61,9 +61,9 @@ function formatDisplayValue(value, format) {
 }
 
 /**
- * @param {{ clientIds: string[], start: string, end: string, compare?: boolean }} opts
+ * @param {{ clientIds: string[], start: string, end: string, compare?: boolean, compareYoY?: boolean }} opts
  */
-export async function aggregateReportFacts({ clientIds, start, end, compare = true }) {
+export async function aggregateReportFacts({ clientIds, start, end, compare = true, compareYoY = true }) {
   if (!clientIds?.length) {
     return { error: { status: 400, message: 'No client in scope', emptyReason: 'No client in scope' } };
   }
@@ -72,6 +72,7 @@ export async function aggregateReportFacts({ clientIds, start, end, compare = tr
     start,
     end,
     compare: compare === false ? '0' : '1',
+    compareYoY: compareYoY === false ? '0' : '1',
   };
 
   const [gsc, ga4, gmb, seo, llm, client] = await Promise.all([
@@ -275,6 +276,24 @@ export async function aggregateReportFacts({ clientIds, start, end, compare = tr
           };
         })()
       : null;
+  const yoyRange =
+    compareYoY !== false && range?.start && range?.end
+      ? gsc?.range?.yoy ||
+        ga4?.range?.yoy ||
+        (() => {
+          const shift = (iso) => {
+            const d = new Date(`${iso}T00:00:00.000Z`);
+            const y = d.getUTCFullYear() - 1;
+            const m = d.getUTCMonth();
+            const day = d.getUTCDate();
+            const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+            return new Date(Date.UTC(y, m, Math.min(day, lastDay))).toISOString().slice(0, 10);
+          };
+          const ys = shift(range.start);
+          const ye = shift(range.end);
+          return { start: ys, end: ye, label: humanRangeLabel(ys, ye) };
+        })()
+      : null;
 
   const brandName = client?.agencyName || 'Performance Report';
   const websiteUrl = client?.websiteUrl || '';
@@ -303,7 +322,7 @@ export async function aggregateReportFacts({ clientIds, start, end, compare = tr
   const factsForAi = {
     brand: brandName,
     website: websiteUrl,
-    range: { current: range, previous: prevRange },
+    range: { current: range, previous: prevRange, yoy: yoyRange },
     sources,
     healthScore,
     wins: wins.map((w) => ({
@@ -361,6 +380,7 @@ export async function aggregateReportFacts({ clientIds, start, end, compare = tr
       sources,
       range,
       prevRange,
+      yoyRange,
       healthScore,
       kpiCards,
       wins,

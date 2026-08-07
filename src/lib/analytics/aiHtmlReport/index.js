@@ -12,12 +12,13 @@ import { isAiConfigured } from '../../ai.js';
  *   start: string,
  *   end: string,
  *   compare?: boolean,
+ *   compareYoY?: boolean,
  *   userId?: string,
  * }} opts
  * @returns {Promise<{ html: string, fileName: string, range: object, meta: object } | { error: object }>}
  */
 export async function generateAiHtmlReport(opts) {
-  const { clientIds, start, end, compare = true, userId } = opts || {};
+  const { clientIds, start, end, compare = true, compareYoY = true, userId } = opts || {};
 
   if (!start || !end) {
     return { error: { status: 400, message: 'start and end dates are required (YYYY-MM-DD)' } };
@@ -32,7 +33,7 @@ export async function generateAiHtmlReport(opts) {
     };
   }
 
-  const agg = await aggregateReportFacts({ clientIds, start, end, compare });
+  const agg = await aggregateReportFacts({ clientIds, start, end, compare, compareYoY });
   if (agg.error) return { error: agg.error };
 
   const { facts } = agg;
@@ -61,6 +62,7 @@ export async function generateAiHtmlReport(opts) {
     range: {
       current: facts.range,
       previous: facts.prevRange,
+      yoy: facts.yoyRange,
     },
     meta: {
       brandName: facts.brandName,

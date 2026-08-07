@@ -368,7 +368,7 @@ export async function adminAnalyticsRoutes(app) {
 
   /**
    * Generate a downloadable AI HTML performance report for a client + period.
-   * Body: { start, end, compare? } — download only (no ProjectHtmlReport publish).
+   * Body: { start, end, compare?, compareYoY? } — download only (no ProjectHtmlReport publish).
    */
   app.post(
     '/analytics/:clientId/ai-html-report',
@@ -380,12 +380,15 @@ export async function adminAnalyticsRoutes(app) {
       const start = typeof body.start === 'string' ? body.start.slice(0, 10) : null;
       const end = typeof body.end === 'string' ? body.end.slice(0, 10) : null;
       const compare = body.compare !== false && body.compare !== '0' && body.compare !== 'false';
+      const compareYoY =
+        body.compareYoY !== false && body.compareYoY !== '0' && body.compareYoY !== 'false';
 
       const result = await generateAiHtmlReport({
         clientIds: [clientId],
         start,
         end,
         compare,
+        compareYoY,
         userId: request.user?.id,
       });
       if (result.error) {

@@ -34,6 +34,20 @@ function previousWindow(start, end) {
   return { start: prevStart, end: prevEnd };
 }
 
+/** Shift a UTC date back one calendar year, clamping invalid days (e.g. Feb 29). */
+function shiftYearBack(d) {
+  const y = d.getUTCFullYear() - 1;
+  const m = d.getUTCMonth();
+  const day = d.getUTCDate();
+  const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(y, m, Math.min(day, lastDay)));
+}
+
+/** Same calendar window one year earlier (YoY compare). */
+function previousYearWindow(start, end) {
+  return { start: shiftYearBack(start), end: shiftYearBack(end) };
+}
+
 /** Parse a YYYY-MM-DD query param into a UTC Date, or null when invalid. */
 function parseRangeDate(value) {
   if (!value || typeof value !== 'string') return null;
@@ -56,32 +70,50 @@ function metaCycle(ctx) {
 /** Response `range` meta echoing the resolved window. */
 function metaRange(ctx) {
   const toISO = (d) => (typeof d === 'string' ? d.slice(0, 10) : d.toISOString().slice(0, 10));
-  return {
+  const out = {
     start: toISO(ctx.range.start),
     end: toISO(ctx.range.end),
     label: ctx.rangeLabel ?? ctx.cycle?.label ?? null,
   };
+  if (ctx.yoyRange) {
+    out.yoy = {
+      start: toISO(ctx.yoyRange.start),
+      end: toISO(ctx.yoyRange.end),
+      label: humanRange(ctx.yoyRange.start, ctx.yoyRange.end),
+    };
+  }
+  return out;
 }
 
 /**
- * Merge a previous-period series into the current one by day-of-month index,
- * adding `<key>Prev` fields so charts can overlay the prior period. Returns a
- * new array; leaves rows untouched where no matching previous day exists.
+ * Merge an aligned comparison series into the current one by day-of-month index,
+ * adding `<key><suffix>` fields so charts can overlay. Returns a new array;
+ * leaves rows untouched where no matching day exists.
  */
-function attachPrevSeries(series, prevSeries, keys) {
-  const prevByDom = new Map();
-  for (const r of prevSeries) {
+function attachAlignedSeries(series, otherSeries, keys, suffix) {
+  const otherByDom = new Map();
+  for (const r of otherSeries || []) {
     const dom = Number(String(r.date).slice(8, 10));
-    if (!Number.isNaN(dom)) prevByDom.set(dom, r);
+    if (!Number.isNaN(dom)) otherByDom.set(dom, r);
   }
   return series.map((r) => {
     const dom = Number(String(r.date).slice(8, 10));
-    const prev = prevByDom.get(dom);
-    if (!prev) return { ...r };
+    const other = otherByDom.get(dom);
+    if (!other) return { ...r };
     const out = { ...r };
-    for (const k of keys) out[`${k}Prev`] = prev[k] ?? 0;
+    for (const k of keys) out[`${k}${suffix}`] = other[k] ?? 0;
     return out;
   });
+}
+
+/** Previous-period overlay (`*Prev` keys). */
+function attachPrevSeries(series, prevSeries, keys) {
+  return attachAlignedSeries(series, prevSeries, keys, 'Prev');
+}
+
+/** Year-over-year overlay (`*Yoy` keys). */
+function attachYoySeries(series, yoySeries, keys) {
+  return attachAlignedSeries(series, yoySeries, keys, 'Yoy');
 }
 
 /** Roll GA4 daily rows up into a per-day series + period totals. */
@@ -172,14 +204,20 @@ async function resolveAnalyticsContext(clientIds, query) {
     seo: projects.some((p) => !!p.dataforseoDomain),
   };
 
-  // Compare-to-previous is on unless explicitly disabled (?compare=0).
+  // Compare-to-previous / YoY are on unless explicitly disabled (?compare=0 / ?compareYoY=0).
   const compare = !(query?.compare === '0' || query?.compare === false || query?.compare === 'false');
+  const compareYoY = !(
+    query?.compareYoY === '0' ||
+    query?.compareYoY === false ||
+    query?.compareYoY === 'false'
+  );
 
   // Explicit date range (GSC-style period selector) overrides the cycle month.
   const rangeStart = parseRangeDate(query?.start);
   const rangeEnd = parseRangeDate(query?.end);
   let range;
   let prevRange;
+  let yoyRange;
   let rangeLabel = null;
   let mode;
   if (rangeStart && rangeEnd) {
@@ -187,11 +225,13 @@ async function resolveAnalyticsContext(clientIds, query) {
     const e = rangeStart <= rangeEnd ? rangeEnd : rangeStart;
     range = { start: s, end: e };
     prevRange = compare ? previousWindow(s, e) : null;
+    yoyRange = compareYoY ? previousYearWindow(s, e) : null;
     rangeLabel = humanRange(s, e);
     mode = 'range';
   } else {
     range = cycleRange(cycle);
     prevRange = compare ? previousCycleRange(cycle) : null;
+    yoyRange = compareYoY ? previousYearWindow(range.start, range.end) : null;
     mode = 'cycle';
   }
 
@@ -212,9 +252,11 @@ async function resolveAnalyticsContext(clientIds, query) {
     links,
     range,
     prevRange,
+    yoyRange,
     rangeLabel,
     mode,
     compare,
+    compareYoY,
     frozen,
     source:
       mode === 'cycle' && cycle.status === 'CLOSED' ? (frozen ? 'frozen' : 'computed') : 'live',
@@ -238,7 +280,11 @@ export async function buildOverview(clientIds, query) {
   if (ctx.error) return ctx.error;
   const data =
     ctx.frozen ||
-    (await buildClientAnalytics(ctx.clientId, ctx.cycle, { range: ctx.range, prevRange: ctx.prevRange }));
+    (await buildClientAnalytics(ctx.clientId, ctx.cycle, {
+      range: ctx.range,
+      prevRange: ctx.prevRange,
+      yoyRange: ctx.yoyRange,
+    }));
   return {
     linked: !!(ctx.links.gsc || ctx.links.ga4 || ctx.links.gmb),
     emptyReason:
@@ -263,10 +309,15 @@ export async function buildGscView(clientIds, view, query) {
   const { start, end } = ctx.range;
   const traffic = await getClientTrafficSeries(ctx.clientId, { start, end });
 
-  // Previous comparable period for deltas (skipped when compare is off).
-  const prevTraffic = ctx.prevRange
-    ? await getClientTrafficSeries(ctx.clientId, { start: ctx.prevRange.start, end: ctx.prevRange.end })
-    : null;
+  // Previous / YoY comparable periods for deltas (skipped when compare flags are off).
+  const [prevTraffic, yoyTraffic] = await Promise.all([
+    ctx.prevRange
+      ? getClientTrafficSeries(ctx.clientId, { start: ctx.prevRange.start, end: ctx.prevRange.end })
+      : Promise.resolve(null),
+    ctx.yoyRange
+      ? getClientTrafficSeries(ctx.clientId, { start: ctx.yoyRange.start, end: ctx.yoyRange.end })
+      : Promise.resolve(null),
+  ]);
 
   const brandTokens = [
     ...new Set(
@@ -335,6 +386,7 @@ export async function buildGscView(clientIds, view, query) {
 
   const totals = traffic.totals;
   const prev = prevTraffic?.totals ?? null;
+  const yoy = yoyTraffic?.totals ?? null;
 
   const data = {
     kpis: {
@@ -347,8 +399,17 @@ export async function buildGscView(clientIds, view, query) {
       impressionsDelta: prev ? pctDelta(totals.impressions, prev.impressions) : null,
       ctrDelta: prev ? pctDelta(totals.ctr, prev.ctr) : null,
       positionDelta: prev ? pctDelta(totals.position, prev.position) : null,
+      clicksYoyDelta: yoy ? pctDelta(totals.clicks, yoy.clicks) : null,
+      impressionsYoyDelta: yoy ? pctDelta(totals.impressions, yoy.impressions) : null,
+      ctrYoyDelta: yoy ? pctDelta(totals.ctr, yoy.ctr) : null,
+      positionYoyDelta: yoy ? pctDelta(totals.position, yoy.position) : null,
     },
-    series: traffic.series,
+    series: attachYoySeries(traffic.series, yoyTraffic?.series || [], [
+      'clicks',
+      'impressions',
+      'ctr',
+      'position',
+    ]),
     brandGeneric: {
       brand: { keywords: brand.length, clicks: sum(brand, 'clicks'), impressions: sum(brand, 'impressions') },
       generic: { keywords: generic.length, clicks: sum(generic, 'clicks'), impressions: sum(generic, 'impressions') },
@@ -401,7 +462,8 @@ export async function buildGa4View(clientIds, view, query) {
 
   const { start, end } = ctx.range;
   const prevRange = ctx.prevRange;
-  const [rows, prevRows] = await Promise.all([
+  const yoyRange = ctx.yoyRange;
+  const [rows, prevRows, yoyRows] = await Promise.all([
     prisma.ga4DailyMetric.findMany({
       where: { projectId: { in: ctx.projectIds }, date: { gte: start, lte: end } },
       orderBy: { date: 'asc' },
@@ -412,22 +474,34 @@ export async function buildGa4View(clientIds, view, query) {
           orderBy: { date: 'asc' },
         })
       : Promise.resolve([]),
+    yoyRange
+      ? prisma.ga4DailyMetric.findMany({
+          where: { projectId: { in: ctx.projectIds }, date: { gte: yoyRange.start, lte: yoyRange.end } },
+          orderBy: { date: 'asc' },
+        })
+      : Promise.resolve([]),
   ]);
 
   const curr = aggregateGa4Rows(rows);
   const prevAgg = aggregateGa4Rows(prevRows);
+  const yoyAgg = aggregateGa4Rows(yoyRows);
   const hasPrev = prevRows.length > 0;
-  const series = attachPrevSeries(curr.series, prevAgg.series, [
-    'sessions',
-    'totalUsers',
-    'conversions',
-    'pageViews',
-  ]);
+  const hasYoy = yoyRows.length > 0;
+  const ga4SeriesKeys = ['sessions', 'totalUsers', 'conversions', 'pageViews'];
+  const series = attachYoySeries(
+    attachPrevSeries(curr.series, prevAgg.series, ga4SeriesKeys),
+    yoyAgg.series,
+    ga4SeriesKeys
+  );
   const totals = curr.totals;
   const conversionRate = totals.sessions > 0 ? Number(((totals.conversions / totals.sessions) * 100).toFixed(2)) : 0;
   const prevConversionRate =
     prevAgg.totals.sessions > 0
       ? Number(((prevAgg.totals.conversions / prevAgg.totals.sessions) * 100).toFixed(2))
+      : 0;
+  const yoyConversionRate =
+    yoyAgg.totals.sessions > 0
+      ? Number(((yoyAgg.totals.conversions / yoyAgg.totals.sessions) * 100).toFixed(2))
       : 0;
 
   // Latest breakdowns from most recent row that has them
@@ -450,6 +524,12 @@ export async function buildGa4View(clientIds, view, query) {
       pageViewsDelta: hasPrev ? pctDelta(totals.pageViews, prevAgg.totals.pageViews) : null,
       bounceRateDelta: hasPrev ? pctDelta(curr.bounceRate, prevAgg.bounceRate) : null,
       conversionRateDelta: hasPrev ? pctDelta(conversionRate, prevConversionRate) : null,
+      sessionsYoyDelta: hasYoy ? pctDelta(totals.sessions, yoyAgg.totals.sessions) : null,
+      usersYoyDelta: hasYoy ? pctDelta(totals.users, yoyAgg.totals.users) : null,
+      conversionsYoyDelta: hasYoy ? pctDelta(totals.conversions, yoyAgg.totals.conversions) : null,
+      pageViewsYoyDelta: hasYoy ? pctDelta(totals.pageViews, yoyAgg.totals.pageViews) : null,
+      bounceRateYoyDelta: hasYoy ? pctDelta(curr.bounceRate, yoyAgg.bounceRate) : null,
+      conversionRateYoyDelta: hasYoy ? pctDelta(conversionRate, yoyConversionRate) : null,
     },
     series,
     channels: breakdowns.channels || [],
@@ -507,7 +587,8 @@ export async function buildGmbView(clientIds, view, query) {
 
   const { start, end } = ctx.range;
   const prevRange = ctx.prevRange;
-  const [rows, prevRows] = await Promise.all([
+  const yoyRange = ctx.yoyRange;
+  const [rows, prevRows, yoyRows] = await Promise.all([
     prisma.gmbDailyMetric.findMany({
       where: { projectId: { in: ctx.projectIds }, date: { gte: start, lte: end } },
       orderBy: { date: 'asc' },
@@ -515,6 +596,12 @@ export async function buildGmbView(clientIds, view, query) {
     prevRange
       ? prisma.gmbDailyMetric.findMany({
           where: { projectId: { in: ctx.projectIds }, date: { gte: prevRange.start, lte: prevRange.end } },
+          orderBy: { date: 'asc' },
+        })
+      : Promise.resolve([]),
+    yoyRange
+      ? prisma.gmbDailyMetric.findMany({
+          where: { projectId: { in: ctx.projectIds }, date: { gte: yoyRange.start, lte: yoyRange.end } },
           orderBy: { date: 'asc' },
         })
       : Promise.resolve([]),
@@ -542,18 +629,26 @@ export async function buildGmbView(clientIds, view, query) {
     }
     return [...seriesMap.values()];
   };
-  const prevSeries = aggregateGmb(prevRows);
-  const series = attachPrevSeries(aggregateGmb(rows), prevSeries, [
+  const gmbSeriesKeys = [
     'impressions',
     'impressionsSearch',
     'impressionsMaps',
     'websiteClicks',
     'directions',
     'calls',
-  ]);
+  ];
+  const prevSeries = aggregateGmb(prevRows);
+  const yoySeries = aggregateGmb(yoyRows);
+  const series = attachYoySeries(
+    attachPrevSeries(aggregateGmb(rows), prevSeries, gmbSeriesKeys),
+    yoySeries,
+    gmbSeriesKeys
+  );
   const hasPrev = prevRows.length > 0;
+  const hasYoy = yoyRows.length > 0;
   const sum = (k) => series.reduce((s, r) => s + r[k], 0);
   const prevSum = (k) => prevSeries.reduce((s, r) => s + r[k], 0);
+  const yoySum = (k) => yoySeries.reduce((s, r) => s + r[k], 0);
 
   const reviews = await prisma.gmbReview.findMany({
     where: { projectId: { in: ctx.projectIds } },
@@ -588,6 +683,10 @@ export async function buildGmbView(clientIds, view, query) {
       directionsDelta: hasPrev ? pctDelta(sum('directions'), prevSum('directions')) : null,
       websiteClicksDelta: hasPrev ? pctDelta(sum('websiteClicks'), prevSum('websiteClicks')) : null,
       callsDelta: hasPrev ? pctDelta(sum('calls'), prevSum('calls')) : null,
+      impressionsYoyDelta: hasYoy ? pctDelta(sum('impressions'), yoySum('impressions')) : null,
+      directionsYoyDelta: hasYoy ? pctDelta(sum('directions'), yoySum('directions')) : null,
+      websiteClicksYoyDelta: hasYoy ? pctDelta(sum('websiteClicks'), yoySum('websiteClicks')) : null,
+      callsYoyDelta: hasYoy ? pctDelta(sum('calls'), yoySum('calls')) : null,
     },
     series,
     reviews: reviews.map((r) => ({
@@ -636,6 +735,10 @@ export async function buildGmbView(clientIds, view, query) {
                 r.websiteClicksPrev != null || r.directionsPrev != null || r.callsPrev != null
                   ? (r.websiteClicksPrev || 0) + (r.directionsPrev || 0) + (r.callsPrev || 0)
                   : undefined,
+              totalYoy:
+                r.websiteClicksYoy != null || r.directionsYoy != null || r.callsYoy != null
+                  ? (r.websiteClicksYoy || 0) + (r.directionsYoy || 0) + (r.callsYoy || 0)
+                  : undefined,
             })),
             kpis: {
               websiteClicks: data.kpis.websiteClicks,
@@ -649,6 +752,15 @@ export async function buildGmbView(clientIds, view, query) {
                 ? pctDelta(
                     data.kpis.websiteClicks + data.kpis.directions + data.kpis.calls,
                     prevSum('websiteClicks') + prevSum('directions') + prevSum('calls')
+                  )
+                : null,
+              websiteClicksYoyDelta: data.kpis.websiteClicksYoyDelta,
+              directionsYoyDelta: data.kpis.directionsYoyDelta,
+              callsYoyDelta: data.kpis.callsYoyDelta,
+              totalYoyDelta: hasYoy
+                ? pctDelta(
+                    data.kpis.websiteClicks + data.kpis.directions + data.kpis.calls,
+                    yoySum('websiteClicks') + yoySum('directions') + yoySum('calls')
                   )
                 : null,
             },
@@ -1001,6 +1113,7 @@ export async function buildLeadsView(clientIds, view, query) {
 
   const { start, end } = ctx.range;
   const prevRange = ctx.prevRange;
+  const yoyRange = ctx.yoyRange;
 
   const hasAny = ctx.projectIds.length
     ? await prisma.siteLeadDailyMetric.count({
@@ -1022,7 +1135,7 @@ export async function buildLeadsView(clientIds, view, query) {
     );
   }
 
-  const [rows, prevRows] = await Promise.all([
+  const [rows, prevRows, yoyRows] = await Promise.all([
     prisma.siteLeadDailyMetric.findMany({
       where: { projectId: { in: ctx.projectIds }, date: { gte: start, lte: end } },
       orderBy: { date: 'asc' },
@@ -1036,19 +1149,35 @@ export async function buildLeadsView(clientIds, view, query) {
           orderBy: { date: 'asc' },
         })
       : Promise.resolve([]),
+    yoyRange
+      ? prisma.siteLeadDailyMetric.findMany({
+          where: {
+            projectId: { in: ctx.projectIds },
+            date: { gte: yoyRange.start, lte: yoyRange.end },
+          },
+          orderBy: { date: 'asc' },
+        })
+      : Promise.resolve([]),
   ]);
 
   const curr = aggregateLeadRows(rows);
   const prev = aggregateLeadRows(prevRows);
+  const yoy = aggregateLeadRows(yoyRows);
   const hasPrev = prevRows.length > 0;
-  const series = attachPrevSeries(curr.series, prev.series, [
+  const hasYoy = yoyRows.length > 0;
+  const leadSeriesKeys = [
     'leads',
     'formSubmits',
     'thankYouViews',
     'phoneClicks',
     'emailClicks',
     'intentClicks',
-  ]);
+  ];
+  const series = attachYoySeries(
+    attachPrevSeries(curr.series, prev.series, leadSeriesKeys),
+    yoy.series,
+    leadSeriesKeys
+  );
 
   const byType = [
     { type: 'form_submit', label: 'Form submits', count: curr.totals.formSubmits },
@@ -1077,6 +1206,13 @@ export async function buildLeadsView(clientIds, view, query) {
         : null,
       phoneClicksDelta: hasPrev ? pctDelta(curr.totals.phoneClicks, prev.totals.phoneClicks) : null,
       emailClicksDelta: hasPrev ? pctDelta(curr.totals.emailClicks, prev.totals.emailClicks) : null,
+      leadsYoyDelta: hasYoy ? pctDelta(curr.totals.leads, yoy.totals.leads) : null,
+      formSubmitsYoyDelta: hasYoy ? pctDelta(curr.totals.formSubmits, yoy.totals.formSubmits) : null,
+      thankYouViewsYoyDelta: hasYoy
+        ? pctDelta(curr.totals.thankYouViews, yoy.totals.thankYouViews)
+        : null,
+      phoneClicksYoyDelta: hasYoy ? pctDelta(curr.totals.phoneClicks, yoy.totals.phoneClicks) : null,
+      emailClicksYoyDelta: hasYoy ? pctDelta(curr.totals.emailClicks, yoy.totals.emailClicks) : null,
     },
     series,
     leadMix,

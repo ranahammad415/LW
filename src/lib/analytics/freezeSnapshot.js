@@ -56,24 +56,50 @@ function queryPositions(rows) {
  * client/cycle. Exported so the live analytics endpoint can reuse the exact
  * same shape as a frozen snapshot.
  */
+/** Shift a UTC date back one calendar year, clamping invalid days (e.g. Feb 29). */
+function shiftYearBack(d) {
+  const y = d.getUTCFullYear() - 1;
+  const m = d.getUTCMonth();
+  const day = d.getUTCDate();
+  const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+  return new Date(Date.UTC(y, m, Math.min(day, lastDay)));
+}
+
+/** Same calendar window one year earlier (YoY compare). */
+function previousYearWindow(start, end) {
+  return { start: shiftYearBack(start), end: shiftYearBack(end) };
+}
+
 export async function buildClientAnalytics(clientId, cycle, opts = {}) {
   const { start, end } = opts.range || cycleRange(cycle);
   // `prevRange` may be explicitly null (compare disabled); only fall back to the
   // prior calendar month when the caller did not specify a comparison window.
   const prev = 'prevRange' in opts ? opts.prevRange : previousCycleRange(cycle);
+  // `yoyRange` may be explicitly null (YoY compare disabled); default to prior year.
+  const yoy = 'yoyRange' in opts ? opts.yoyRange : previousYearWindow(start, end);
 
   // GSC daily traffic for the period (aggregated across projects).
   const traffic = await getClientTrafficSeries(clientId, { start, end });
-  const prevTraffic = prev
-    ? await getClientTrafficSeries(clientId, { start: prev.start, end: prev.end })
-    : null;
+  const [prevTraffic, yoyTraffic] = await Promise.all([
+    prev ? getClientTrafficSeries(clientId, { start: prev.start, end: prev.end }) : Promise.resolve(null),
+    yoy ? getClientTrafficSeries(clientId, { start: yoy.start, end: yoy.end }) : Promise.resolve(null),
+  ]);
   const hasPrevTraffic = !!prevTraffic && (prevTraffic.series || []).length > 0;
+  const hasYoyTraffic = !!yoyTraffic && (yoyTraffic.series || []).length > 0;
   const trafficDeltas = hasPrevTraffic
     ? {
         clicks: pctDelta(traffic.totals.clicks, prevTraffic.totals.clicks),
         impressions: pctDelta(traffic.totals.impressions, prevTraffic.totals.impressions),
         ctr: pctDelta(traffic.totals.ctr, prevTraffic.totals.ctr),
         position: pctDelta(traffic.totals.position, prevTraffic.totals.position),
+      }
+    : null;
+  const trafficYoyDeltas = hasYoyTraffic
+    ? {
+        clicks: pctDelta(traffic.totals.clicks, yoyTraffic.totals.clicks),
+        impressions: pctDelta(traffic.totals.impressions, yoyTraffic.totals.impressions),
+        ctr: pctDelta(traffic.totals.ctr, yoyTraffic.totals.ctr),
+        position: pctDelta(traffic.totals.position, yoyTraffic.totals.position),
       }
     : null;
 
@@ -140,14 +166,19 @@ export async function buildClientAnalytics(clientId, cycle, opts = {}) {
     runFinishedAt: latestAiRun?.finishedAt || null,
   };
 
-  // GA4 + GMB rollups for the cycle month (with previous month for deltas)
-  const [ga4Rows, prevGa4Rows, gmbRows, prevGmbRows] = await Promise.all([
+  // GA4 + GMB rollups for the cycle month (with previous / YoY windows for deltas)
+  const [ga4Rows, prevGa4Rows, yoyGa4Rows, gmbRows, prevGmbRows, yoyGmbRows] = await Promise.all([
     projectIds.length
       ? prisma.ga4DailyMetric.findMany({ where: { projectId: { in: projectIds }, date: { gte: start, lte: end } } })
       : [],
     prev && projectIds.length
       ? prisma.ga4DailyMetric.findMany({
           where: { projectId: { in: projectIds }, date: { gte: prev.start, lte: prev.end } },
+        })
+      : [],
+    yoy && projectIds.length
+      ? prisma.ga4DailyMetric.findMany({
+          where: { projectId: { in: projectIds }, date: { gte: yoy.start, lte: yoy.end } },
         })
       : [],
     projectIds.length
@@ -158,9 +189,15 @@ export async function buildClientAnalytics(clientId, cycle, opts = {}) {
           where: { projectId: { in: projectIds }, date: { gte: prev.start, lte: prev.end } },
         })
       : [],
+    yoy && projectIds.length
+      ? prisma.gmbDailyMetric.findMany({
+          where: { projectId: { in: projectIds }, date: { gte: yoy.start, lte: yoy.end } },
+        })
+      : [],
   ]);
   const sumRows = (rows, f) => rows.reduce((s, r) => s + (r[f] || 0), 0);
   const hasPrevGa4 = prevGa4Rows.length > 0;
+  const hasYoyGa4 = yoyGa4Rows.length > 0;
   const ga4 = {
     sessions: sumRows(ga4Rows, 'sessions'),
     users: sumRows(ga4Rows, 'totalUsers'),
@@ -175,12 +212,23 @@ export async function buildClientAnalytics(clientId, cycle, opts = {}) {
           pageViews: pctDelta(sumRows(ga4Rows, 'pageViews'), sumRows(prevGa4Rows, 'pageViews')),
         }
       : null,
+    yoyDeltas: hasYoyGa4
+      ? {
+          sessions: pctDelta(sumRows(ga4Rows, 'sessions'), sumRows(yoyGa4Rows, 'sessions')),
+          users: pctDelta(sumRows(ga4Rows, 'totalUsers'), sumRows(yoyGa4Rows, 'totalUsers')),
+          conversions: pctDelta(sumRows(ga4Rows, 'conversions'), sumRows(yoyGa4Rows, 'conversions')),
+          pageViews: pctDelta(sumRows(ga4Rows, 'pageViews'), sumRows(yoyGa4Rows, 'pageViews')),
+        }
+      : null,
   };
 
   const hasPrevGmb = prevGmbRows.length > 0;
+  const hasYoyGmb = yoyGmbRows.length > 0;
   const gmbActions = sumRows(gmbRows, 'websiteClicks') + sumRows(gmbRows, 'directions') + sumRows(gmbRows, 'calls');
   const prevGmbActions =
     sumRows(prevGmbRows, 'websiteClicks') + sumRows(prevGmbRows, 'directions') + sumRows(prevGmbRows, 'calls');
+  const yoyGmbActions =
+    sumRows(yoyGmbRows, 'websiteClicks') + sumRows(yoyGmbRows, 'directions') + sumRows(yoyGmbRows, 'calls');
   const gmb = {
     impressions: sumRows(gmbRows, 'impressions'),
     directions: sumRows(gmbRows, 'directions'),
@@ -199,6 +247,12 @@ export async function buildClientAnalytics(clientId, cycle, opts = {}) {
       ? {
           impressions: pctDelta(sumRows(gmbRows, 'impressions'), sumRows(prevGmbRows, 'impressions')),
           actions: pctDelta(gmbActions, prevGmbActions),
+        }
+      : null,
+    yoyDeltas: hasYoyGmb
+      ? {
+          impressions: pctDelta(sumRows(gmbRows, 'impressions'), sumRows(yoyGmbRows, 'impressions')),
+          actions: pctDelta(gmbActions, yoyGmbActions),
         }
       : null,
   };
@@ -266,7 +320,12 @@ export async function buildClientAnalytics(clientId, cycle, opts = {}) {
     frozenAt: new Date().toISOString(),
     cycle: { month: cycle.month, year: cycle.year },
     range: { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) },
-    traffic: { series: traffic.series, totals: traffic.totals, deltas: trafficDeltas },
+    traffic: {
+      series: traffic.series,
+      totals: traffic.totals,
+      deltas: trafficDeltas,
+      yoyDeltas: trafficYoyDeltas,
+    },
     funnel,
     movers,
     metrics: Object.fromEntries(latestByType),
