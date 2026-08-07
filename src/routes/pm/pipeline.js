@@ -83,6 +83,14 @@ const WP_MUTATION_TIMEOUT_MS = 4500;
 const WP_HEAL_TIMEOUT_MS = 2000;
 
 /**
+ * Return a CORS-safe 202 to the browser before Hostinger/edge idle limits
+ * drop the connection (bare 502 → "Failed to fetch"). WP work continues.
+ */
+const REGENERATE_SOFT_TIMEOUT_MS = Number(
+  process.env.PIPELINE_REGENERATE_SOFT_TIMEOUT_MS || 1500
+);
+
+/**
  * Best-effort: pull PM/client preview URLs for one pipeline from WordPress.
  * Used when regenerate times out/fails so OS can still backfill any URLs WP
  * is able to display (or when legacy rows omit token_plain until regenerate).
@@ -683,6 +691,8 @@ export async function pmPipelineRoutes(app) {
   // POST /api/pm/pipeline/:projectId/:wpPipelineId/regenerate-preview-links
   // Explicitly rotate PM + client preview tokens on WordPress (old URLs 301 to
   // new), then persist the fresh URLs on the OS review row.
+  // Soft-timeout: return 202 within ~1.5s so edge proxies never emit a bare 502
+  // (no CORS → browser "Failed to fetch") while WP work continues in background.
   app.post(
     '/pipeline/:projectId/:wpPipelineId/regenerate-preview-links',
     { onRequest: [app.verifyJwt, requirePmOrOwner] },
@@ -748,116 +758,207 @@ export async function pmPipelineRoutes(app) {
           });
         };
 
-        let res;
-        const wpStartedAt = Date.now();
-        try {
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), WP_MUTATION_TIMEOUT_MS);
+        const runRegenerateWork = async () => {
+          let res;
+          const wpStartedAt = Date.now();
           try {
-            res = await fetch(url, {
-              method: 'POST',
-              headers: {
-                ...wpHeaders(project.wpApiKey),
-                'Content-Type': 'application/json',
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), WP_MUTATION_TIMEOUT_MS);
+            try {
+              res = await fetch(url, {
+                method: 'POST',
+                headers: {
+                  ...wpHeaders(project.wpApiKey),
+                  'Content-Type': 'application/json',
+                },
+                body: '{}',
+                signal: controller.signal,
+              });
+            } finally {
+              clearTimeout(timer);
+            }
+          } catch (fetchErr) {
+            const elapsedMs = Date.now() - wpStartedAt;
+            request.log.error(
+              { err: fetchErr, url, elapsedMs, timeoutMs: WP_MUTATION_TIMEOUT_MS },
+              'WP regenerate-links fetch failed'
+            );
+            const isTimeout = fetchErr?.name === 'TimeoutError' || fetchErr?.name === 'AbortError';
+            const healedRow = await tryHealPreviewUrls().catch(() => null);
+            if (healedRow?.pmPreviewUrl || healedRow?.clientPreviewUrl) {
+              return {
+                ok: true,
+                body: {
+                  success: true,
+                  healedFromSync: true,
+                  pmPreviewUrl: healedRow.pmPreviewUrl,
+                  clientPreviewUrl: healedRow.clientPreviewUrl,
+                  pipeline: formatReview(healedRow),
+                  message: isTimeout
+                    ? 'WordPress did not finish rotating links in time; refreshed existing preview URLs from the site.'
+                    : 'Could not reach WordPress to rotate links; refreshed existing preview URLs from the site.',
+                },
+              };
+            }
+            return {
+              ok: false,
+              status: 502,
+              body: {
+                message: isTimeout
+                  ? 'WordPress did not respond in time. Please try again.'
+                  : 'Unable to reach WordPress site. Check the project WP URL and that the Localwave Agent plugin is active.',
               },
-              body: '{}',
-              signal: controller.signal,
-            });
-          } finally {
-            clearTimeout(timer);
+            };
           }
-        } catch (fetchErr) {
-          const elapsedMs = Date.now() - wpStartedAt;
-          request.log.error(
-            { err: fetchErr, url, elapsedMs, timeoutMs: WP_MUTATION_TIMEOUT_MS },
-            'WP regenerate-links fetch failed'
-          );
-          const isTimeout = fetchErr?.name === 'TimeoutError' || fetchErr?.name === 'AbortError';
-          // On immediate network errors, try a short GET heal. On abort/timeout we
-          // already spent the mutation budget — still attempt a brief heal so the
-          // browser always gets JSON (and any existing WP URLs) instead of a reset.
-          const healedRow = await tryHealPreviewUrls().catch(() => null);
-          if (healedRow?.pmPreviewUrl || healedRow?.clientPreviewUrl) {
-            return reply.send({
+
+          const json = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            const wpCode = json.code || json.data?.status;
+            const wpMsg = json.message || '';
+            const missingRoute =
+              res.status === 404 ||
+              wpCode === 'rest_no_route' ||
+              /no route was found/i.test(wpMsg);
+            const healedRow = await tryHealPreviewUrls().catch(() => null);
+            if (healedRow?.pmPreviewUrl || healedRow?.clientPreviewUrl) {
+              return {
+                ok: true,
+                body: {
+                  success: true,
+                  healedFromSync: true,
+                  pmPreviewUrl: healedRow.pmPreviewUrl,
+                  clientPreviewUrl: healedRow.clientPreviewUrl,
+                  pipeline: formatReview(healedRow),
+                  message: missingRoute
+                    ? 'WordPress is missing the regenerate-links endpoint; refreshed existing preview URLs. Update the Localwave Agent plugin to 1.9.4+ to rotate links.'
+                    : wpMsg ||
+                      'WordPress could not regenerate preview links; refreshed existing URLs instead.',
+                },
+              };
+            }
+            return {
+              ok: false,
+              status: missingRoute
+                ? 502
+                : res.status >= 400 && res.status < 600
+                  ? res.status
+                  : 502,
+              body: {
+                message: missingRoute
+                  ? 'WordPress is missing the regenerate-links endpoint. Update the Localwave Agent (agency-os-bridge) plugin on that site to 1.9.4+, then try again.'
+                  : wpMsg || 'WordPress could not regenerate preview links.',
+              },
+            };
+          }
+
+          let pmPreviewUrl =
+            String(json.pmPreviewUrl || json.pipeline?.pmPreviewUrl || '').slice(0, 1000) || null;
+          let clientPreviewUrl =
+            String(json.clientPreviewUrl || json.pipeline?.clientPreviewUrl || '').slice(0, 1000) ||
+            null;
+
+          if (!pmPreviewUrl && !clientPreviewUrl) {
+            const healed = await fetchWpPipelinePreviewUrls({
+              baseUrl,
+              apiKey: project.wpApiKey,
+              pipelineId,
+              wpPostId: existing.wpPostId || null,
+            }).catch(() => null);
+            if (healed) {
+              pmPreviewUrl = healed.pmPreviewUrl;
+              clientPreviewUrl = healed.clientPreviewUrl;
+            }
+          }
+
+          const updated = await prisma.wpContentReview.update({
+            where: { id: existing.id },
+            data: {
+              ...(pmPreviewUrl ? { pmPreviewUrl } : {}),
+              ...(clientPreviewUrl ? { clientPreviewUrl } : {}),
+              lastEventType: 'pipeline_links_regenerated',
+              wpUpdatedAt: new Date(),
+            },
+            include: reviewInclude,
+          });
+
+          return {
+            ok: true,
+            body: {
               success: true,
-              healedFromSync: true,
-              pmPreviewUrl: healedRow.pmPreviewUrl,
-              clientPreviewUrl: healedRow.clientPreviewUrl,
-              pipeline: formatReview(healedRow),
-              message: isTimeout
-                ? 'WordPress did not finish rotating links in time; refreshed existing preview URLs from the site.'
-                : 'Could not reach WordPress to rotate links; refreshed existing preview URLs from the site.',
+              pmPreviewUrl: updated.pmPreviewUrl,
+              clientPreviewUrl: updated.clientPreviewUrl,
+              pipeline: formatReview(updated),
+            },
+          };
+        };
+
+        const workPromise = runRegenerateWork();
+
+        const outcome = await Promise.race([
+          workPromise.then(
+            (result) => ({ kind: 'done', result }),
+            (err) => ({ kind: 'error', err }),
+          ),
+          new Promise((resolve) =>
+            setTimeout(() => resolve({ kind: 'pending' }), REGENERATE_SOFT_TIMEOUT_MS),
+          ),
+        ]);
+
+        if (outcome.kind === 'pending') {
+          // Do not await — keep WP regenerate/heal off the browser critical path.
+          workPromise
+            .then((result) => {
+              if (result?.ok) {
+                request.log.info(
+                  {
+                    reviewId: existing.id,
+                    projectId,
+                    wpPipelineId: pipelineId,
+                    healedFromSync: !!result.body?.healedFromSync,
+                  },
+                  'Preview links regenerate finished after soft timeout',
+                );
+              } else {
+                request.log.warn(
+                  {
+                    reviewId: existing.id,
+                    projectId,
+                    wpPipelineId: pipelineId,
+                    message: result?.body?.message,
+                  },
+                  'Preview links regenerate failed after soft timeout',
+                );
+              }
+            })
+            .catch((err) => {
+              request.log.error(
+                { err, reviewId: existing.id, projectId, wpPipelineId: pipelineId },
+                'Preview links regenerate crashed after soft timeout',
+              );
             });
-          }
-          return reply.status(502).send({
-            message: isTimeout
-              ? 'WordPress did not respond in time. Please try again.'
-              : 'Unable to reach WordPress site. Check the project WP URL and that the Localwave Agent plugin is active.',
+
+          return reply.status(202).send({
+            status: 'regenerating',
+            projectId,
+            wpPipelineId: pipelineId,
+            reviewId: existing.id,
+            message:
+              'Review links are still regenerating. Poll until preview URLs appear.',
           });
         }
 
-        const json = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          const wpCode = json.code || json.data?.status;
-          const wpMsg = json.message || '';
-          const missingRoute =
-            res.status === 404 ||
-            wpCode === 'rest_no_route' ||
-            /no route was found/i.test(wpMsg);
-          const healedRow = await tryHealPreviewUrls().catch(() => null);
-          if (healedRow?.pmPreviewUrl || healedRow?.clientPreviewUrl) {
-            return reply.send({
-              success: true,
-              healedFromSync: true,
-              pmPreviewUrl: healedRow.pmPreviewUrl,
-              clientPreviewUrl: healedRow.clientPreviewUrl,
-              pipeline: formatReview(healedRow),
-              message: missingRoute
-                ? 'WordPress is missing the regenerate-links endpoint; refreshed existing preview URLs. Update the Localwave Agent plugin to 1.9.4+ to rotate links.'
-                : (wpMsg || 'WordPress could not regenerate preview links; refreshed existing URLs instead.'),
-            });
-          }
-          return reply.status(missingRoute ? 502 : res.status >= 400 && res.status < 600 ? res.status : 502).send({
-            message: missingRoute
-              ? 'WordPress is missing the regenerate-links endpoint. Update the Localwave Agent (agency-os-bridge) plugin on that site to 1.9.4+, then try again.'
-              : wpMsg || 'WordPress could not regenerate preview links.',
+        if (outcome.kind === 'error') {
+          request.log.error(outcome.err);
+          return reply.status(500).send({ message: 'Failed to regenerate preview links' });
+        }
+
+        const { result } = outcome;
+        if (!result?.ok) {
+          return reply.status(result?.status || 502).send(result?.body || {
+            message: 'Failed to regenerate preview links',
           });
         }
-
-        let pmPreviewUrl = String(json.pmPreviewUrl || json.pipeline?.pmPreviewUrl || '').slice(0, 1000) || null;
-        let clientPreviewUrl =
-          String(json.clientPreviewUrl || json.pipeline?.clientPreviewUrl || '').slice(0, 1000) || null;
-
-        if (!pmPreviewUrl && !clientPreviewUrl) {
-          const healed = await fetchWpPipelinePreviewUrls({
-            baseUrl,
-            apiKey: project.wpApiKey,
-            pipelineId,
-            wpPostId: existing.wpPostId || null,
-          }).catch(() => null);
-          if (healed) {
-            pmPreviewUrl = healed.pmPreviewUrl;
-            clientPreviewUrl = healed.clientPreviewUrl;
-          }
-        }
-
-        const updated = await prisma.wpContentReview.update({
-          where: { id: existing.id },
-          data: {
-            ...(pmPreviewUrl ? { pmPreviewUrl } : {}),
-            ...(clientPreviewUrl ? { clientPreviewUrl } : {}),
-            lastEventType: 'pipeline_links_regenerated',
-            wpUpdatedAt: new Date(),
-          },
-          include: reviewInclude,
-        });
-
-        return reply.send({
-          success: true,
-          pmPreviewUrl: updated.pmPreviewUrl,
-          clientPreviewUrl: updated.clientPreviewUrl,
-          pipeline: formatReview(updated),
-        });
+        return reply.send(result.body);
       } catch (err) {
         request.log.error(err);
         // Always return JSON — never let an unexpected throw become a dropped connection.
