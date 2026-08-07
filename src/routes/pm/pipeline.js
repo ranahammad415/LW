@@ -721,10 +721,23 @@ export async function pmPipelineRoutes(app) {
         }
 
         const baseUrl = project.wpUrl.replace(/\/$/, '');
-        // Prefer WAF-safe path; fall back to legacy regenerate-links.
-        const wpPaths = [
-          `${baseUrl}/wp-json/lwa/v1/pipeline/${pipelineId}/renew-preview`,
-          `${baseUrl}/wp-json/lwa/v1/pipeline/${pipelineId}/regenerate-links`,
+        // Try several WAF-safe shapes. milwaukee-signs.com resets regenerate-links
+        // (and sometimes renew-preview); change-type already works on that host.
+        const wpAttempts = [
+          { method: 'POST', url: `${baseUrl}/wp-json/lwa/v1/pipeline/${pipelineId}/rotate`, body: '{}' },
+          { method: 'GET', url: `${baseUrl}/wp-json/lwa/v1/pipeline/${pipelineId}/rotate` },
+          {
+            method: 'POST',
+            url: `${baseUrl}/?rest_route=/lwa/v1/pipeline/${pipelineId}/rotate`,
+            body: '{}',
+          },
+          {
+            method: 'POST',
+            url: `${baseUrl}/wp-json/lwa/v1/pipeline/${pipelineId}/change-type`,
+            body: JSON.stringify({ rotate_links: true }),
+          },
+          { method: 'POST', url: `${baseUrl}/wp-json/lwa/v1/pipeline/${pipelineId}/renew-preview`, body: '{}' },
+          { method: 'POST', url: `${baseUrl}/wp-json/lwa/v1/pipeline/${pipelineId}/regenerate-links`, body: '{}' },
         ];
 
         const reviewInclude = {
@@ -752,17 +765,17 @@ export async function pmPipelineRoutes(app) {
           });
         };
 
-        const postWpRenew = async (url) => {
+        const callWpRenew = async ({ method, url, body }) => {
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), WP_MUTATION_TIMEOUT_MS);
           try {
             return await fetch(url, {
-              method: 'POST',
+              method,
               headers: {
                 ...wpHeaders(project.wpApiKey),
-                'Content-Type': 'application/json',
+                ...(body ? { 'Content-Type': 'application/json' } : {}),
               },
-              body: '{}',
+              ...(body ? { body } : {}),
               signal: controller.signal,
             });
           } finally {
@@ -773,15 +786,15 @@ export async function pmPipelineRoutes(app) {
         const runRegenerateWork = async () => {
           let res = null;
           let lastFetchErr = null;
-          let usedUrl = wpPaths[0];
+          let usedUrl = wpAttempts[0].url;
 
-          for (const url of wpPaths) {
-            usedUrl = url;
+          for (let i = 0; i < wpAttempts.length; i += 1) {
+            const attempt = wpAttempts[i];
+            usedUrl = attempt.url;
             const wpStartedAt = Date.now();
             try {
-              res = await postWpRenew(url);
+              res = await callWpRenew(attempt);
               lastFetchErr = null;
-              // rest_no_route → try next path; other responses stop the loop.
               if (!res.ok) {
                 const probe = await res.clone().json().catch(() => ({}));
                 const wpCode = probe.code || probe.data?.status;
@@ -790,8 +803,11 @@ export async function pmPipelineRoutes(app) {
                   res.status === 404 ||
                   wpCode === 'rest_no_route' ||
                   /no route was found/i.test(wpMsg);
-                if (missingRoute && url !== wpPaths[wpPaths.length - 1]) {
-                  request.log.warn({ url, status: res.status }, 'WP renew path missing; trying legacy');
+                if (missingRoute && i < wpAttempts.length - 1) {
+                  request.log.warn(
+                    { url: attempt.url, method: attempt.method, status: res.status },
+                    'WP rotate path missing; trying next'
+                  );
                   continue;
                 }
               }
@@ -800,11 +816,16 @@ export async function pmPipelineRoutes(app) {
               lastFetchErr = fetchErr;
               const elapsedMs = Date.now() - wpStartedAt;
               request.log.error(
-                { err: fetchErr, url, elapsedMs, timeoutMs: WP_MUTATION_TIMEOUT_MS },
-                'WP renew-preview fetch failed'
+                {
+                  err: fetchErr,
+                  url: attempt.url,
+                  method: attempt.method,
+                  elapsedMs,
+                  timeoutMs: WP_MUTATION_TIMEOUT_MS,
+                },
+                'WP rotate/renew fetch failed'
               );
-              // ECONNRESET / abort on this path — try the next alias.
-              if (url !== wpPaths[wpPaths.length - 1]) continue;
+              if (i < wpAttempts.length - 1) continue;
             }
           }
 
@@ -832,7 +853,7 @@ export async function pmPipelineRoutes(app) {
               body: {
                 message: isTimeout
                   ? 'WordPress did not respond in time. Please try again.'
-                  : 'Unable to reach WordPress renew-preview endpoint (connection reset). Update the Localwave Agent plugin on that site to 1.9.7+, then try again.',
+                  : 'Unable to reach WordPress to rotate preview links (connection reset by site WAF). Update the Localwave Agent plugin on that site to 1.9.8+, then try again.',
               },
             };
           }
@@ -856,7 +877,7 @@ export async function pmPipelineRoutes(app) {
                   clientPreviewUrl: healedRow.clientPreviewUrl,
                   pipeline: formatReview(healedRow),
                   message: missingRoute
-                    ? 'WordPress is missing the renew-preview endpoint; refreshed existing preview URLs. Update the Localwave Agent plugin to 1.9.7+ to rotate links.'
+                    ? 'WordPress is missing the rotate endpoint; refreshed existing preview URLs. Update the Localwave Agent plugin to 1.9.8+ to rotate links.'
                     : wpMsg ||
                       'WordPress could not regenerate preview links; refreshed existing URLs instead.',
                 },
@@ -866,7 +887,7 @@ export async function pmPipelineRoutes(app) {
               ok: false,
               body: {
                 message: missingRoute
-                  ? 'WordPress is missing the renew-preview endpoint. Update the Localwave Agent (agency-os-bridge) plugin on that site to 1.9.7+, then try again.'
+                  ? 'WordPress is missing the rotate endpoint. Update the Localwave Agent (agency-os-bridge) plugin on that site to 1.9.8+, then try again.'
                   : wpMsg || 'WordPress could not regenerate preview links.',
               },
             };
