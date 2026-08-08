@@ -316,12 +316,19 @@ export async function buildClientAnalytics(clientId, cycle, opts = {}) {
     },
   });
 
+  const trafficSeries = attachYoySeries(traffic.series || [], yoyTraffic?.series || [], [
+    'clicks',
+    'impressions',
+    'ctr',
+    'position',
+  ]);
+
   return {
     frozenAt: new Date().toISOString(),
     cycle: { month: cycle.month, year: cycle.year },
     range: { start: start.toISOString().slice(0, 10), end: end.toISOString().slice(0, 10) },
     traffic: {
-      series: traffic.series,
+      series: trafficSeries,
       totals: traffic.totals,
       deltas: trafficDeltas,
       yoyDeltas: trafficYoyDeltas,
@@ -353,6 +360,27 @@ function aggregateByDate(rows, fields) {
     map.set(key, acc);
   }
   return [...map.values()].sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/**
+ * Merge a YoY series into the current one by day-of-month, adding `<key>Yoy`
+ * fields for chart overlays.
+ */
+function attachYoySeries(series, yoySeries, keys) {
+  if (!yoySeries?.length) return series;
+  const yoyByDom = new Map();
+  for (const r of yoySeries) {
+    const dom = Number(String(r.date).slice(8, 10));
+    if (!Number.isNaN(dom)) yoyByDom.set(dom, r);
+  }
+  return series.map((r) => {
+    const dom = Number(String(r.date).slice(8, 10));
+    const yoy = yoyByDom.get(dom);
+    if (!yoy) return { ...r };
+    const out = { ...r };
+    for (const k of keys) out[`${k}Yoy`] = yoy[k] ?? 0;
+    return out;
+  });
 }
 
 /**
