@@ -84,8 +84,9 @@ export async function buildClientAnalytics(clientId, cycle, opts = {}) {
     prev ? getClientTrafficSeries(clientId, { start: prev.start, end: prev.end }) : Promise.resolve(null),
     yoy ? getClientTrafficSeries(clientId, { start: yoy.start, end: yoy.end }) : Promise.resolve(null),
   ]);
-  const hasPrevTraffic = !!prevTraffic && (prevTraffic.series || []).length > 0;
-  const hasYoyTraffic = !!yoyTraffic && (yoyTraffic.series || []).length > 0;
+  // Prefer real prior activity (not densify-filled zeros) when computing deltas.
+  const hasPrevTraffic = !!prevTraffic?.hasActivity;
+  const hasYoyTraffic = !!yoyTraffic?.hasActivity;
   const trafficDeltas = hasPrevTraffic
     ? {
         clicks: pctDelta(traffic.totals.clicks, prevTraffic.totals.clicks),
@@ -316,12 +317,12 @@ export async function buildClientAnalytics(clientId, cycle, opts = {}) {
     },
   });
 
-  const trafficSeries = attachYoySeries(traffic.series || [], yoyTraffic?.series || [], [
-    'clicks',
-    'impressions',
-    'ctr',
-    'position',
-  ]);
+  const trafficKeys = ['clicks', 'impressions', 'ctr', 'position'];
+  const trafficSeries = attachYoySeries(
+    attachPrevSeries(traffic.series || [], prevTraffic?.series || [], trafficKeys),
+    yoyTraffic?.series || [],
+    trafficKeys
+  );
 
   return {
     frozenAt: new Date().toISOString(),
@@ -363,24 +364,27 @@ function aggregateByDate(rows, fields) {
 }
 
 /**
- * Merge a YoY series into the current one by day-of-month, adding `<key>Yoy`
- * fields for chart overlays.
+ * Merge a compare series into the current one by day index (equal-length windows),
+ * adding `<key><suffix>` fields so charts can overlay on the current x-axis.
  */
-function attachYoySeries(series, yoySeries, keys) {
-  if (!yoySeries?.length) return series;
-  const yoyByDom = new Map();
-  for (const r of yoySeries) {
-    const dom = Number(String(r.date).slice(8, 10));
-    if (!Number.isNaN(dom)) yoyByDom.set(dom, r);
-  }
-  return series.map((r) => {
-    const dom = Number(String(r.date).slice(8, 10));
-    const yoy = yoyByDom.get(dom);
-    if (!yoy) return { ...r };
+function attachAlignedSeries(series, otherSeries, keys, suffix) {
+  return (series || []).map((r, i) => {
+    const other = (otherSeries || [])[i];
+    if (!other) return { ...r };
     const out = { ...r };
-    for (const k of keys) out[`${k}Yoy`] = yoy[k] ?? 0;
+    for (const k of keys) out[`${k}${suffix}`] = other[k] ?? 0;
     return out;
   });
+}
+
+/** Year-over-year overlay (`*Yoy` keys). */
+function attachYoySeries(series, yoySeries, keys) {
+  return attachAlignedSeries(series, yoySeries, keys, 'Yoy');
+}
+
+/** Previous-period overlay (`*Prev` keys). */
+function attachPrevSeries(series, prevSeries, keys) {
+  return attachAlignedSeries(series, prevSeries, keys, 'Prev');
 }
 
 /**

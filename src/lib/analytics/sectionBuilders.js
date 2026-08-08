@@ -86,19 +86,39 @@ function metaRange(ctx) {
 }
 
 /**
- * Merge an aligned comparison series into the current one by day-of-month index,
- * adding `<key><suffix>` fields so charts can overlay. Returns a new array;
- * leaves rows untouched where no matching day exists.
+ * Fill every calendar day in [start, end] from a sparse series so equal-length
+ * compare windows can be index-zipped for chart overlays.
+ */
+function densifyDailySeries(start, end, sparseSeries, keys) {
+  const byDate = new Map();
+  for (const r of sparseSeries || []) {
+    const key = String(r.date).slice(0, 10);
+    byDate.set(key, r);
+  }
+  const out = [];
+  const s = start instanceof Date ? start : new Date(`${String(start).slice(0, 10)}T00:00:00.000Z`);
+  const e = end instanceof Date ? end : new Date(`${String(end).slice(0, 10)}T00:00:00.000Z`);
+  for (let t = s.getTime(); t <= e.getTime(); t += MS_DAY) {
+    const date = new Date(t).toISOString().slice(0, 10);
+    const src = byDate.get(date);
+    if (src) {
+      out.push({ ...src, date });
+    } else {
+      const row = { date };
+      for (const k of keys) row[k] = 0;
+      out.push(row);
+    }
+  }
+  return out;
+}
+
+/**
+ * Merge a compare series into the current one by day index (equal-length windows),
+ * adding `<key><suffix>` fields so charts can overlay on the current x-axis.
  */
 function attachAlignedSeries(series, otherSeries, keys, suffix) {
-  const otherByDom = new Map();
-  for (const r of otherSeries || []) {
-    const dom = Number(String(r.date).slice(8, 10));
-    if (!Number.isNaN(dom)) otherByDom.set(dom, r);
-  }
-  return series.map((r) => {
-    const dom = Number(String(r.date).slice(8, 10));
-    const other = otherByDom.get(dom);
+  return (series || []).map((r, i) => {
+    const other = (otherSeries || [])[i];
     if (!other) return { ...r };
     const out = { ...r };
     for (const k of keys) out[`${k}${suffix}`] = other[k] ?? 0;
@@ -385,8 +405,9 @@ export async function buildGscView(clientIds, view, query) {
   });
 
   const totals = traffic.totals;
-  const prev = prevTraffic?.totals ?? null;
-  const yoy = yoyTraffic?.totals ?? null;
+  const prev = prevTraffic?.hasActivity ? prevTraffic.totals : null;
+  const yoy = yoyTraffic?.hasActivity ? yoyTraffic.totals : null;
+  const gscSeriesKeys = ['clicks', 'impressions', 'ctr', 'position'];
 
   const data = {
     kpis: {
@@ -404,12 +425,12 @@ export async function buildGscView(clientIds, view, query) {
       ctrYoyDelta: yoy ? pctDelta(totals.ctr, yoy.ctr) : null,
       positionYoyDelta: yoy ? pctDelta(totals.position, yoy.position) : null,
     },
-    series: attachYoySeries(traffic.series, yoyTraffic?.series || [], [
-      'clicks',
-      'impressions',
-      'ctr',
-      'position',
-    ]),
+    // GSC series is already densified; index-zip YoY (and prev when present).
+    series: attachYoySeries(
+      attachPrevSeries(traffic.series, prevTraffic?.series || [], gscSeriesKeys),
+      yoyTraffic?.series || [],
+      gscSeriesKeys
+    ),
     brandGeneric: {
       brand: { keywords: brand.length, clicks: sum(brand, 'clicks'), impressions: sum(brand, 'impressions') },
       generic: { keywords: generic.length, clicks: sum(generic, 'clicks'), impressions: sum(generic, 'impressions') },
@@ -488,9 +509,16 @@ export async function buildGa4View(clientIds, view, query) {
   const hasPrev = prevRows.length > 0;
   const hasYoy = yoyRows.length > 0;
   const ga4SeriesKeys = ['sessions', 'totalUsers', 'conversions', 'pageViews'];
+  const currSeries = densifyDailySeries(start, end, curr.series, ga4SeriesKeys);
+  const prevSeriesDense = prevRange
+    ? densifyDailySeries(prevRange.start, prevRange.end, prevAgg.series, ga4SeriesKeys)
+    : [];
+  const yoySeriesDense = yoyRange
+    ? densifyDailySeries(yoyRange.start, yoyRange.end, yoyAgg.series, ga4SeriesKeys)
+    : [];
   const series = attachYoySeries(
-    attachPrevSeries(curr.series, prevAgg.series, ga4SeriesKeys),
-    yoyAgg.series,
+    attachPrevSeries(currSeries, prevSeriesDense, ga4SeriesKeys),
+    yoySeriesDense,
     ga4SeriesKeys
   );
   const totals = curr.totals;
@@ -637,11 +665,22 @@ export async function buildGmbView(clientIds, view, query) {
     'directions',
     'calls',
   ];
-  const prevSeries = aggregateGmb(prevRows);
-  const yoySeries = aggregateGmb(yoyRows);
+  const prevSeries = densifyDailySeries(
+    prevRange?.start || start,
+    prevRange?.end || end,
+    aggregateGmb(prevRows),
+    gmbSeriesKeys
+  );
+  const yoySeries = densifyDailySeries(
+    yoyRange?.start || start,
+    yoyRange?.end || end,
+    aggregateGmb(yoyRows),
+    gmbSeriesKeys
+  );
+  const currGmbSeries = densifyDailySeries(start, end, aggregateGmb(rows), gmbSeriesKeys);
   const series = attachYoySeries(
-    attachPrevSeries(aggregateGmb(rows), prevSeries, gmbSeriesKeys),
-    yoySeries,
+    attachPrevSeries(currGmbSeries, prevRange ? prevSeries : [], gmbSeriesKeys),
+    yoyRange ? yoySeries : [],
     gmbSeriesKeys
   );
   const hasPrev = prevRows.length > 0;
@@ -1173,9 +1212,16 @@ export async function buildLeadsView(clientIds, view, query) {
     'emailClicks',
     'intentClicks',
   ];
+  const currSeries = densifyDailySeries(start, end, curr.series, leadSeriesKeys);
+  const prevSeriesDense = prevRange
+    ? densifyDailySeries(prevRange.start, prevRange.end, prev.series, leadSeriesKeys)
+    : [];
+  const yoySeriesDense = yoyRange
+    ? densifyDailySeries(yoyRange.start, yoyRange.end, yoy.series, leadSeriesKeys)
+    : [];
   const series = attachYoySeries(
-    attachPrevSeries(curr.series, prev.series, leadSeriesKeys),
-    yoy.series,
+    attachPrevSeries(currSeries, prevSeriesDense, leadSeriesKeys),
+    yoySeriesDense,
     leadSeriesKeys
   );
 
