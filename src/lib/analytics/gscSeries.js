@@ -1,27 +1,14 @@
 /**
  * Reads persisted GSC daily time-series (GscDailyMetric) and shapes it into
  * chart-ready series keyed to a core Client (aggregated across its projects).
+ * When local coverage for the requested range is incomplete, live-heals from
+ * the GSC API so dashboard totals match Search Console.
  */
 import { prisma } from '../prisma.js';
+import { MS_DAY, fmt, persistDailyRange, utcDay } from '../gscDailyPersist.js';
 
-const MS_DAY = 86400000;
-
-/** Format a Date as YYYY-MM-DD (UTC). */
-function fmt(d) {
-  return d.toISOString().slice(0, 10);
-}
-
-/** Normalize any Date/string into a UTC midnight Date for @db.Date queries. */
-function utcDay(value) {
-  if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
-  }
-  if (typeof value === 'string' && value.length >= 10) {
-    return new Date(`${value.slice(0, 10)}T00:00:00.000Z`);
-  }
-  const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-}
+/** Coverage below this ratio triggers a live GSC fetch for the range. */
+const MIN_COVERAGE_RATIO = 0.9;
 
 /**
  * Fill every calendar day in [start, end] so equal-length compare windows
@@ -49,10 +36,82 @@ function densifySeries(start, end, byDate) {
   return series;
 }
 
+function expectedDays(start, end) {
+  return Math.round((end.getTime() - start.getTime()) / MS_DAY) + 1;
+}
+
+/**
+ * Load + aggregate GscDailyMetric rows for a client over [start, end].
+ */
+async function loadAggregated(clientId, start, end, projectIds) {
+  if (!projectIds.length) {
+    return {
+      byDate: new Map(),
+      totals: { clicks: 0, impressions: 0, ctr: 0, position: 0 },
+      hasActivity: false,
+      storedDays: 0,
+      newestKey: null,
+    };
+  }
+
+  const rows = await prisma.gscDailyMetric.findMany({
+    where: {
+      projectId: { in: projectIds },
+      date: { gte: start, lte: end },
+    },
+    orderBy: { date: 'asc' },
+  });
+
+  const byDate = new Map();
+  for (const r of rows) {
+    const key = fmt(utcDay(r.date));
+    const acc = byDate.get(key) || { clicks: 0, impressions: 0, posWeight: 0 };
+    acc.clicks += r.clicks;
+    acc.impressions += r.impressions;
+    acc.posWeight += r.position * (r.impressions || 1);
+    byDate.set(key, acc);
+  }
+
+  let totalClicks = 0;
+  let totalImpr = 0;
+  let totalPosWeight = 0;
+  let newestKey = null;
+  for (const [date, acc] of byDate.entries()) {
+    totalClicks += acc.clicks;
+    totalImpr += acc.impressions;
+    totalPosWeight += acc.posWeight;
+    if (!newestKey || date > newestKey) newestKey = date;
+  }
+
+  return {
+    byDate,
+    totals: {
+      clicks: totalClicks,
+      impressions: totalImpr,
+      ctr: totalImpr > 0 ? Number(((totalClicks / totalImpr) * 100).toFixed(2)) : 0,
+      position: totalImpr > 0 ? Number((totalPosWeight / totalImpr).toFixed(1)) : 0,
+    },
+    hasActivity: totalClicks > 0 || totalImpr > 0,
+    storedDays: byDate.size,
+    newestKey,
+  };
+}
+
+function coverageIncomplete(start, end, storedDays, newestKey) {
+  const expected = expectedDays(start, end);
+  if (expected <= 0) return false;
+  if (storedDays / expected < MIN_COVERAGE_RATIO) return true;
+  if (!newestKey) return true;
+  const newest = utcDay(newestKey);
+  // Newest stored day more than 1 day before range end → trailing gap.
+  return newest.getTime() < end.getTime() - MS_DAY;
+}
+
 /**
  * Get chart-ready daily traffic series for a client over a date range.
  * Aggregates across all of the client's projects per day and densifies the
- * window so compare overlays can align by day index.
+ * window so compare overlays can align by day index. Live-heals from GSC when
+ * local coverage for the range is incomplete.
  *
  * @param {string} clientId
  * @param {{ start?: Date, end?: Date, days?: number }} [range]
@@ -72,55 +131,40 @@ export async function getClientTrafficSeries(clientId, range = {}) {
 
   const projects = await prisma.project.findMany({
     where: { clientId },
-    select: { id: true },
+    select: { id: true, gscSiteUrl: true },
   });
   const projectIds = projects.map((p) => p.id);
   if (projectIds.length === 0) {
     return empty;
   }
 
-  const rows = await prisma.gscDailyMetric.findMany({
-    where: {
-      projectId: { in: projectIds },
-      date: { gte: start, lte: end },
-    },
-    orderBy: { date: 'asc' },
-  });
+  let agg = await loadAggregated(clientId, start, end, projectIds);
 
-  // Aggregate multiple projects per calendar day.
-  const byDate = new Map();
-  for (const r of rows) {
-    const key = fmt(utcDay(r.date));
-    const acc = byDate.get(key) || { clicks: 0, impressions: 0, posWeight: 0 };
-    acc.clicks += r.clicks;
-    acc.impressions += r.impressions;
-    // Impression-weighted average position across projects.
-    acc.posWeight += r.position * (r.impressions || 1);
-    byDate.set(key, acc);
+  if (coverageIncomplete(start, end, agg.storedDays, agg.newestKey)) {
+    const gscProjects = projects.filter((p) => !!p.gscSiteUrl);
+    if (gscProjects.length) {
+      try {
+        let healed = 0;
+        for (const project of gscProjects) {
+          healed += await persistDailyRange(project, start, end);
+        }
+        // eslint-disable-next-line no-console
+        console.info(
+          `[gscSeries] live-healed ${clientId}: ${fmt(start)} → ${fmt(end)} (${healed} day-rows)`
+        );
+        agg = await loadAggregated(clientId, start, end, projectIds);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[gscSeries] live heal failed for ${clientId}: ${err?.message || err}`
+        );
+      }
+    }
   }
-
-  let totalClicks = 0;
-  let totalImpr = 0;
-  let totalPosWeight = 0;
-  for (const acc of byDate.values()) {
-    totalClicks += acc.clicks;
-    totalImpr += acc.impressions;
-    totalPosWeight += acc.posWeight;
-  }
-
-  // Real prior-window activity only (densify zeros must not invent deltas).
-  const hasActivity = totalClicks > 0 || totalImpr > 0;
-
-  const totals = {
-    clicks: totalClicks,
-    impressions: totalImpr,
-    ctr: totalImpr > 0 ? Number(((totalClicks / totalImpr) * 100).toFixed(2)) : 0,
-    position: totalImpr > 0 ? Number((totalPosWeight / totalImpr).toFixed(1)) : 0,
-  };
 
   return {
-    series: densifySeries(start, end, byDate),
-    totals,
-    hasActivity,
+    series: densifySeries(start, end, agg.byDate),
+    totals: agg.totals,
+    hasActivity: agg.hasActivity,
   };
 }

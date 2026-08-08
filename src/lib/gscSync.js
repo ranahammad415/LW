@@ -4,81 +4,21 @@
  * ClientMetricSnapshot records for the associated client.
  */
 import { prisma } from './prisma.js';
-import { isGscEnabled, isGscAvailable, fetchSearchAnalytics, fetchDailySearchAnalytics } from './gscClient.js';
+import { isGscEnabled, isGscAvailable, fetchSearchAnalytics } from './gscClient.js';
 import { calculateMetrics } from './gscMetrics.js';
-
-const MS_DAY = 86400000;
+import {
+  MS_DAY,
+  addUtcDays,
+  fetchDailyInChunks,
+  fmt,
+  upsertDailyRows,
+  utcDay,
+} from './gscDailyPersist.js';
 
 /** GSC Search Analytics typically retains ~16 months — needed for YoY compare. */
 const YOY_LOOKBACK_DAYS = 487;
 /** Always re-fetch this recent window on every sync (GSC data revises for a few days). */
 const FRESH_DAYS = 30;
-/** Chunk size when pulling long history (keeps each API call small/reliable). */
-const FETCH_CHUNK_DAYS = 90;
-
-/**
- * Format a Date as YYYY-MM-DD (UTC).
- */
-function fmt(d) {
-  return d.toISOString().slice(0, 10);
-}
-
-/** UTC calendar day (midnight). */
-function utcDay(d = new Date()) {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-}
-
-function addUtcDays(d, days) {
-  return new Date(d.getTime() + days * MS_DAY);
-}
-
-/**
- * Upsert daily GSC rows for one project.
- * @returns {Promise<number>} number of days written
- */
-async function upsertDailyRows(projectId, rows) {
-  let upserts = 0;
-  for (const row of rows || []) {
-    const dateStr = row.keys?.[0];
-    if (!dateStr) continue;
-    const date = new Date(`${String(dateStr).slice(0, 10)}T00:00:00.000Z`);
-    if (Number.isNaN(date.getTime())) continue;
-    await prisma.gscDailyMetric.upsert({
-      where: { projectId_date: { projectId, date } },
-      create: {
-        projectId,
-        date,
-        clicks: Math.round(row.clicks || 0),
-        impressions: Math.round(row.impressions || 0),
-        ctr: row.ctr || 0,
-        position: row.position || 0,
-      },
-      update: {
-        clicks: Math.round(row.clicks || 0),
-        impressions: Math.round(row.impressions || 0),
-        ctr: row.ctr || 0,
-        position: row.position || 0,
-      },
-    });
-    upserts++;
-  }
-  return upserts;
-}
-
-/**
- * Fetch daily GSC metrics in chunks for [start, end] (inclusive UTC days).
- */
-async function fetchDailyInChunks(siteUrl, start, end) {
-  const all = [];
-  for (let chunkStart = start; chunkStart.getTime() <= end.getTime(); ) {
-    const chunkEnd = addUtcDays(chunkStart, FETCH_CHUNK_DAYS - 1);
-    const cappedEnd = chunkEnd.getTime() > end.getTime() ? end : chunkEnd;
-    const rows = await fetchDailySearchAnalytics(siteUrl, fmt(chunkStart), fmt(cappedEnd));
-    if (rows?.length) all.push(...rows);
-    chunkStart = addUtcDays(cappedEnd, 1);
-  }
-  return all;
-}
 
 /**
  * Sync daily GSC time-series for a project.
