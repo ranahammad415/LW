@@ -117,7 +117,8 @@ export async function adminIntegrationsRoutes(app) {
     async (request, reply) => {
       let gsc;
       try {
-        gsc = await runGscSync();
+        // Force full ~16 month daily pull so YoY compare has history.
+        gsc = await runGscSync({ forceFullDaily: true });
       } catch (err) {
         request.log.error({ err }, 'Manual GSC sync failed');
         gsc = { error: err.message };

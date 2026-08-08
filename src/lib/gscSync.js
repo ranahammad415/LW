@@ -7,38 +7,46 @@ import { prisma } from './prisma.js';
 import { isGscEnabled, isGscAvailable, fetchSearchAnalytics, fetchDailySearchAnalytics } from './gscClient.js';
 import { calculateMetrics } from './gscMetrics.js';
 
-// How many days of daily time-series to keep fresh on each sync.
-const DAILY_SERIES_DAYS = 30;
+const MS_DAY = 86400000;
+
+/** GSC Search Analytics typically retains ~16 months — needed for YoY compare. */
+const YOY_LOOKBACK_DAYS = 487;
+/** Always re-fetch this recent window on every sync (GSC data revises for a few days). */
+const FRESH_DAYS = 30;
+/** Chunk size when pulling long history (keeps each API call small/reliable). */
+const FETCH_CHUNK_DAYS = 90;
 
 /**
- * Format a Date as YYYY-MM-DD.
+ * Format a Date as YYYY-MM-DD (UTC).
  */
 function fmt(d) {
   return d.toISOString().slice(0, 10);
 }
 
+/** UTC calendar day (midnight). */
+function utcDay(d = new Date()) {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+}
+
+function addUtcDays(d, days) {
+  return new Date(d.getTime() + days * MS_DAY);
+}
+
 /**
- * Fetch the last N days of daily GSC metrics and upsert them as a time-series.
+ * Upsert daily GSC rows for one project.
+ * @returns {Promise<number>} number of days written
  */
-async function syncDailySeries(project) {
-  const now = new Date();
-  const end = new Date(now);
-  end.setDate(end.getDate() - 2); // GSC ~2-day delay
-  const start = new Date(end);
-  start.setDate(start.getDate() - (DAILY_SERIES_DAYS - 1));
-
-  const rows = await fetchDailySearchAnalytics(project.gscSiteUrl, fmt(start), fmt(end));
-
+async function upsertDailyRows(projectId, rows) {
   let upserts = 0;
-  for (const row of rows) {
+  for (const row of rows || []) {
     const dateStr = row.keys?.[0];
     if (!dateStr) continue;
-    const date = new Date(`${dateStr}T00:00:00.000Z`);
+    const date = new Date(`${String(dateStr).slice(0, 10)}T00:00:00.000Z`);
     if (Number.isNaN(date.getTime())) continue;
     await prisma.gscDailyMetric.upsert({
-      where: { projectId_date: { projectId: project.id, date } },
+      where: { projectId_date: { projectId, date } },
       create: {
-        projectId: project.id,
+        projectId,
         date,
         clicks: Math.round(row.clicks || 0),
         impressions: Math.round(row.impressions || 0),
@@ -54,6 +62,85 @@ async function syncDailySeries(project) {
     });
     upserts++;
   }
+  return upserts;
+}
+
+/**
+ * Fetch daily GSC metrics in chunks for [start, end] (inclusive UTC days).
+ */
+async function fetchDailyInChunks(siteUrl, start, end) {
+  const all = [];
+  for (let chunkStart = start; chunkStart.getTime() <= end.getTime(); ) {
+    const chunkEnd = addUtcDays(chunkStart, FETCH_CHUNK_DAYS - 1);
+    const cappedEnd = chunkEnd.getTime() > end.getTime() ? end : chunkEnd;
+    const rows = await fetchDailySearchAnalytics(siteUrl, fmt(chunkStart), fmt(cappedEnd));
+    if (rows?.length) all.push(...rows);
+    chunkStart = addUtcDays(cappedEnd, 1);
+  }
+  return all;
+}
+
+/**
+ * Sync daily GSC time-series for a project.
+ *
+ * - Always refreshes the last {@link FRESH_DAYS} (recent data can revise).
+ * - If history is missing (YoY) or the newest row is stale/gapped, widens the
+ *   pull window so Search Console totals can catch up.
+ * - forceFull re-pulls the entire ~16 month lookback.
+ *
+ * @param {object} project
+ * @param {{ forceFull?: boolean }} [opts]
+ */
+async function syncDailySeries(project, opts = {}) {
+  const end = addUtcDays(utcDay(), -2); // GSC ~2-day delay
+  const fullStart = addUtcDays(end, -(YOY_LOOKBACK_DAYS - 1));
+  const freshStart = addUtcDays(end, -(FRESH_DAYS - 1));
+
+  const [oldest, newest] = await Promise.all([
+    prisma.gscDailyMetric.findFirst({
+      where: { projectId: project.id },
+      orderBy: { date: 'asc' },
+      select: { date: true },
+    }),
+    prisma.gscDailyMetric.findFirst({
+      where: { projectId: project.id },
+      orderBy: { date: 'desc' },
+      select: { date: true },
+    }),
+  ]);
+
+  const oldestDay = oldest?.date ? utcDay(oldest.date) : null;
+  const newestDay = newest?.date ? utcDay(newest.date) : null;
+  const missingHistory = !oldestDay || oldestDay.getTime() > fullStart.getTime();
+  // More than 1 day behind expected GSC end → treat as a recent sync gap.
+  const staleNewest =
+    !newestDay || newestDay.getTime() < addUtcDays(end, -1).getTime();
+
+  let rangeStart = freshStart;
+  let reason = 'fresh';
+
+  if (opts.forceFull || missingHistory) {
+    rangeStart = fullStart;
+    reason = opts.forceFull ? 'forceFull' : 'missingHistory';
+  } else if (staleNewest) {
+    const daysBehind = Math.max(
+      0,
+      Math.round((end.getTime() - newestDay.getTime()) / MS_DAY)
+    );
+    // Cover the gap plus a fresh buffer so revised recent days are re-pulled.
+    const gapStart = addUtcDays(end, -(Math.max(FRESH_DAYS, daysBehind + FRESH_DAYS) - 1));
+    rangeStart = gapStart.getTime() < fullStart.getTime() ? fullStart : gapStart;
+    reason = `staleNewest(newest=${fmt(newestDay)}, behind=${daysBehind}d)`;
+  }
+
+  const rows = await fetchDailyInChunks(project.gscSiteUrl, rangeStart, end);
+  const upserts = await upsertDailyRows(project.id, rows);
+
+  // eslint-disable-next-line no-console
+  console.info(
+    `[gscSync] daily series ${project.id}: ${fmt(rangeStart)} → ${fmt(end)} ` +
+      `(${upserts} days, reason=${reason}, newest=${newestDay ? fmt(newestDay) : 'none'})`
+  );
   return upserts;
 }
 
@@ -92,22 +179,19 @@ async function syncQuerySnapshot(project, rows, endDate) {
 /**
  * Sync a single project's GSC data and persist metric snapshots.
  * @param {object} project - { id, gscSiteUrl, clientId }
+ * @param {{ forceFullDaily?: boolean }} [opts]
  * @returns {{ projectId: string, status: string, error?: string }}
  */
-export async function syncProject(project) {
+export async function syncProject(project, opts = {}) {
   try {
-    const now = new Date();
+    const now = utcDay();
     // Current period: last 7 days (GSC data has ~2 day delay so -9 to -2)
-    const currentEnd = new Date(now);
-    currentEnd.setDate(currentEnd.getDate() - 2);
-    const currentStart = new Date(currentEnd);
-    currentStart.setDate(currentStart.getDate() - 6);
+    const currentEnd = addUtcDays(now, -2);
+    const currentStart = addUtcDays(currentEnd, -6);
 
     // Previous period: the 7 days before that
-    const prevEnd = new Date(currentStart);
-    prevEnd.setDate(prevEnd.getDate() - 1);
-    const prevStart = new Date(prevEnd);
-    prevStart.setDate(prevStart.getDate() - 6);
+    const prevEnd = addUtcDays(currentStart, -1);
+    const prevStart = addUtcDays(prevEnd, -6);
 
     const [currentRows, previousRows] = await Promise.all([
       fetchSearchAnalytics(project.gscSiteUrl, fmt(currentStart), fmt(currentEnd)),
@@ -136,10 +220,11 @@ export async function syncProject(project) {
       })),
     });
 
-    // Persist daily time-series (best-effort — don't fail the KPI sync on it)
+    // Persist daily time-series (best-effort — don't fail the KPI sync on it).
+    // forceFullDaily pulls ~16 months so YoY compare has history.
     let dailyPoints = 0;
     try {
-      dailyPoints = await syncDailySeries(project);
+      dailyPoints = await syncDailySeries(project, { forceFull: !!opts.forceFullDaily });
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn(`[gscSync] Daily series sync failed for ${project.id}: ${err.message}`);
@@ -168,9 +253,12 @@ export async function syncProject(project) {
 
 /**
  * Run GSC sync for all configured projects.
- * Called by the daily cron job.
+ * Called by the daily cron job (smart backfill) or manual admin sync.
+ *
+ * @param {{ forceFullDaily?: boolean }} [opts]
+ *   When true (manual sync), re-pull the full ~16 month daily window for YoY.
  */
-export async function runGscSync() {
+export async function runGscSync(opts = {}) {
   const available = typeof isGscAvailable === 'function'
     ? await isGscAvailable()
     : isGscEnabled();
@@ -189,7 +277,7 @@ export async function runGscSync() {
 
   const results = [];
   for (const project of projects) {
-    const result = await syncProject(project);
+    const result = await syncProject(project, { forceFullDaily: !!opts.forceFullDaily });
     results.push(result);
   }
 
