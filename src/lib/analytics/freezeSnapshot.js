@@ -333,6 +333,11 @@ export async function buildClientAnalytics(clientId, cycle, opts = {}) {
       totals: traffic.totals,
       deltas: trafficDeltas,
       yoyDeltas: trafficYoyDeltas,
+      gsc: {
+        healed: !!traffic.healed,
+        healError: traffic.healError || null,
+        gscSites: traffic.gscSites || [],
+      },
     },
     funnel,
     movers,

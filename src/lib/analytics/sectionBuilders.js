@@ -316,6 +316,9 @@ export async function buildOverview(clientIds, query) {
     source: ctx.source,
     data,
     links: ctx.links,
+    meta: {
+      gsc: data?.traffic?.gsc || null,
+    },
   };
 }
 
@@ -471,6 +474,13 @@ export async function buildGscView(clientIds, view, query) {
     range: metaRange(ctx),
     source: ctx.source,
     data: viewData,
+    meta: {
+      gsc: {
+        healed: !!traffic.healed,
+        healError: traffic.healError || null,
+        gscSites: traffic.gscSites || [],
+      },
+    },
   };
 }
 

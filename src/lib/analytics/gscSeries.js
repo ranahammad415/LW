@@ -1,13 +1,13 @@
 /**
  * Reads persisted GSC daily time-series (GscDailyMetric) and shapes it into
  * chart-ready series keyed to a core Client (aggregated across its projects).
- * When local coverage for the requested range is incomplete, live-heals from
- * the GSC API so dashboard totals match Search Console.
+ * When local coverage for the requested range is incomplete (including trailing
+ * zero cliffs), live-heals from the GSC API so dashboard totals match Search Console.
  */
 import { prisma } from '../prisma.js';
 import { MS_DAY, fmt, persistDailyRange, utcDay } from '../gscDailyPersist.js';
 
-/** Coverage below this ratio triggers a live GSC fetch for the range. */
+/** Active-day coverage below this ratio triggers a live GSC fetch. */
 const MIN_COVERAGE_RATIO = 0.9;
 
 /**
@@ -40,6 +40,10 @@ function expectedDays(start, end) {
   return Math.round((end.getTime() - start.getTime()) / MS_DAY) + 1;
 }
 
+function isActive(acc) {
+  return !!acc && ((acc.clicks || 0) > 0 || (acc.impressions || 0) > 0);
+}
+
 /**
  * Load + aggregate GscDailyMetric rows for a client over [start, end].
  */
@@ -49,8 +53,8 @@ async function loadAggregated(clientId, start, end, projectIds) {
       byDate: new Map(),
       totals: { clicks: 0, impressions: 0, ctr: 0, position: 0 },
       hasActivity: false,
-      storedDays: 0,
-      newestKey: null,
+      activeDays: 0,
+      newestActiveKey: null,
     };
   }
 
@@ -75,12 +79,16 @@ async function loadAggregated(clientId, start, end, projectIds) {
   let totalClicks = 0;
   let totalImpr = 0;
   let totalPosWeight = 0;
-  let newestKey = null;
+  let activeDays = 0;
+  let newestActiveKey = null;
   for (const [date, acc] of byDate.entries()) {
     totalClicks += acc.clicks;
     totalImpr += acc.impressions;
     totalPosWeight += acc.posWeight;
-    if (!newestKey || date > newestKey) newestKey = date;
+    if (isActive(acc)) {
+      activeDays += 1;
+      if (!newestActiveKey || date > newestActiveKey) newestActiveKey = date;
+    }
   }
 
   return {
@@ -92,30 +100,67 @@ async function loadAggregated(clientId, start, end, projectIds) {
       position: totalImpr > 0 ? Number((totalPosWeight / totalImpr).toFixed(1)) : 0,
     },
     hasActivity: totalClicks > 0 || totalImpr > 0,
-    storedDays: byDate.size,
-    newestKey,
+    activeDays,
+    newestActiveKey,
   };
 }
 
-function coverageIncomplete(start, end, storedDays, newestKey) {
+/**
+ * True when local data should be refreshed from the GSC API.
+ * Uses active days (clicks/impressions > 0), not mere row presence, and
+ * detects trailing zero cliffs (e.g. data dies after mid-range).
+ */
+function coverageIncomplete(start, end, agg) {
   const expected = expectedDays(start, end);
   if (expected <= 0) return false;
-  if (storedDays / expected < MIN_COVERAGE_RATIO) return true;
-  if (!newestKey) return true;
-  const newest = utcDay(newestKey);
-  // Newest stored day more than 1 day before range end → trailing gap.
-  return newest.getTime() < end.getTime() - MS_DAY;
+
+  const { activeDays, newestActiveKey, byDate, hasActivity } = agg;
+
+  if (!hasActivity) return true;
+  if (activeDays / expected < MIN_COVERAGE_RATIO) return true;
+
+  if (!newestActiveKey) return true;
+  const newestActive = utcDay(newestActiveKey);
+  if (newestActive.getTime() < end.getTime() - MS_DAY) return true;
+
+  // Activity cliff: first half has activity, trailing window is all zero/missing.
+  const trailDays = Math.max(7, Math.ceil(expected * 0.25));
+  const trailStart = new Date(end.getTime() - (trailDays - 1) * MS_DAY);
+  const mid = new Date(start.getTime() + Math.floor((expected - 1) / 2) * MS_DAY);
+
+  let firstHalfActive = false;
+  for (let t = start.getTime(); t <= mid.getTime(); t += MS_DAY) {
+    if (isActive(byDate.get(fmt(new Date(t))))) {
+      firstHalfActive = true;
+      break;
+    }
+  }
+  if (!firstHalfActive) return false;
+
+  let trailActive = false;
+  for (let t = trailStart.getTime(); t <= end.getTime(); t += MS_DAY) {
+    if (isActive(byDate.get(fmt(new Date(t))))) {
+      trailActive = true;
+      break;
+    }
+  }
+  return !trailActive;
 }
 
 /**
  * Get chart-ready daily traffic series for a client over a date range.
- * Aggregates across all of the client's projects per day and densifies the
- * window so compare overlays can align by day index. Live-heals from GSC when
- * local coverage for the range is incomplete.
+ * Live-heals from GSC when active-day coverage is incomplete or cliffed.
  *
  * @param {string} clientId
  * @param {{ start?: Date, end?: Date, days?: number }} [range]
- * @returns {Promise<{ series: Array, totals: object, hasActivity: boolean }>}
+ * @returns {Promise<{
+ *   series: Array,
+ *   totals: object,
+ *   hasActivity: boolean,
+ *   healed: boolean,
+ *   healError?: string|null,
+ *   gscSites?: string[],
+ * }>}
  */
 export async function getClientTrafficSeries(clientId, range = {}) {
   const end = utcDay(range.end ?? new Date());
@@ -123,10 +168,12 @@ export async function getClientTrafficSeries(clientId, range = {}) {
     ? utcDay(range.start)
     : new Date(end.getTime() - ((range.days ?? 30) - 1) * MS_DAY);
 
+  const emptyMeta = { healed: false, healError: null, gscSites: [] };
   const empty = {
     series: densifySeries(start, end, new Map()),
     totals: { clicks: 0, impressions: 0, ctr: 0, position: 0 },
     hasActivity: false,
+    ...emptyMeta,
   };
 
   const projects = await prisma.project.findMany({
@@ -139,25 +186,40 @@ export async function getClientTrafficSeries(clientId, range = {}) {
   }
 
   let agg = await loadAggregated(clientId, start, end, projectIds);
+  let healed = false;
+  let healError = null;
+  const gscProjects = projects.filter((p) => !!p.gscSiteUrl);
+  const gscSites = gscProjects.map((p) => p.gscSiteUrl).filter(Boolean);
 
-  if (coverageIncomplete(start, end, agg.storedDays, agg.newestKey)) {
-    const gscProjects = projects.filter((p) => !!p.gscSiteUrl);
-    if (gscProjects.length) {
+  if (coverageIncomplete(start, end, agg)) {
+    if (!gscProjects.length) {
+      healError = 'No Search Console property linked on this client';
+    } else {
       try {
-        let healed = 0;
+        let dayRows = 0;
         for (const project of gscProjects) {
-          healed += await persistDailyRange(project, start, end);
+          dayRows += await persistDailyRange(project, start, end);
         }
+        healed = true;
         // eslint-disable-next-line no-console
         console.info(
-          `[gscSeries] live-healed ${clientId}: ${fmt(start)} → ${fmt(end)} (${healed} day-rows)`
+          `[gscSeries] live-healed ${clientId}: ${fmt(start)} → ${fmt(end)} ` +
+            `(${dayRows} day-rows, sites=${gscSites.join(', ')})`
         );
         agg = await loadAggregated(clientId, start, end, projectIds);
+
+        // If heal ran but cliff remains, property/auth likely wrong or API empty.
+        if (coverageIncomplete(start, end, agg)) {
+          healError =
+            `Search Console refresh returned incomplete data for ${gscSites.join(', ') || 'linked property'}. ` +
+            'Confirm the GSC property URL in Admin → Integrations matches Search Console.';
+          // eslint-disable-next-line no-console
+          console.warn(`[gscSeries] ${healError}`);
+        }
       } catch (err) {
+        healError = err?.message || String(err);
         // eslint-disable-next-line no-console
-        console.warn(
-          `[gscSeries] live heal failed for ${clientId}: ${err?.message || err}`
-        );
+        console.warn(`[gscSeries] live heal failed for ${clientId}: ${healError}`);
       }
     }
   }
@@ -166,5 +228,8 @@ export async function getClientTrafficSeries(clientId, range = {}) {
     series: densifySeries(start, end, agg.byDate),
     totals: agg.totals,
     hasActivity: agg.hasActivity,
+    healed,
+    healError,
+    gscSites,
   };
 }
