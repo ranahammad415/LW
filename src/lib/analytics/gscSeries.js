@@ -180,16 +180,20 @@ export async function getClientTrafficSeries(clientId, range = {}) {
     where: { clientId },
     select: { id: true, gscSiteUrl: true },
   });
-  const projectIds = projects.map((p) => p.id);
-  if (projectIds.length === 0) {
+  if (projects.length === 0) {
     return empty;
   }
 
-  let agg = await loadAggregated(clientId, start, end, projectIds);
+  // Prefer GSC-linked projects so orphan/stale daily rows from unlinked projects
+  // cannot create false cliffs or dilute live-healed totals.
+  const gscProjects = projects.filter((p) => !!p.gscSiteUrl);
+  const metricProjectIds = (gscProjects.length ? gscProjects : projects).map((p) => p.id);
+  const gscSites = gscProjects.map((p) => p.gscSiteUrl).filter(Boolean);
+
+  let agg = await loadAggregated(clientId, start, end, metricProjectIds);
   let healed = false;
   let healError = null;
-  const gscProjects = projects.filter((p) => !!p.gscSiteUrl);
-  const gscSites = gscProjects.map((p) => p.gscSiteUrl).filter(Boolean);
+  let usedSites = [...gscSites];
 
   if (coverageIncomplete(start, end, agg)) {
     if (!gscProjects.length) {
@@ -197,22 +201,31 @@ export async function getClientTrafficSeries(clientId, range = {}) {
     } else {
       try {
         let dayRows = 0;
+        let apiClicks = 0;
         for (const project of gscProjects) {
-          dayRows += await persistDailyRange(project, start, end);
+          const result = await persistDailyRange(project, start, end);
+          dayRows += result.dayRows || 0;
+          apiClicks += result.clicks || 0;
+          if (result.siteUrl && !usedSites.includes(result.siteUrl)) {
+            usedSites.push(result.siteUrl);
+          }
         }
         healed = true;
         // eslint-disable-next-line no-console
         console.info(
           `[gscSeries] live-healed ${clientId}: ${fmt(start)} → ${fmt(end)} ` +
-            `(${dayRows} day-rows, sites=${gscSites.join(', ')})`
+            `(${dayRows} day-rows, apiClicks=${Math.round(apiClicks)}, sites=${usedSites.join(', ')})`
         );
-        agg = await loadAggregated(clientId, start, end, projectIds);
+        agg = await loadAggregated(clientId, start, end, metricProjectIds);
 
-        // If heal ran but cliff remains, property/auth likely wrong or API empty.
         if (coverageIncomplete(start, end, agg)) {
           healError =
-            `Search Console refresh returned incomplete data for ${gscSites.join(', ') || 'linked property'}. ` +
-            'Confirm the GSC property URL in Admin → Integrations matches Search Console.';
+            dayRows === 0
+              ? `Search Console returned no daily rows for ${usedSites.join(', ') || 'linked property'}. ` +
+                'Check Admin → Integrations property URL and Google access.'
+              : `Search Console refresh still incomplete for ${usedSites.join(', ') || 'linked property'} ` +
+                `(apiClicks=${Math.round(apiClicks)}, newestActive=${agg.newestActiveKey || 'none'}). ` +
+                'Confirm the property matches the site in Search Console.';
           // eslint-disable-next-line no-console
           console.warn(`[gscSeries] ${healError}`);
         }
@@ -230,6 +243,6 @@ export async function getClientTrafficSeries(clientId, range = {}) {
     hasActivity: agg.hasActivity,
     healed,
     healError,
-    gscSites,
+    gscSites: usedSites,
   };
 }

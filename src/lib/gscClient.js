@@ -58,7 +58,13 @@ export async function fetchSearchAnalytics(siteUrl, startDate, endDate) {
     if (!searchConsole) throw err;
     const res = await searchConsole.searchanalytics.query({
       siteUrl,
-      requestBody: { startDate, endDate, dimensions: ['query'], rowLimit: 5000 },
+      requestBody: {
+        startDate,
+        endDate,
+        dimensions: ['query'],
+        rowLimit: 5000,
+        dataState: 'all',
+      },
     });
     return res.data.rows ?? [];
   }
@@ -71,7 +77,13 @@ export async function fetchDailySearchAnalytics(siteUrl, startDate, endDate) {
     if (!searchConsole) throw err;
     const res = await searchConsole.searchanalytics.query({
       siteUrl,
-      requestBody: { startDate, endDate, dimensions: ['date'], rowLimit: 1000 },
+      requestBody: {
+        startDate,
+        endDate,
+        dimensions: ['date'],
+        rowLimit: 1000,
+        dataState: 'all',
+      },
     });
     return res.data.rows ?? [];
   }

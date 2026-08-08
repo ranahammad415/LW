@@ -30,6 +30,8 @@ export async function fetchSearchAnalytics(siteUrl, startDate, endDate, dimensio
       endDate,
       dimensions,
       rowLimit: 5000,
+      // Match Search Console UI (includes fresh/unfinalized days, not only "final").
+      dataState: 'all',
     },
   });
   return res.data.rows ?? [];
