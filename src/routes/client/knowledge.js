@@ -28,6 +28,49 @@ import {
   initializeClientDirs,
   getClientDir
 } from '../../lib/knowledgeEngine.js';
+import { isAiConfigured } from '../../lib/ai.js';
+import { buildClientBriefing, siteReviewStatus } from '../../lib/interviewBriefing.js';
+import {
+  runInterviewTurn,
+  upsertInterviewDrafts,
+  buildOpeningQuestion,
+  buildPlannedTopics,
+  INTERVIEW_SOURCE_TYPE,
+} from '../../lib/expertInterview.js';
+import {
+  createKnowledgeCrawlRun,
+  executeKnowledgeCrawlRun,
+} from '../../lib/knowledgeCrawler.js';
+
+const CRAWL_ACTIVE_STATUSES = ['PENDING', 'CRAWLING', 'EXTRACTING'];
+
+/** What the "captured so far" panel renders, grouped by destination file. */
+async function loadSessionCaptures(clientId, sessionId) {
+  const drafts = await prisma.okfDraftChange.findMany({
+    where: { clientId, sessionId },
+    orderBy: { createdAt: 'asc' },
+    select: {
+      id: true,
+      folder: true,
+      filename: true,
+      title: true,
+      confidence: true,
+      status: true,
+      proposedBody: true,
+    },
+  });
+
+  return drafts.map((d) => ({
+    id: d.id,
+    folder: d.folder,
+    filename: d.filename,
+    title: d.title,
+    confidence: d.confidence,
+    status: d.status,
+    path: `${d.folder}/${d.filename}.md`,
+    excerpt: d.proposedBody.slice(0, 240),
+  }));
+}
 
 function buildKnowledgeRoutes({ staff }) {
   return async function knowledgeRoutes(app) {
@@ -329,7 +372,348 @@ function buildKnowledgeRoutes({ staff }) {
     }
   );
 
+  // ── 5a. AI-led expert interview ──────────────────────────────────────────
+  //
+  // The AI reviews the client's site and knowledge base first, then interviews
+  // them one question at a time, filing what it learns as PENDING drafts as the
+  // conversation runs. The transcript lives on the session row rather than in
+  // the browser, so the model always sees the answer it is responding to and a
+  // refresh does not lose the interview.
+
+  app.get(
+    `${base}/knowledge/interview/session`,
+    { onRequest: readGuards },
+    async (request, reply) => {
+      const clientId = clientIdOf(request);
+      if (!clientId) {
+        return reply.status(403).send({ message: 'No client account linked' });
+      }
+
+      try {
+        const session = await prisma.voiceInterviewSession.findFirst({
+          where: { clientId, mode: 'TEXT', status: 'ACTIVE' },
+          orderBy: { startedAt: 'desc' },
+        });
+
+        const siteStatus = await siteReviewStatus(clientId);
+        if (!session) {
+          return reply.send({ session: null, siteStatus, aiConfigured: isAiConfigured() });
+        }
+
+        return reply.send({
+          session: {
+            id: session.id,
+            startedAt: session.startedAt,
+            transcript: session.transcript || [],
+            briefing: session.briefing || null,
+            plannedTopics: session.extractedData?.plannedTopics || [],
+            topicsCovered: session.extractedData?.topicsCovered || [],
+            isFinished: Boolean(session.extractedData?.isFinished),
+          },
+          captured: await loadSessionCaptures(clientId, session.id),
+          siteStatus,
+          aiConfigured: isAiConfigured(),
+        });
+      } catch (err) {
+        return reply.status(500).send({ message: err.message });
+      }
+    }
+  );
+
+  app.post(
+    `${base}/knowledge/interview/start`,
+    {
+      onRequest: writeGuards,
+      schema: {
+        body: {
+          type: 'object',
+          properties: {
+            projectId: { type: 'string', nullable: true },
+            seedTopic: { type: 'string' },
+            seedCategory: { type: 'string' },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const clientId = clientIdOf(request);
+      if (!clientId) {
+        return reply.status(403).send({ message: 'No client account linked' });
+      }
+      if (!isAiConfigured()) {
+        return reply.status(503).send({
+          message: 'The interview assistant is not configured. Set ANTHROPIC_API_KEY in your .env file.',
+        });
+      }
+
+      const { projectId = null, seedTopic = null, seedCategory = null } = request.body || {};
+
+      try {
+        // Starting is an explicit action, so any interview left open in another
+        // tab is retired rather than competing for the same drafts.
+        await prisma.voiceInterviewSession.updateMany({
+          where: { clientId, mode: 'TEXT', status: 'ACTIVE' },
+          data: { status: 'ABANDONED', endedAt: new Date() },
+        });
+
+        const briefing = await buildClientBriefing(clientId, { projectId });
+        const openingQuestion = buildOpeningQuestion(briefing, seedTopic);
+        const plannedTopics = buildPlannedTopics(briefing);
+
+        const session = await prisma.voiceInterviewSession.create({
+          data: {
+            clientId,
+            projectId,
+            userId: request.user.id,
+            mode: 'TEXT',
+            status: 'ACTIVE',
+            briefing,
+            transcript: [
+              { role: 'assistant', content: openingQuestion, at: new Date().toISOString() },
+            ],
+            extractedData: {
+              plannedTopics,
+              topicsCovered: [],
+              gaps: [],
+              seedTopic,
+              seedCategory,
+              isFinished: false,
+            },
+          },
+        });
+
+        return reply.status(201).send({
+          sessionId: session.id,
+          briefing,
+          openingQuestion,
+          plannedTopics,
+          captured: [],
+        });
+      } catch (err) {
+        request.log.error({ err }, 'Could not start expert interview');
+        return reply.status(500).send({ message: err.message });
+      }
+    }
+  );
+
+  app.post(
+    `${base}/knowledge/interview/turn`,
+    {
+      onRequest: writeGuards,
+      schema: {
+        body: {
+          type: 'object',
+          properties: {
+            sessionId: { type: 'string' },
+            message: { type: 'string', minLength: 1 },
+          },
+          required: ['sessionId', 'message'],
+        },
+      },
+    },
+    async (request, reply) => {
+      const clientId = clientIdOf(request);
+      if (!clientId) {
+        return reply.status(403).send({ message: 'No client account linked' });
+      }
+
+      const { sessionId, message } = request.body;
+
+      const session = await prisma.voiceInterviewSession.findUnique({ where: { id: sessionId } });
+      if (!session || session.clientId !== clientId || session.mode !== 'TEXT') {
+        return reply.status(404).send({ message: 'Interview session not found' });
+      }
+      if (session.status !== 'ACTIVE') {
+        return reply.status(409).send({ message: 'This interview has already been completed.' });
+      }
+
+      const transcript = Array.isArray(session.transcript) ? session.transcript : [];
+      const state = session.extractedData || {};
+
+      let turn;
+      try {
+        turn = await runInterviewTurn({
+          briefing: session.briefing || (await buildClientBriefing(clientId, { projectId: session.projectId })),
+          transcript,
+          message,
+          seedTopic: state.seedTopic || null,
+          clientId,
+          userId: request.user.id,
+        });
+      } catch (err) {
+        request.log.error({ err, sessionId }, 'Expert interview turn failed');
+        return reply.status(502).send({
+          message: err.message || 'The interview assistant is temporarily unavailable. Please try again.',
+        });
+      }
+
+      const captured = await upsertInterviewDrafts({
+        clientId,
+        sessionId: session.id,
+        captures: turn.captures,
+      });
+
+      const now = new Date().toISOString();
+      const topicsCovered = [
+        ...new Set([...(state.topicsCovered || []), ...turn.topicsCovered]),
+      ].slice(0, 40);
+      const gaps = [...(state.gaps || []), ...turn.gaps].slice(0, 40);
+
+      await prisma.voiceInterviewSession.update({
+        where: { id: session.id },
+        data: {
+          transcript: [
+            ...transcript,
+            { role: 'user', content: message, at: now },
+            { role: 'assistant', content: turn.nextQuestion, at: now },
+          ],
+          extractedData: { ...state, topicsCovered, gaps, isFinished: turn.isFinished },
+        },
+      });
+
+      return reply.send({
+        nextQuestion: turn.nextQuestion,
+        captured: await loadSessionCaptures(clientId, session.id),
+        newlyCaptured: captured,
+        gaps: turn.gaps,
+        topicsCovered,
+        isFinished: turn.isFinished,
+      });
+    }
+  );
+
+  app.post(
+    `${base}/knowledge/interview/finish`,
+    {
+      onRequest: writeGuards,
+      schema: {
+        body: {
+          type: 'object',
+          properties: {
+            sessionId: { type: 'string' },
+            summary: { type: 'string' },
+          },
+          required: ['sessionId'],
+        },
+      },
+    },
+    async (request, reply) => {
+      const clientId = clientIdOf(request);
+      if (!clientId) {
+        return reply.status(403).send({ message: 'No client account linked' });
+      }
+
+      const { sessionId, summary = null } = request.body;
+
+      const session = await prisma.voiceInterviewSession.findUnique({ where: { id: sessionId } });
+      if (!session || session.clientId !== clientId || session.mode !== 'TEXT') {
+        return reply.status(404).send({ message: 'Interview session not found' });
+      }
+
+      const captured = await loadSessionCaptures(clientId, session.id);
+
+      if (session.status === 'ACTIVE') {
+        await prisma.voiceInterviewSession.update({
+          where: { id: session.id },
+          data: {
+            status: 'COMPLETED',
+            endedAt: new Date(),
+            durationSeconds: Math.round((Date.now() - session.startedAt.getTime()) / 1000),
+            summary: summary ? String(summary).slice(0, 4000) : session.summary,
+          },
+        });
+
+        // Gaps are advisory notes for the SEO team rather than proposed content,
+        // so they go on the activity feed instead of the draft queue.
+        const gaps = session.extractedData?.gaps || [];
+        if (gaps.length) {
+          await prisma.clientActivityLog.create({
+            data: {
+              clientId,
+              userId: request.user.id,
+              action: 'EXPERT_INTERVIEW_GAPS',
+              detail: gaps.map((g) => `${g.category}: ${g.description}`).join(' | ').slice(0, 1000),
+              metadata: { sessionId: session.id, gaps },
+            },
+          }).catch(() => {});
+        }
+      }
+
+      return reply.send({
+        success: true,
+        sessionId: session.id,
+        draftsQueued: captured.filter((c) => c.status === 'PENDING').length,
+        captured,
+      });
+    }
+  );
+
+  // Kicks a crawl when the briefing has nothing to go on, so the AI can be
+  // restarted against a site it has actually read.
+  app.post(
+    `${base}/knowledge/interview/review-site`,
+    {
+      onRequest: writeGuards,
+      schema: {
+        body: {
+          type: 'object',
+          properties: {
+            rootUrl: { type: 'string' },
+            projectId: { type: 'string', nullable: true },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const clientId = clientIdOf(request);
+      if (!clientId) {
+        return reply.status(403).send({ message: 'No client account linked' });
+      }
+
+      const { projectId = null } = request.body || {};
+
+      const existing = await prisma.knowledgeCrawlRun.findFirst({
+        where: { clientId, status: { in: CRAWL_ACTIVE_STATUSES } },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (existing) return reply.status(202).send({ run: existing });
+
+      const client = await prisma.clientAccount.findUnique({
+        where: { id: clientId },
+        select: { websiteUrl: true },
+      });
+      const rootUrl = String(request.body?.rootUrl || client?.websiteUrl || '').trim();
+      if (!rootUrl) {
+        return reply.status(400).send({ message: 'No website URL on file. Add one to review the site.' });
+      }
+
+      let run;
+      try {
+        run = await createKnowledgeCrawlRun({
+          clientId,
+          projectId,
+          rootUrl: /^https?:\/\//i.test(rootUrl) ? rootUrl : `https://${rootUrl}`,
+          triggeredById: request.user.id,
+        });
+      } catch (err) {
+        return reply.status(400).send({ message: err.message });
+      }
+
+      setImmediate(() => {
+        executeKnowledgeCrawlRun(run.id).catch((err) =>
+          app.log.error({ err, runId: run.id }, 'Interview site review crawl failed')
+        );
+      });
+
+      return reply.status(202).send({ run });
+    }
+  );
+
   // ── 6. Guided interview save ──
+  //
+  // Superseded by the AI-led interview above, but kept for any client still on
+  // an older bundle. It used to write straight to disk; it now queues a draft
+  // so typed answers go through the same review as everything else.
   app.post(
     `${base}/knowledge/interview/save`,
     {
@@ -354,15 +738,7 @@ function buildKnowledgeRoutes({ staff }) {
       const { theme, qaPairs, expertName } = request.body;
 
       try {
-        const metadata = {
-          type: 'voice-interview',
-          title: `Expert Interview: ${theme}`,
-          author: expertName,
-          tags: ['expert-interview', 'voice', 'knowledge-capture']
-        };
-
         let body = `# Expert Interview: ${theme}\n\n`;
-        body += `**Interviewer**: Local Waves AI Knowledge Engine\n`;
         body += `**Expert**: ${expertName}\n\n`;
         body += '---\n\n';
 
@@ -378,9 +754,27 @@ function buildKnowledgeRoutes({ staff }) {
           body += '\n';
         });
 
-        const filename = `interview-${slugify(theme)}`;
-        const filePath = writeOkfFile(clientId, 'voice', filename, metadata, body);
-        return reply.status(201).send({ success: true, path: filePath });
+        const draft = await prisma.okfDraftChange.create({
+          data: {
+            clientId,
+            folder: 'voice',
+            filename: `interview-${slugify(theme)}`.slice(0, 255),
+            title: `Expert Interview: ${theme}`.slice(0, 255),
+            proposedMetadata: {
+              type: 'expert-interview',
+              title: `Expert Interview: ${theme}`,
+              author: expertName,
+              source: INTERVIEW_SOURCE_TYPE,
+              captured_at: new Date().toISOString(),
+              tags: ['expert-interview', 'knowledge-capture'],
+            },
+            proposedBody: body,
+            sourceType: INTERVIEW_SOURCE_TYPE,
+            status: 'PENDING',
+          },
+        });
+
+        return reply.status(201).send({ success: true, draftId: draft.id, queuedForReview: true });
       } catch (err) {
         return reply.status(500).send({ message: err.message });
       }

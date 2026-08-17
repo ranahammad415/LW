@@ -1734,12 +1734,16 @@ model VoiceInterviewSession {
   clientId        String    @db.VarChar(255)
   projectId       String?   @db.VarChar(255)
   userId          String    @db.VarChar(255)
+  /// VOICE for the realtime agent, TEXT for the AI-led expert interview.
+  mode            String    @default("VOICE") @db.VarChar(20)
   status          String    @default("ACTIVE") @db.VarChar(30)
   startedAt       DateTime  @default(now())
   endedAt         DateTime?
   durationSeconds Int       @default(0)
   transcript      Json?
   extractedData   Json?
+  /// The site + coverage review the AI was given before it asked anything.
+  briefing        Json?
   summary         String?   @db.Text
   model           String?   @db.VarChar(100)
   createdAt       DateTime  @default(now())
@@ -1748,6 +1752,7 @@ model VoiceInterviewSession {
 
   @@index([clientId, startedAt])
   @@index([userId])
+  @@index([clientId, mode, status])
   @@map("voiceinterviewsession")
 }
 
