@@ -1,0 +1,625 @@
+{
+  "generatedAt": "2026-08-17T10:51:21.894Z",
+  "source": "Backlinks Hub Personal Authors .xlsx",
+  "conversionRatePkrPerUsd": 200,
+  "headerRow": 5,
+  "columnMapping": {
+    "website": "A",
+    "da": "C",
+    "dr": "D",
+    "traffic": "E",
+    "price": "F",
+    "linkType": "G"
+  },
+  "totals": {
+    "dataRows": 3459,
+    "accepted": 3457,
+    "rejected": 2,
+    "skippedNonDataRows": 1,
+    "uniqueSites": 3385,
+    "mergedDuplicates": 72
+  },
+  "duplicateCollisions": [
+    {
+      "domain": "aaryaeditz.com.in",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "amsveltech.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "bazenews.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "blessingword.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "bloggermagazine.co.uk",
+      "pricesUsd": [
+        8,
+        8
+      ],
+      "resolvedPriceUsd": 8
+    },
+    {
+      "domain": "bloglimit.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "bulgariajournal.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "celestialshiny.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "chantcourse.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "costcodle.co",
+      "pricesUsd": [
+        13,
+        8
+      ],
+      "resolvedPriceUsd": 13
+    },
+    {
+      "domain": "desiremovies.com.in",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "englishtistic.com",
+      "pricesUsd": [
+        8,
+        8
+      ],
+      "resolvedPriceUsd": 8
+    },
+    {
+      "domain": "eratechinfo.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "finlancespot.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "fscsearchin.com",
+      "pricesUsd": [
+        8,
+        8
+      ],
+      "resolvedPriceUsd": 8
+    },
+    {
+      "domain": "goddoujin.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "grammariene.com",
+      "pricesUsd": [
+        8,
+        8
+      ],
+      "resolvedPriceUsd": 8
+    },
+    {
+      "domain": "hanisays.com",
+      "pricesUsd": [
+        8,
+        8
+      ],
+      "resolvedPriceUsd": 8
+    },
+    {
+      "domain": "hdhub4umovies.net",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "hdhubb4u.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "hdmovieshub.com.in",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "hostontech.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "influencers-gonewild.co.uk",
+      "pricesUsd": [
+        8,
+        8
+      ],
+      "resolvedPriceUsd": 8
+    },
+    {
+      "domain": "infofirstnews.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "jkn18.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "kakupressapp.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "larichessetresor.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "learnifica.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "lightmagazine.co.uk",
+      "pricesUsd": [
+        13,
+        13
+      ],
+      "resolvedPriceUsd": 13
+    },
+    {
+      "domain": "magazinedreamsinsider.com",
+      "pricesUsd": [
+        8,
+        8
+      ],
+      "resolvedPriceUsd": 8
+    },
+    {
+      "domain": "magazinepals.com",
+      "pricesUsd": [
+        5,
+        8
+      ],
+      "resolvedPriceUsd": 8
+    },
+    {
+      "domain": "makeweekly.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "moveddaily.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "moviezwaps.com.in",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "neoblessing.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "newsdrizzle.com",
+      "pricesUsd": [
+        8,
+        5
+      ],
+      "resolvedPriceUsd": 8
+    },
+    {
+      "domain": "newsgama.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "newsmirrors.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "newsspout.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "nexttoppers.org",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "parivrai-vip.co.uk",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "pearassessment.org",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "polimernewslive.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "procfoods.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "renastech.net",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "ridomovies.co.uk",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "sams-odisha.org",
+      "pricesUsd": [
+        8,
+        8
+      ],
+      "resolvedPriceUsd": 8
+    },
+    {
+      "domain": "sarkariujalaa.net",
+      "pricesUsd": [
+        8,
+        5
+      ],
+      "resolvedPriceUsd": 8
+    },
+    {
+      "domain": "satkamatka.com.in",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "serbiapost.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "simileshub.com",
+      "pricesUsd": [
+        5,
+        8
+      ],
+      "resolvedPriceUsd": 8
+    },
+    {
+      "domain": "smartreaderz.com",
+      "pricesUsd": [
+        5,
+        8
+      ],
+      "resolvedPriceUsd": 8
+    },
+    {
+      "domain": "subways-menu.co.uk",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "sweatynames.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "techandkey.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "techaram.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "techbitlab.com",
+      "pricesUsd": [
+        8,
+        5
+      ],
+      "resolvedPriceUsd": 8
+    },
+    {
+      "domain": "techfillip.com",
+      "pricesUsd": [
+        8,
+        5
+      ],
+      "resolvedPriceUsd": 8
+    },
+    {
+      "domain": "techinfoz.com",
+      "pricesUsd": [
+        8,
+        5
+      ],
+      "resolvedPriceUsd": 8
+    },
+    {
+      "domain": "technazen.com",
+      "pricesUsd": [
+        8,
+        5
+      ],
+      "resolvedPriceUsd": 8
+    },
+    {
+      "domain": "techzehen.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "thehomegro.com",
+      "pricesUsd": [
+        8,
+        8
+      ],
+      "resolvedPriceUsd": 8
+    },
+    {
+      "domain": "timhortonsmenupricescanada.com",
+      "pricesUsd": [
+        8,
+        8
+      ],
+      "resolvedPriceUsd": 8
+    },
+    {
+      "domain": "todaychickenprice.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "touchingmessages.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "uploadarticle.online",
+      "pricesUsd": [
+        8,
+        8
+      ],
+      "resolvedPriceUsd": 8
+    },
+    {
+      "domain": "vapeloom.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "vonkertech.com",
+      "pricesUsd": [
+        8,
+        5
+      ],
+      "resolvedPriceUsd": 8
+    },
+    {
+      "domain": "weeklyhacking.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "wordmaticz.com",
+      "pricesUsd": [
+        8,
+        8
+      ],
+      "resolvedPriceUsd": 8
+    },
+    {
+      "domain": "zashfinance.com",
+      "pricesUsd": [
+        5,
+        5
+      ],
+      "resolvedPriceUsd": 5
+    },
+    {
+      "domain": "zyranames.com",
+      "pricesUsd": [
+        8,
+        8
+      ],
+      "resolvedPriceUsd": 8
+    }
+  ],
+  "rejectedRows": [
+    {
+      "rowNumber": 91,
+      "website": "https://www.rawmags.com/",
+      "reason": "DA out of range or missing (got \"261\")",
+      "raw": {
+        "website": "https://www.rawmags.com/",
+        "da": "261",
+        "price": "4000",
+        "linkType": "2 Do Follow"
+      }
+    },
+    {
+      "rowNumber": 157,
+      "website": "https://postplace.co.uk/",
+      "reason": "Missing or invalid price",
+      "raw": {
+        "website": "https://postplace.co.uk/",
+        "da": "42.0",
+        "dr": "35.0",
+        "traffic": "1500.0",
+        "linkType": "2 Do Follow"
+      }
+    }
+  ]
+}

@@ -26,6 +26,7 @@ const FEATURES = [
   { key: 'dailyDigest', scopes: ['PM'] },
   { key: 'knowledgeEngine', scopes: ['OWNER', 'PM', 'CLIENT'] },
   { key: 'voiceAgent', scopes: ['OWNER', 'PM', 'CLIENT'] },
+  { key: 'backlinksHub', scopes: ['OWNER', 'CLIENT'] },
 ];
 
 const ROLES = ['OWNER', 'PM', 'TEAM_MEMBER', 'CONTRACTOR', 'CLIENT'];

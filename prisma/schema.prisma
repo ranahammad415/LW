@@ -90,21 +90,24 @@ model User {
   contentMapCommentsResolved  ContentMapComment[]      @relation("ContentMapCommentResolver")
   contentMapNodesAssigned     ContentMapNode[]         @relation("ContentMapNodeAssignee")
   contentMapDriftsResolved    ContentMapDrift[]        @relation("ContentMapDriftResolver")
+  backlinkCartItems           BacklinkCartItem[]       @relation("BacklinkCartAddedBy")
+  backlinkOrdersRequested     BacklinkOrder[]          @relation("BacklinkOrderRequester")
+  backlinkOrderEvents         BacklinkOrderEvent[]     @relation("BacklinkOrderEventActor")
 
   @@map("user")
 }
 
 // Singleton-style agency Google OAuth (OWNER connects once; used to list/bind GA4/GSC/GMB).
 model AgencyGoogleConnection {
-  id              String    @id @default(uuid())
-  googleEmail     String    @db.VarChar(255)
-  refreshTokenEnc String    @db.Text
-  scopes          String    @db.Text
-  status          String    @default("ACTIVE") @db.VarChar(20)
+  id              String   @id @default(uuid())
+  googleEmail     String   @db.VarChar(255)
+  refreshTokenEnc String   @db.Text
+  scopes          String   @db.Text
+  status          String   @default("ACTIVE") @db.VarChar(20)
   connectedById   String?
-  connectedAt     DateTime  @default(now())
-  updatedAt       DateTime  @default(now()) @updatedAt
-  lastError       String?   @db.VarChar(500)
+  connectedAt     DateTime @default(now())
+  updatedAt       DateTime @default(now()) @updatedAt
+  lastError       String?  @db.VarChar(500)
 
   connectedBy User? @relation("AgencyGoogleConnector", fields: [connectedById], references: [id], onDelete: SetNull)
 
@@ -273,9 +276,9 @@ model ClientAccount {
   createdAt            DateTime          @default(now())
   updatedAt            DateTime          @default(now()) @updatedAt
 
-  package              Package?               @relation(fields: [packageId], references: [id])
-  leadPm               User?                  @relation("LeadPmRelation", fields: [leadPmId], references: [id])
-  secondaryPm          User?                  @relation("SecondaryPmRelation", fields: [secondaryPmId], references: [id])
+  package              Package?                     @relation(fields: [packageId], references: [id])
+  leadPm               User?                        @relation("LeadPmRelation", fields: [leadPmId], references: [id])
+  secondaryPm          User?                        @relation("SecondaryPmRelation", fields: [secondaryPmId], references: [id])
   clientUsers          ClientUser[]
   projects             Project[]
   lookerEmbeds         LookerEmbed[]
@@ -294,6 +297,8 @@ model ClientAccount {
   activityLogs         ClientActivityLog[]
   analyticsEmails      ClientAnalyticsEmail[]
   workCycleSnapshots   WorkCycleAnalyticsSnapshot[]
+  backlinkCartItems    BacklinkCartItem[]
+  backlinkOrders       BacklinkOrder[]
 
   @@map("clientaccount")
 }
@@ -464,31 +469,33 @@ model Project {
   createdAt          DateTime      @default(now())
   updatedAt          DateTime      @default(now()) @updatedAt
 
-  client              ClientAccount        @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  leadPm              User?                @relation("ProjectLeadPm", fields: [leadPmId], references: [id])
-  tasks               Task[]
-  sitemapNodes        SitemapNode[]
-  trackedKeywords     KeywordTrack[]
-  promptLogs          PromptLog[]
-  clientAssets        ClientAsset[]
-  keywordSuggestions  KeywordSuggestion[]
-  businessUpdates     BusinessUpdate[]
-  clientIssues        ClientIssue[]
-  wpPages             WpPage[]
-  contentReviews      WpContentReview[]
-  intakeSubmissions   IntakeSubmission[]
-  contractRecords     ContractRecord[]
-  onboardingChecklist OnboardingChecklist? @relation("ProjectOnboardingChecklist")
-  htmlReports         ProjectHtmlReport[]
-  gscDailyMetrics     GscDailyMetric[]
-  gscQueryMetrics     GscQueryMetric[]
-  ga4DailyMetrics     Ga4DailyMetric[]
-  gmbDailyMetrics     GmbDailyMetric[]
-  gmbReviews          GmbReview[]
-  aiVisibilityRuns    AiVisibilityRun[]
-  siteLeadEvents      SiteLeadEvent[]
+  client               ClientAccount         @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  leadPm               User?                 @relation("ProjectLeadPm", fields: [leadPmId], references: [id])
+  tasks                Task[]
+  sitemapNodes         SitemapNode[]
+  trackedKeywords      KeywordTrack[]
+  promptLogs           PromptLog[]
+  clientAssets         ClientAsset[]
+  keywordSuggestions   KeywordSuggestion[]
+  businessUpdates      BusinessUpdate[]
+  clientIssues         ClientIssue[]
+  wpPages              WpPage[]
+  contentReviews       WpContentReview[]
+  intakeSubmissions    IntakeSubmission[]
+  contractRecords      ContractRecord[]
+  onboardingChecklist  OnboardingChecklist?  @relation("ProjectOnboardingChecklist")
+  htmlReports          ProjectHtmlReport[]
+  gscDailyMetrics      GscDailyMetric[]
+  gscQueryMetrics      GscQueryMetric[]
+  ga4DailyMetrics      Ga4DailyMetric[]
+  gmbDailyMetrics      GmbDailyMetric[]
+  gmbReviews           GmbReview[]
+  aiVisibilityRuns     AiVisibilityRun[]
+  siteLeadEvents       SiteLeadEvent[]
   siteLeadDailyMetrics SiteLeadDailyMetric[]
-  contentMaps         ContentMap[]
+  contentMaps          ContentMap[]
+  backlinkCartItems    BacklinkCartItem[]
+  backlinkOrderItems   BacklinkOrderItem[]
 
   @@map("project")
 }
@@ -776,10 +783,10 @@ model WorkCycle {
   closedAt   DateTime?
   openedById String?
 
-  openedBy  User?                        @relation("WorkCycleOpener", fields: [openedById], references: [id])
-  tasks     Task[]
-  reports   MonthlyReport[]
-  snapshots WorkCycleAnalyticsSnapshot[]
+  openedBy        User?                        @relation("WorkCycleOpener", fields: [openedById], references: [id])
+  tasks           Task[]
+  reports         MonthlyReport[]
+  snapshots       WorkCycleAnalyticsSnapshot[]
   contentMapNodes ContentMapNode[]
 
   @@unique([month, year])
@@ -948,12 +955,14 @@ model WpPage {
   syncedAt         DateTime  @default(now())
   createdAt        DateTime  @default(now())
 
-  project         Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  task            Task?             @relation(fields: [taskId], references: [id], onDelete: SetNull)
-  snapshots       WpPageSnapshot[]
-  promptLogs      PromptLog[]
-  contentMapNodes ContentMapNode[]
-  contentMapDrifts ContentMapDrift[]
+  project            Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  task               Task?               @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  snapshots          WpPageSnapshot[]
+  promptLogs         PromptLog[]
+  contentMapNodes    ContentMapNode[]
+  contentMapDrifts   ContentMapDrift[]
+  backlinkCartItems  BacklinkCartItem[]
+  backlinkOrderItems BacklinkOrderItem[]
 
   @@unique([projectId, wpPostId])
   @@map("wppage")
@@ -986,49 +995,49 @@ model WpPageSnapshot {
 }
 
 model WpContentReview {
-  id               String    @id @default(uuid())
-  projectId        String
-  wpPipelineId     Int
-  wpPostId         Int
-  postTitle        String    @db.VarChar(500)
-  status           String    @db.VarChar(50)
-  submittedByName  String?   @db.VarChar(200)
-  submittedById    String?   @db.VarChar(100)
+  id                 String    @id @default(uuid())
+  projectId          String
+  wpPipelineId       Int
+  wpPostId           Int
+  postTitle          String    @db.VarChar(500)
+  status             String    @db.VarChar(50)
+  submittedByName    String?   @db.VarChar(200)
+  submittedById      String?   @db.VarChar(100)
   /// OS-side worker assignee (Admin/PM can reassign; defaults to submitter).
   assignedWorkerId   String?   @db.VarChar(100)
   assignedWorkerName String?   @db.VarChar(200)
-  pmMemberName     String?   @db.VarChar(200)
-  pmMemberId       String?   @db.VarChar(100)
-  pmPreviewUrl     String?   @db.VarChar(1000)
-  clientPreviewUrl String?   @db.VarChar(1000)
-  pmDecision       String?   @db.VarChar(50)
-  pmComment        String?   @db.LongText
-  clientDecision   String?   @db.VarChar(50)
-  clientComment    String?   @db.LongText
-  workerNote       String?   @db.LongText
+  pmMemberName       String?   @db.VarChar(200)
+  pmMemberId         String?   @db.VarChar(100)
+  pmPreviewUrl       String?   @db.VarChar(1000)
+  clientPreviewUrl   String?   @db.VarChar(1000)
+  pmDecision         String?   @db.VarChar(50)
+  pmComment          String?   @db.LongText
+  clientDecision     String?   @db.VarChar(50)
+  clientComment      String?   @db.LongText
+  workerNote         String?   @db.LongText
   /// OS-editable description (task-style); independent of WP workerNote.
-  description      String?   @db.LongText
+  description        String?   @db.LongText
   /// Worker-selected content/page type (e.g. landing_page, pillar_page, article).
-  contentType      String?   @db.VarChar(50)
-  pmReviewedAt     String?   @db.VarChar(50)
-  clientReviewedAt String?   @db.VarChar(50)
-  revisionNumber   Int       @default(1)
-  lastEventType    String?   @db.VarChar(100)
-  aiSummary        String?   @db.Text
-  isPublished      Boolean   @default(false)
-  publishedAt      DateTime?
+  contentType        String?   @db.VarChar(50)
+  pmReviewedAt       String?   @db.VarChar(50)
+  clientReviewedAt   String?   @db.VarChar(50)
+  revisionNumber     Int       @default(1)
+  lastEventType      String?   @db.VarChar(100)
+  aiSummary          String?   @db.Text
+  isPublished        Boolean   @default(false)
+  publishedAt        DateTime?
   /// For "Update Content" reviews: the live parent page the draft was cloned from.
-  parentWpPostId   Int?
+  parentWpPostId     Int?
   /// WordPress pipeline row createdAt (when the review was initiated/drafted).
-  wpCreatedAt      DateTime?
+  wpCreatedAt        DateTime?
   /// WordPress pipeline row updatedAt (last meaningful WP change — not OS sync).
-  wpUpdatedAt      DateTime?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @default(now()) @updatedAt
+  wpUpdatedAt        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @default(now()) @updatedAt
 
-  project  Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  events   WpContentReviewEvent[]
-  comments WpContentReviewComment[]
+  project         Project                  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  events          WpContentReviewEvent[]
+  comments        WpContentReviewComment[]
   contentMapNodes ContentMapNode[]
 
   @@unique([projectId, wpPipelineId])
@@ -1046,8 +1055,8 @@ model WpContentReviewComment {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @default(now()) @updatedAt
 
-  contentReview WpContentReview        @relation(fields: [contentReviewId], references: [id], onDelete: Cascade)
-  user          User                   @relation("WpContentReviewCommentAuthor", fields: [userId], references: [id], onDelete: Cascade)
+  contentReview WpContentReview          @relation(fields: [contentReviewId], references: [id], onDelete: Cascade)
+  user          User                     @relation("WpContentReviewCommentAuthor", fields: [userId], references: [id], onDelete: Cascade)
   parent        WpContentReviewComment?  @relation("WpContentReviewCommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
   replies       WpContentReviewComment[] @relation("WpContentReviewCommentReplies")
 
@@ -1157,19 +1166,19 @@ model GscQueryMetric {
 
 // GA4 daily aggregates (site-level).
 model Ga4DailyMetric {
-  id              String   @id @default(uuid())
-  projectId       String
-  date            DateTime @db.Date
-  sessions        Int      @default(0)
-  totalUsers      Int      @default(0)
-  bounceRate      Float    @default(0)
-  avgEngagementSec Float   @default(0)
-  conversions     Int      @default(0)
-  conversionRate  Float    @default(0)
-  pageViews       Int      @default(0)
+  id               String   @id @default(uuid())
+  projectId        String
+  date             DateTime @db.Date
+  sessions         Int      @default(0)
+  totalUsers       Int      @default(0)
+  bounceRate       Float    @default(0)
+  avgEngagementSec Float    @default(0)
+  conversions      Int      @default(0)
+  conversionRate   Float    @default(0)
+  pageViews        Int      @default(0)
   // Optional JSON breakdowns: channels, devices, countries, landingPages, llmReferrers
-  breakdowns      Json?
-  createdAt       DateTime @default(now())
+  breakdowns       Json?
+  createdAt        DateTime @default(now())
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
@@ -1180,16 +1189,16 @@ model Ga4DailyMetric {
 
 // Google Business Profile daily metrics.
 model GmbDailyMetric {
-  id             String   @id @default(uuid())
-  projectId      String
-  date           DateTime @db.Date
-  impressions    Int      @default(0)
-  impressionsSearch Int   @default(0)
-  impressionsMaps Int     @default(0)
-  websiteClicks  Int      @default(0)
-  directions     Int      @default(0)
-  calls          Int      @default(0)
-  createdAt      DateTime @default(now())
+  id                String   @id @default(uuid())
+  projectId         String
+  date              DateTime @db.Date
+  impressions       Int      @default(0)
+  impressionsSearch Int      @default(0)
+  impressionsMaps   Int      @default(0)
+  websiteClicks     Int      @default(0)
+  directions        Int      @default(0)
+  calls             Int      @default(0)
+  createdAt         DateTime @default(now())
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
@@ -1199,16 +1208,16 @@ model GmbDailyMetric {
 }
 
 model GmbReview {
-  id            String    @id @default(uuid())
-  projectId     String
-  reviewId      String    @db.VarChar(200)
-  reviewerName  String?   @db.VarChar(255)
-  starRating    Int
-  comment       String?   @db.LongText
-  replyComment  String?   @db.LongText
-  createTime    DateTime?
-  updateTime    DateTime?
-  createdAt     DateTime  @default(now())
+  id           String    @id @default(uuid())
+  projectId    String
+  reviewId     String    @db.VarChar(200)
+  reviewerName String?   @db.VarChar(255)
+  starRating   Int
+  comment      String?   @db.LongText
+  replyComment String?   @db.LongText
+  createTime   DateTime?
+  updateTime   DateTime?
+  createdAt    DateTime  @default(now())
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
@@ -1238,7 +1247,7 @@ model AiVisibilityRun {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @default(now()) @updatedAt
 
-  project Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project Project                  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   results AiVisibilityResult[]
   dfs     AiVisibilityDfsSnapshot?
 
@@ -1305,17 +1314,17 @@ model SiteLeadEvent {
 
 /// Daily rollup of Bridge lead/intent events for analytics charts.
 model SiteLeadDailyMetric {
-  id             String   @id @default(uuid())
-  projectId      String
-  date           DateTime @db.Date
-  phoneClicks    Int      @default(0)
-  emailClicks    Int      @default(0)
-  formSubmits    Int      @default(0)
-  thankYouViews  Int      @default(0)
-  leads          Int      @default(0) // formSubmits + thankYouViews
+  id            String   @id @default(uuid())
+  projectId     String
+  date          DateTime @db.Date
+  phoneClicks   Int      @default(0)
+  emailClicks   Int      @default(0)
+  formSubmits   Int      @default(0)
+  thankYouViews Int      @default(0)
+  leads         Int      @default(0) // formSubmits + thankYouViews
   /// Per-rule and per-path counts: { rules: [{ruleId,ruleLabel,eventType,count}], paths: [{path,count}] }
-  breakdowns     Json?
-  createdAt      DateTime @default(now())
+  breakdowns    Json?
+  createdAt     DateTime @default(now())
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
@@ -1543,37 +1552,37 @@ model ContentMap {
 }
 
 model ContentMapNode {
-  id            String   @id @default(uuid())
-  mapId         String
-  parentId      String?
-  kind          String   @db.VarChar(20) // ROOT | PILLAR | CLUSTER | PAGE
-  name          String   @db.VarChar(500)
-  slug          String?  @db.VarChar(500)
-  priority      String?  @db.VarChar(10) // P1 | P2 | P3
-  contentType   String?  @db.VarChar(100)
-  intent        String?  @db.VarChar(100)
-  accent        String?  @db.VarChar(50)
-  note          String?  @db.LongText
-  todo          String?  @db.LongText
-  links         Json?
-  isLive        Boolean  @default(false)
-  needsFix      Boolean  @default(false)
-  isSupport     Boolean  @default(false)
-  sortOrder     Int      @default(0)
-  posX          Float?
-  posY          Float?
-  collapsed     Boolean  @default(false)
-  nodeStatus    String?  @db.VarChar(50)
-  pmDecision    String?  @db.VarChar(50)
-  clientDecision String? @db.VarChar(50)
-  sitemapNodeId String?
-  taskId        String?
+  id                 String    @id @default(uuid())
+  mapId              String
+  parentId           String?
+  kind               String    @db.VarChar(20) // ROOT | PILLAR | CLUSTER | PAGE
+  name               String    @db.VarChar(500)
+  slug               String?   @db.VarChar(500)
+  priority           String?   @db.VarChar(10) // P1 | P2 | P3
+  contentType        String?   @db.VarChar(100)
+  intent             String?   @db.VarChar(100)
+  accent             String?   @db.VarChar(50)
+  note               String?   @db.LongText
+  todo               String?   @db.LongText
+  links              Json?
+  isLive             Boolean   @default(false)
+  needsFix           Boolean   @default(false)
+  isSupport          Boolean   @default(false)
+  sortOrder          Int       @default(0)
+  posX               Float?
+  posY               Float?
+  collapsed          Boolean   @default(false)
+  nodeStatus         String?   @db.VarChar(50)
+  pmDecision         String?   @db.VarChar(50)
+  clientDecision     String?   @db.VarChar(50)
+  sitemapNodeId      String?
+  taskId             String?
   /// Where this node came from: PLANNED | WORDPRESS | SITEMAP | PIPELINE
-  source        String   @default("PLANNED") @db.VarChar(20)
+  source             String    @default("PLANNED") @db.VarChar(20)
   /// PLANNED | IN_PIPELINE | LIVE | NEEDS_UPDATE | ARCHIVED | GAP
-  lifecycle     String   @default("PLANNED") @db.VarChar(20)
-  wpPageId          String?
-  wpContentReviewId String?
+  lifecycle          String    @default("PLANNED") @db.VarChar(20)
+  wpPageId           String?
+  wpContentReviewId  String?
   /// Resolved live URL once the node is mapped to real content.
   url                String?   @db.VarChar(500)
   pathDepth          Int?
@@ -1582,12 +1591,12 @@ model ContentMapNode {
   workCycleId        String?
   assigneeId         String?
   /// Target keywords: [{ keyword, keywordTrackId? }]
-  keywords      Json?
+  keywords           Json?
   /// Cached enrichment snapshot (word count, links, SEO lengths, traffic).
-  metrics       Json?
-  metricsAt     DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @default(now()) @updatedAt
+  metrics            Json?
+  metricsAt          DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @default(now()) @updatedAt
 
   map             ContentMap          @relation(fields: [mapId], references: [id], onDelete: Cascade)
   parent          ContentMapNode?     @relation("ContentMapNodeTree", fields: [parentId], references: [id], onDelete: Cascade)
@@ -1612,17 +1621,17 @@ model ContentMapNode {
 
 /// Per-map WordPress sync state: when we last reconciled and with what result.
 model ContentMapSync {
-  id              String    @id @default(uuid())
-  mapId           String    @unique
-  lastSyncAt      DateTime?
-  lastSyncStats   Json?
+  id               String    @id @default(uuid())
+  mapId            String    @unique
+  lastSyncAt       DateTime?
+  lastSyncStats    Json?
   /// Post types pulled into the map, e.g. ["page", "post"]. Null = all.
   includePostTypes Json?
   /// When true, new site content is adopted straight into the map instead of queued.
-  autoAdopt       Boolean   @default(false)
-  firstImportAt   DateTime?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @default(now()) @updatedAt
+  autoAdopt        Boolean   @default(false)
+  firstImportAt    DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @default(now()) @updatedAt
 
   map ContentMap @relation(fields: [mapId], references: [id], onDelete: Cascade)
 
@@ -2245,4 +2254,183 @@ model NovaMessage {
 
   @@index([conversationId, createdAt])
   @@map("novamessage")
+}
+
+// ============================================
+// Backlinks Hub
+// ============================================
+
+enum BacklinkPlacementType {
+  GUEST_POST
+  PROFILE
+}
+
+enum BacklinkTargetType {
+  PAGE
+  DOMAIN
+}
+
+enum BacklinkOrderStatus {
+  DRAFT
+  PENDING_REVIEW
+  APPROVED
+  IN_PROGRESS
+  COMPLETED
+  REJECTED
+  CANCELLED
+}
+
+enum BacklinkOrderItemStatus {
+  PENDING
+  IN_PROGRESS
+  LIVE
+  REPLACED
+  CANCELLED
+}
+
+/// Purchasable backlink inventory. Prices are always absolute USD; the catalog
+/// deliberately stores no supplier, cost or source-currency information.
+model BacklinkSite {
+  id             String                @id @default(uuid())
+  domain         String                @unique @db.VarChar(255)
+  url            String                @db.VarChar(500)
+  da             Int                   @default(0)
+  dr             Int                   @default(0)
+  monthlyTraffic Int                   @default(0)
+  priceUsd       Decimal               @db.Decimal(10, 2)
+  /// Blended authority-per-dollar ranking, recomputed on every write so the
+  /// catalog can be sorted by value without a table scan.
+  valueScore     Decimal               @default(0) @db.Decimal(10, 2)
+  dofollowLinks  Int                   @default(1)
+  placementType  BacklinkPlacementType @default(GUEST_POST)
+  category       String?               @db.VarChar(100)
+  country        String?               @db.VarChar(100)
+  language       String?               @db.VarChar(100)
+  turnaroundDays Int?
+  sampleUrl      String?               @db.VarChar(500)
+  isActive       Boolean               @default(true)
+  isFeatured     Boolean               @default(false)
+  tags           Json?
+  /// Admin-only. Never serialized to client responses.
+  internalNotes  String?               @db.LongText
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @default(now()) @updatedAt
+
+  cartItems  BacklinkCartItem[]
+  orderItems BacklinkOrderItem[]
+
+  @@index([isActive, valueScore])
+  @@index([isActive, priceUsd])
+  @@index([isActive, da])
+  @@map("backlinksite")
+}
+
+model BacklinkCartItem {
+  id             String             @id @default(uuid())
+  clientId       String
+  backlinkSiteId String
+  projectId      String?
+  targetType     BacklinkTargetType @default(DOMAIN)
+  wpPageId       String?
+  targetUrl      String?            @db.VarChar(500)
+  anchorText     String?            @db.VarChar(255)
+  notes          String?            @db.LongText
+  /// Price captured when added, so a mid-session catalog edit cannot silently
+  /// change what the client thought they were buying.
+  unitPriceUsd   Decimal            @db.Decimal(10, 2)
+  addedById      String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @default(now()) @updatedAt
+
+  client  ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  site    BacklinkSite  @relation(fields: [backlinkSiteId], references: [id], onDelete: Cascade)
+  project Project?      @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  wpPage  WpPage?       @relation(fields: [wpPageId], references: [id], onDelete: SetNull)
+  addedBy User?         @relation("BacklinkCartAddedBy", fields: [addedById], references: [id], onDelete: SetNull)
+
+  @@unique([clientId, backlinkSiteId, wpPageId])
+  @@index([clientId])
+  @@map("backlinkcartitem")
+}
+
+model BacklinkOrder {
+  id            String              @id @default(uuid())
+  orderNumber   String              @unique @db.VarChar(30)
+  clientId      String
+  status        BacklinkOrderStatus @default(PENDING_REVIEW)
+  subtotalUsd   Decimal             @db.Decimal(10, 2)
+  totalUsd      Decimal             @db.Decimal(10, 2)
+  itemCount     Int                 @default(0)
+  /// Reserved for a future payment gateway; fulfilment does not depend on it.
+  paymentStatus String              @default("UNPAID") @db.VarChar(30)
+  requestedById String?
+  clientNotes   String?             @db.LongText
+  adminNotes    String?             @db.LongText
+  submittedAt   DateTime            @default(now())
+  approvedAt    DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @default(now()) @updatedAt
+
+  client      ClientAccount        @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  requestedBy User?                @relation("BacklinkOrderRequester", fields: [requestedById], references: [id], onDelete: SetNull)
+  items       BacklinkOrderItem[]
+  events      BacklinkOrderEvent[]
+
+  @@index([clientId, status])
+  @@index([status, submittedAt])
+  @@map("backlinkorder")
+}
+
+/// Snapshots domain and metrics at purchase time so later catalog edits never
+/// rewrite the history of an order.
+model BacklinkOrderItem {
+  id              String                  @id @default(uuid())
+  orderId         String
+  backlinkSiteId  String?
+  domainSnapshot  String                  @db.VarChar(255)
+  daSnapshot      Int                     @default(0)
+  drSnapshot      Int                     @default(0)
+  trafficSnapshot Int                     @default(0)
+  unitPriceUsd    Decimal                 @db.Decimal(10, 2)
+  dofollowLinks   Int                     @default(1)
+  placementType   BacklinkPlacementType   @default(GUEST_POST)
+  projectId       String?
+  targetType      BacklinkTargetType      @default(DOMAIN)
+  wpPageId        String?
+  targetUrl       String?                 @db.VarChar(500)
+  anchorText      String?                 @db.VarChar(255)
+  notes           String?                 @db.LongText
+  status          BacklinkOrderItemStatus @default(PENDING)
+  liveUrl         String?                 @db.VarChar(500)
+  publishedAt     DateTime?
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @default(now()) @updatedAt
+
+  order   BacklinkOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  site    BacklinkSite? @relation(fields: [backlinkSiteId], references: [id], onDelete: SetNull)
+  project Project?      @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  wpPage  WpPage?       @relation(fields: [wpPageId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+  @@index([status])
+  @@map("backlinkorderitem")
+}
+
+model BacklinkOrderEvent {
+  id         String   @id @default(uuid())
+  orderId    String
+  actorId    String?
+  eventType  String   @db.VarChar(50)
+  fromStatus String?  @db.VarChar(30)
+  toStatus   String?  @db.VarChar(30)
+  note       String?  @db.VarChar(1000)
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  order BacklinkOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  actor User?         @relation("BacklinkOrderEventActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([orderId, createdAt])
+  @@map("backlinkorderevent")
 }

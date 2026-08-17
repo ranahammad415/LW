@@ -46,6 +46,11 @@ export async function truncateAllTables() {
   await prisma.$executeRawUnsafe('SET FOREIGN_KEY_CHECKS = 0')
   // Table names match Prisma model names (no @@map in schema)
   const tables = [
+    'backlinkorderevent',
+    'backlinkorderitem',
+    'backlinkorder',
+    'backlinkcartitem',
+    'backlinksite',
     'PasswordResetToken',
     'NotificationLog',
     'NotificationPreference',

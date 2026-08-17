@@ -414,6 +414,42 @@ const templates = [
     bodyText: '{{removedName}} has been removed from the {{clientName}} portal account.',
     inAppMessage: '{{removedName}} has been removed from {{clientName}}',
     variables: ['removedName', 'clientName', 'actionUrl'] },
+
+  // ── Backlinks Hub ─────────────────────────────────────────────────────────
+  { slug: 'backlink_order_submitted', name: 'Backlink Order Submitted', description: 'When a client submits a backlink purchase request', category: 'backlinks',
+    subject: '[New Request] Backlink order {{orderNumber}} — {{clientName}}',
+    bodyHtml: '<p><strong>{{clientName}}</strong> submitted backlink order <strong>{{orderNumber}}</strong> with {{itemCount}} link(s) totalling {{totalUsd}}.</p>',
+    bodyText: '{{clientName}} submitted backlink order {{orderNumber}} with {{itemCount}} link(s) totalling {{totalUsd}}.',
+    inAppMessage: 'New backlink order {{orderNumber}} from {{clientName}} ({{itemCount}} links, {{totalUsd}})',
+    variables: ['orderNumber', 'clientName', 'itemCount', 'totalUsd', 'actionUrl'] },
+
+  { slug: 'backlink_order_approved', name: 'Backlink Order Approved', description: 'When the agency approves a backlink order', category: 'backlinks',
+    subject: '[Approved] Backlink order {{orderNumber}}',
+    bodyHtml: '<p>Your backlink order <strong>{{orderNumber}}</strong> has been approved and is now being placed. We will update each link as it goes live.</p>',
+    bodyText: 'Your backlink order {{orderNumber}} has been approved and is now being placed.',
+    inAppMessage: 'Backlink order {{orderNumber}} approved — placement has started',
+    variables: ['orderNumber', 'itemCount', 'totalUsd', 'actionUrl'] },
+
+  { slug: 'backlink_order_rejected', name: 'Backlink Order Declined', description: 'When the agency declines a backlink order', category: 'backlinks',
+    subject: '[Declined] Backlink order {{orderNumber}}',
+    bodyHtml: '<p>Your backlink order <strong>{{orderNumber}}</strong> could not be processed.</p><p>{{reason}}</p>',
+    bodyText: 'Your backlink order {{orderNumber}} could not be processed. {{reason}}',
+    inAppMessage: 'Backlink order {{orderNumber}} was declined',
+    variables: ['orderNumber', 'reason', 'actionUrl'] },
+
+  { slug: 'backlink_item_live', name: 'Backlink Is Live', description: 'When an individual backlink goes live', category: 'backlinks',
+    subject: 'Backlink live on {{domain}} — order {{orderNumber}}',
+    bodyHtml: '<p>Your backlink on <strong>{{domain}}</strong> is now live.</p><p><a href="{{liveUrl}}">{{liveUrl}}</a></p>',
+    bodyText: 'Your backlink on {{domain}} is now live: {{liveUrl}}',
+    inAppMessage: 'Backlink live on {{domain}}',
+    variables: ['orderNumber', 'domain', 'liveUrl', 'targetLabel', 'actionUrl'] },
+
+  { slug: 'backlink_order_completed', name: 'Backlink Order Completed', description: 'When every link in a backlink order is live', category: 'backlinks',
+    subject: '[Completed] Backlink order {{orderNumber}}',
+    bodyHtml: '<p>All {{itemCount}} link(s) in backlink order <strong>{{orderNumber}}</strong> are now live.</p>',
+    bodyText: 'All {{itemCount}} link(s) in backlink order {{orderNumber}} are now live.',
+    inAppMessage: 'Backlink order {{orderNumber}} completed — all {{itemCount}} links live',
+    variables: ['orderNumber', 'itemCount', 'actionUrl'] },
 ];
 
 async function seedNotificationTemplates() {

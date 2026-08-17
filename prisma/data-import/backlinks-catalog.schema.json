@@ -1,0 +1,64 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://localwaves.ai/schemas/backlinks-catalog.json",
+  "title": "Backlinks Hub catalog document",
+  "description": "Backlink inventory for import into BacklinkSite. Prices are absolute USD only; no supplier, cost or source-currency fields are accepted.",
+  "type": "object",
+  "required": ["sites"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "type": "integer", "enum": [1] },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "currency": { "type": "string", "enum": ["USD"] },
+    "source": { "type": "string", "description": "Free-text label for provenance, e.g. the originating filename." },
+    "sites": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/site" }
+    }
+  },
+  "definitions": {
+    "site": {
+      "type": "object",
+      "required": ["domain", "da", "dr", "monthlyTraffic", "priceUsd"],
+      "additionalProperties": false,
+      "properties": {
+        "domain": {
+          "type": "string",
+          "description": "Bare hostname, lowercased, without a www. prefix. Unique key for upserts.",
+          "pattern": "^[a-z0-9.-]+\\.[a-z]{2,}$"
+        },
+        "url": {
+          "type": "string",
+          "description": "Canonical https URL. Derived from domain when omitted."
+        },
+        "da": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "dr": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "monthlyTraffic": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Absolute visits per month. Suffixed strings like \"137.4K\" are also accepted and normalized on import."
+        },
+        "priceUsd": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Client-facing price in whole US dollars."
+        },
+        "valueScore": {
+          "type": "number",
+          "description": "Recomputed on every write; any supplied value is ignored."
+        },
+        "dofollowLinks": { "type": "integer", "minimum": 1, "maximum": 10, "default": 1 },
+        "placementType": { "type": "string", "enum": ["GUEST_POST", "PROFILE"], "default": "GUEST_POST" },
+        "category": { "type": "string", "maxLength": 100 },
+        "country": { "type": "string", "maxLength": 100 },
+        "language": { "type": "string", "maxLength": 100 },
+        "turnaroundDays": { "type": "integer", "minimum": 0, "maximum": 365 },
+        "sampleUrl": { "type": "string", "maxLength": 500 },
+        "isActive": { "type": "boolean", "default": true },
+        "isFeatured": { "type": "boolean", "default": false },
+        "tags": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

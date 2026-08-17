@@ -22,6 +22,7 @@ import { adminWpRoutes } from '../../src/routes/admin/wp.js';
 import { adminNotificationRoutes } from '../../src/routes/admin/notifications.js';
 import { adminActivityReportRoutes } from '../../src/routes/admin/activity-reports.js';
 import { adminProjectHtmlReportRoutes } from '../../src/routes/admin/project-html-reports.js';
+import { adminBacklinkRoutes } from '../../src/routes/admin/backlinks.js';
 
 import { clientDashboardRoutes } from '../../src/routes/client/dashboard.js';
 import { clientAnalyticsRoutes } from '../../src/routes/client/analytics.js';
@@ -33,6 +34,7 @@ import { clientHubRoutes } from '../../src/routes/client/hub.js';
 import { clientOnboardingRoutes } from '../../src/routes/client/onboarding.js';
 import { clientRoiRoutes } from '../../src/routes/client/roi.js';
 import { clientNovaRoutes } from '../../src/routes/client/nova.js';
+import { clientBacklinkRoutes } from '../../src/routes/client/backlinks.js';
 
 import { pmReportRoutes } from '../../src/routes/pm/reports.js';
 import { pmProjectHtmlReportRoutes } from '../../src/routes/pm/project-html-reports.js';
@@ -84,6 +86,7 @@ export async function buildApp() {
   app.register(adminNotificationRoutes, { prefix: '/api/admin' });
   app.register(adminActivityReportRoutes, { prefix: '/api/admin' });
   app.register(adminProjectHtmlReportRoutes, { prefix: '/api/admin' });
+  app.register(adminBacklinkRoutes, { prefix: '/api/admin' });
 
   app.register(projectRoutes, { prefix: '/api/projects' });
   app.register(taskRoutes, { prefix: '/api/tasks' });
@@ -98,6 +101,7 @@ export async function buildApp() {
   app.register(clientOnboardingRoutes, { prefix: '/api/client' });
   app.register(clientRoiRoutes, { prefix: '/api/client' });
   app.register(clientNovaRoutes, { prefix: '/api/client' });
+  app.register(clientBacklinkRoutes, { prefix: '/api/client' });
 
   app.register(pmReportRoutes, { prefix: '/api/pm' });
   app.register(pmProjectHtmlReportRoutes, { prefix: '/api/pm' });
