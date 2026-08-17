@@ -1769,6 +1769,54 @@ model OkfDraftChange {
   @@map("okfdraftchange")
 }
 
+/// One attempt at seeding a client's knowledge base from their live website.
+/// Progress is polled from this row; the extracted sections land in
+/// OkfDraftChange so a human still approves everything before it is written.
+model KnowledgeCrawlRun {
+  id            String    @id @default(uuid())
+  clientId      String    @db.VarChar(255)
+  projectId     String?   @db.VarChar(255)
+  rootUrl       String    @db.VarChar(1000)
+  status        String    @default("PENDING") @db.VarChar(30)
+  triggeredById String?   @db.VarChar(255)
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  pagesCrawled  Int       @default(0)
+  draftsCreated Int       @default(0)
+  error         String?   @db.VarChar(1000)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @default(now()) @updatedAt
+
+  @@index([clientId, createdAt])
+  @@index([status])
+  @@map("knowledgecrawlrun")
+}
+
+/// A one-off link that lets a client run a knowledge interview without signing
+/// in. Only the sha256 of the token is stored; the plaintext is shown to the
+/// admin once at creation.
+model KnowledgeInterviewInvite {
+  id            String    @id @default(uuid())
+  clientId      String    @db.VarChar(255)
+  projectId     String?   @db.VarChar(255)
+  tokenHash     String    @unique @db.VarChar(64)
+  createdById   String?   @db.VarChar(255)
+  recipientName String?   @db.VarChar(255)
+  sentToEmail   String?   @db.VarChar(255)
+  status        String    @default("PENDING") @db.VarChar(20)
+  expiresAt     DateTime
+  lastOpenedAt  DateTime?
+  completedAt   DateTime?
+  revokedAt     DateTime?
+  draftData     Json?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @default(now()) @updatedAt
+
+  @@index([clientId, createdAt])
+  @@index([expiresAt])
+  @@map("knowledgeinterviewinvite")
+}
+
 // ============================================
 // OmniSearch Tool Models
 // ============================================

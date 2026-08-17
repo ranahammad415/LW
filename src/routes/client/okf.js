@@ -1,6 +1,10 @@
 /**
- * OKF v2 client endpoints: business intake orchestration, asset index,
+ * OKF v2 endpoints: business intake orchestration, asset index,
  * folder-spec generation, file revision history and strategy versioning.
+ *
+ * Mounted twice with different client resolution:
+ *   - /api/client/...                    caller's own client
+ *   - /api/staff/clients/:clientId/...   Owner (rw) or PM (read-only)
  */
 import { prisma } from '../../lib/prisma.js';
 import {
@@ -28,15 +32,10 @@ import {
   validateOkfSpecCompliance,
 } from '../../lib/okfFolderGeneratorService.js';
 import { resolvePrimaryClientId } from '../../lib/clientContext.js';
-
-function requireClientId(request, reply) {
-  const clientId = resolvePrimaryClientId(request);
-  if (!clientId) {
-    reply.status(403).send({ message: 'No client account linked' });
-    return null;
-  }
-  return clientId;
-}
+import {
+  requireStaffKnowledgeRead,
+  requireStaffKnowledgeWrite,
+} from '../../lib/knowledgeScope.js';
 
 async function assertProjectBelongsToClient(projectId, clientId, reply) {
   const project = await prisma.project.findFirst({
@@ -50,12 +49,32 @@ async function assertProjectBelongsToClient(projectId, clientId, reply) {
   return true;
 }
 
-export async function clientOkfRoutes(app) {
+function buildOkfRoutes({ staff }) {
+  return async function okfRoutes(app) {
+    const base = staff ? '/clients/:clientId' : '';
+    const readGuards = staff
+      ? [app.verifyJwt, requireStaffKnowledgeRead]
+      : [app.verifyJwt, app.requireClient];
+    const writeGuards = staff
+      ? [app.verifyJwt, requireStaffKnowledgeWrite]
+      : [app.verifyJwt, app.requireClient, app.requireClientWriter];
+
+    function requireClientId(request, reply) {
+      const clientId = staff
+        ? request.knowledgeClientId || null
+        : resolvePrimaryClientId(request);
+      if (!clientId) {
+        reply.status(403).send({ message: 'No client account linked' });
+        return null;
+      }
+      return clientId;
+    }
+
   // ── Business intake ───────────────────────────────────────────────────────
 
   app.get(
-    '/intake/status',
-    { onRequest: [app.verifyJwt, app.requireClient] },
+    `${base}/intake/status`,
+    { onRequest: readGuards },
     async (request, reply) => {
       const clientId = requireClientId(request, reply);
       if (!clientId) return;
@@ -69,9 +88,9 @@ export async function clientOkfRoutes(app) {
   );
 
   app.post(
-    '/intake/orchestrate',
+    `${base}/intake/orchestrate`,
     {
-      onRequest: [app.verifyJwt, app.requireClient, app.requireClientWriter],
+      onRequest: writeGuards,
       schema: {
         body: {
           type: 'object',
@@ -118,8 +137,8 @@ export async function clientOkfRoutes(app) {
   );
 
   app.get(
-    '/intake/assessment',
-    { onRequest: [app.verifyJwt, app.requireClient] },
+    `${base}/intake/assessment`,
+    { onRequest: readGuards },
     async (request, reply) => {
       const clientId = requireClientId(request, reply);
       if (!clientId) return;
@@ -130,9 +149,9 @@ export async function clientOkfRoutes(app) {
   // ── Asset index ───────────────────────────────────────────────────────────
 
   app.get(
-    '/knowledge/index',
+    `${base}/knowledge/index`,
     {
-      onRequest: [app.verifyJwt, app.requireClient],
+      onRequest: readGuards,
       schema: {
         querystring: {
           type: 'object',
@@ -154,8 +173,8 @@ export async function clientOkfRoutes(app) {
   );
 
   app.post(
-    '/knowledge/reindex',
-    { onRequest: [app.verifyJwt, app.requireClient, app.requireClientWriter] },
+    `${base}/knowledge/reindex`,
+    { onRequest: writeGuards },
     async (request, reply) => {
       const clientId = requireClientId(request, reply);
       if (!clientId) return;
@@ -169,8 +188,8 @@ export async function clientOkfRoutes(app) {
   // ── Folder spec ───────────────────────────────────────────────────────────
 
   app.post(
-    '/knowledge/spec/generate',
-    { onRequest: [app.verifyJwt, app.requireClient, app.requireClientWriter] },
+    `${base}/knowledge/spec/generate`,
+    { onRequest: writeGuards },
     async (request, reply) => {
       const clientId = requireClientId(request, reply);
       if (!clientId) return;
@@ -194,8 +213,8 @@ export async function clientOkfRoutes(app) {
   );
 
   app.get(
-    '/knowledge/spec/validate',
-    { onRequest: [app.verifyJwt, app.requireClient] },
+    `${base}/knowledge/spec/validate`,
+    { onRequest: readGuards },
     async (request, reply) => {
       const clientId = requireClientId(request, reply);
       if (!clientId) return;
@@ -208,9 +227,9 @@ export async function clientOkfRoutes(app) {
   // (e.g. "seo/strategy"), which a path param cannot represent.
 
   app.get(
-    '/knowledge/versions',
+    `${base}/knowledge/versions`,
     {
-      onRequest: [app.verifyJwt, app.requireClient],
+      onRequest: readGuards,
       schema: {
         querystring: {
           type: 'object',
@@ -233,8 +252,8 @@ export async function clientOkfRoutes(app) {
   );
 
   app.get(
-    '/knowledge/versions/:versionId',
-    { onRequest: [app.verifyJwt, app.requireClient] },
+    `${base}/knowledge/versions/:versionId`,
+    { onRequest: readGuards },
     async (request, reply) => {
       const clientId = requireClientId(request, reply);
       if (!clientId) return;
@@ -248,8 +267,8 @@ export async function clientOkfRoutes(app) {
   );
 
   app.post(
-    '/knowledge/versions/:versionId/restore',
-    { onRequest: [app.verifyJwt, app.requireClient, app.requireClientWriter] },
+    `${base}/knowledge/versions/:versionId/restore`,
+    { onRequest: writeGuards },
     async (request, reply) => {
       const clientId = requireClientId(request, reply);
       if (!clientId) return;
@@ -290,9 +309,9 @@ export async function clientOkfRoutes(app) {
   // ── Project strategy blueprint ────────────────────────────────────────────
 
   app.get(
-    '/knowledge/strategy',
+    `${base}/knowledge/strategy`,
     {
-      onRequest: [app.verifyJwt, app.requireClient],
+      onRequest: readGuards,
       schema: {
         querystring: {
           type: 'object',
@@ -317,9 +336,9 @@ export async function clientOkfRoutes(app) {
   );
 
   app.post(
-    '/knowledge/strategy',
+    `${base}/knowledge/strategy`,
     {
-      onRequest: [app.verifyJwt, app.requireClient, app.requireClientWriter],
+      onRequest: writeGuards,
       schema: {
         body: {
           type: 'object',
@@ -352,9 +371,9 @@ export async function clientOkfRoutes(app) {
   );
 
   app.get(
-    '/knowledge/strategy/versions',
+    `${base}/knowledge/strategy/versions`,
     {
-      onRequest: [app.verifyJwt, app.requireClient],
+      onRequest: readGuards,
       schema: {
         querystring: {
           type: 'object',
@@ -375,9 +394,9 @@ export async function clientOkfRoutes(app) {
   );
 
   app.post(
-    '/knowledge/strategy/rollback',
+    `${base}/knowledge/strategy/rollback`,
     {
-      onRequest: [app.verifyJwt, app.requireClient, app.requireClientWriter],
+      onRequest: writeGuards,
       schema: {
         body: {
           type: 'object',
@@ -407,7 +426,11 @@ export async function clientOkfRoutes(app) {
       }
     }
   );
+  };
 }
+
+export const clientOkfRoutes = buildOkfRoutes({ staff: false });
+export const staffOkfRoutes = buildOkfRoutes({ staff: true });
 
 /**
  * Maps the flat onboarding/gap-interview answer shape onto the structured

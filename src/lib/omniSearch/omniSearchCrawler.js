@@ -108,8 +108,13 @@ function countWords(text) {
 
 /**
  * Fetches and parses a single URL for SEO data.
+ *
+ * @param {string} url
+ * @param {{ includeBody?: boolean }} [options] Set includeBody to also return the
+ *   stripped page text. Off by default so SEO callers keep their small payloads.
  */
-export async function crawlPage(url) {
+export async function crawlPage(url, options = {}) {
+  const { includeBody = false } = options;
   const startTime = Date.now();
   try {
     const controller = new AbortController();
@@ -153,12 +158,14 @@ export async function crawlPage(url) {
       loadTime,
       structuredData,
       ogTags,
+      ...(includeBody ? { bodyText } : {}),
     };
   } catch (err) {
     return {
       url,
       statusCode: 0,
       error: err.name === 'AbortError' ? 'Timeout after 10s' : err.message,
+      ...(includeBody ? { bodyText: '' } : {}),
       title: '',
       metaDescription: '',
       h1: '',

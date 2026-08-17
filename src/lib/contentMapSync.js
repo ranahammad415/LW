@@ -785,7 +785,7 @@ export async function reconcileMap(mapId, { userId = null, notify = true } = {})
             nodeName: node.name,
             pageUrl: item.page.url || '',
           },
-          actionUrl: `/portal/pm/projects/${map.projectId}?tab=content-map`,
+          actionUrl: `/portal/pm/content-profile/${map.projectId}`,
           metadata: { mapId, projectId: map.projectId, nodeId: node.id },
         });
       }
@@ -798,7 +798,7 @@ export async function reconcileMap(mapId, { userId = null, notify = true } = {})
             projectName: project?.name || '',
             driftCount: String(pendingCount),
           },
-          actionUrl: `/portal/pm/projects/${map.projectId}?tab=content-map`,
+          actionUrl: `/portal/pm/content-profile/${map.projectId}`,
           metadata: { mapId, projectId: map.projectId },
         });
       }

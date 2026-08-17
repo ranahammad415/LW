@@ -159,7 +159,7 @@ export async function pmContentMapRoutes(app) {
           return reply.status(403).send({ message: 'No access to this project' });
         }
 
-        const name = String(request.body?.name || 'Content Map').slice(0, 255);
+        const name = String(request.body?.name || 'Content Profile').slice(0, 255);
         const mode = request.body?.mode; // 'json' | undefined
         const payload = request.body?.payload;
 
@@ -276,7 +276,7 @@ export async function pmContentMapRoutes(app) {
         const access = await assertMapAccess(request, reply, request.params.mapId);
         if (!access) return;
         if (request.user.role !== 'OWNER' && request.user.role !== 'PM') {
-          return reply.status(403).send({ message: 'Only Owner or PM can delete a content map' });
+          return reply.status(403).send({ message: 'Only Owner or PM can delete a content profile' });
         }
         await prisma.contentMap.delete({ where: { id: access.map.id } });
         await publishContentMapUpdate(access.map.projectId, { mapId: access.map.id, action: 'deleted' });
@@ -398,7 +398,7 @@ export async function pmContentMapRoutes(app) {
             mapName: updated.name,
             projectName: project?.name || '',
           },
-          actionUrl: `/portal/client/projects/${access.map.projectId}?tab=content-map`,
+          actionUrl: `/portal/client/content-profile/${access.map.projectId}`,
           metadata: { mapId: access.map.id, projectId: access.map.projectId },
         });
 
@@ -841,7 +841,7 @@ export async function pmContentMapRoutes(app) {
             authorName: request.user.name || 'Team',
             commentPreview: content.slice(0, 200),
           },
-          actionUrl: `/portal/pm/projects/${access.map.projectId}?tab=content-map`,
+          actionUrl: `/portal/pm/content-profile/${access.map.projectId}`,
           metadata: { mapId: access.map.id, projectId: access.map.projectId, nodeId },
         });
 

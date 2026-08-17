@@ -40,8 +40,15 @@ import { clientProjectsRoutes } from './routes/client/projects.js';
 import { clientInputRoutes } from './routes/client/inputs.js';
 import { clientHubRoutes } from './routes/client/hub.js';
 import { clientOnboardingRoutes } from './routes/client/onboarding.js';
-import { clientKnowledgeRoutes } from './routes/client/knowledge.js';
-import { clientOkfRoutes } from './routes/client/okf.js';
+import { clientKnowledgeRoutes, staffKnowledgeRoutes } from './routes/client/knowledge.js';
+import { clientOkfRoutes, staffOkfRoutes } from './routes/client/okf.js';
+import { staffKnowledgeClientRoutes } from './routes/staff/knowledgeClients.js';
+import { staffKnowledgeInviteRoutes } from './routes/staff/knowledgeInvites.js';
+import { publicKnowledgeInterviewRoutes } from './routes/publicKnowledgeInterview.js';
+import {
+  clientKnowledgeCrawlRoutes,
+  staffKnowledgeCrawlRoutes,
+} from './routes/staff/knowledgeCrawl.js';
 import { clientGapInterviewRoutes } from './routes/client/gapInterview.js';
 import { clientVoiceAgentRoutes } from './routes/client/voiceAgent.js';
 import { clientContentMapRoutes } from './routes/client/contentMap.js';
@@ -199,6 +206,7 @@ app.register(clientHubRoutes, { prefix: '/api/client' });
 app.register(clientOnboardingRoutes, { prefix: '/api/client' });
 app.register(clientKnowledgeRoutes, { prefix: '/api/client' });
 app.register(clientOkfRoutes, { prefix: '/api/client' });
+app.register(clientKnowledgeCrawlRoutes, { prefix: '/api/client' });
 app.register(clientGapInterviewRoutes, { prefix: '/api/client' });
 app.register(clientVoiceAgentRoutes, { prefix: '/api/client' });
 app.register(clientContentMapRoutes, { prefix: '/api/client' });
@@ -209,6 +217,13 @@ app.register(pmProjectHtmlReportRoutes, { prefix: '/api/pm' });
 app.register(pmStandupRoutes, { prefix: '/api/pm' });
 app.register(pmAlertRoutes, { prefix: '/api/pm' });
 app.register(pmOkfReviewRoutes, { prefix: '/api/pm' });
+// Same knowledge handlers as the client mount, addressed by client id and
+// scoped by role: Owner read/write on any client, PM read-only on their own.
+app.register(staffKnowledgeClientRoutes, { prefix: '/api/staff' });
+app.register(staffKnowledgeCrawlRoutes, { prefix: '/api/staff' });
+app.register(staffKnowledgeInviteRoutes, { prefix: '/api/staff' });
+app.register(staffKnowledgeRoutes, { prefix: '/api/staff' });
+app.register(staffOkfRoutes, { prefix: '/api/staff' });
 app.register(pmTasksRoutes, { prefix: '/api/pm' });
 app.register(pmIssueRoutes, { prefix: '/api/pm' });
 app.register(pmWpRoutes, { prefix: '/api/pm' });
@@ -221,6 +236,7 @@ app.register(pmInputRequestRoutes, { prefix: '/api/pm' });
 app.register(modalityRoutes, { prefix: '/api' });
 app.register(workCycleRoutes, { prefix: '/api/work-cycles' });
 app.register(publicIssuesRoutes, { prefix: '/api/public' });
+app.register(publicKnowledgeInterviewRoutes, { prefix: '/api/public' });
 app.register(wpWebhookRoutes, { prefix: '/api/webhooks' });
 app.register(realtimeRoutes, { prefix: '/api/realtime' });
 app.register(toolRoutes, { prefix: '/api/tool' });

@@ -1,5 +1,19 @@
+/**
+ * Knowledge base CRUD and AI helpers.
+ *
+ * Mounted twice with different client resolution:
+ *   - /api/client/knowledge/...                    caller's own client
+ *   - /api/staff/clients/:clientId/knowledge/...   Owner (rw) or PM (read-only)
+ *
+ * The handler bodies are shared; only the guards, the path prefix and how the
+ * client id is resolved differ between the two mounts.
+ */
 import path from 'path';
 import { prisma } from '../../lib/prisma.js';
+import {
+  requireStaffKnowledgeRead,
+  requireStaffKnowledgeWrite,
+} from '../../lib/knowledgeScope.js';
 import { 
   listClientFiles, 
   readOkfFile, 
@@ -15,19 +29,32 @@ import {
   getClientDir
 } from '../../lib/knowledgeEngine.js';
 
-export async function clientKnowledgeRoutes(app) {
+function buildKnowledgeRoutes({ staff }) {
+  return async function knowledgeRoutes(app) {
+    const base = staff ? '/clients/:clientId' : '';
+    const readGuards = staff
+      ? [app.verifyJwt, requireStaffKnowledgeRead]
+      : [app.verifyJwt, app.requireClient];
+    const writeGuards = staff
+      ? [app.verifyJwt, requireStaffKnowledgeWrite]
+      : [app.verifyJwt, app.requireClient, app.requireClientWriter];
+
+    // On the client mount this keeps the original "first linked client" rule.
+    const clientIdOf = staff
+      ? (request) => request.knowledgeClientId || null
+      : (request) => request.clientAccountIds?.[0] ?? null;
+
   // ── 0. Get client profile (from company/profile.md falling back to DB) ──
   app.get(
-    '/knowledge/profile',
+    `${base}/knowledge/profile`,
     {
-      onRequest: [app.verifyJwt, app.requireClient],
+      onRequest: readGuards,
     },
     async (request, reply) => {
-      const clientIds = request.clientAccountIds;
-      if (!clientIds?.length) {
+      const clientId = clientIdOf(request);
+      if (!clientId) {
         return reply.status(403).send({ message: 'No client account linked' });
       }
-      const clientId = clientIds[0];
 
       try {
         initializeClientDirs(clientId);
@@ -63,9 +90,9 @@ export async function clientKnowledgeRoutes(app) {
 
   // ── 0b. Save client profile ──
   app.post(
-    '/knowledge/profile',
+    `${base}/knowledge/profile`,
     {
-      onRequest: [app.verifyJwt, app.requireClient, app.requireClientWriter],
+      onRequest: writeGuards,
       schema: {
         body: {
           type: 'object',
@@ -78,11 +105,10 @@ export async function clientKnowledgeRoutes(app) {
       }
     },
     async (request, reply) => {
-      const clientIds = request.clientAccountIds;
-      if (!clientIds?.length) {
+      const clientId = clientIdOf(request);
+      if (!clientId) {
         return reply.status(403).send({ message: 'No client account linked' });
       }
-      const clientId = clientIds[0];
       const { metadata, body } = request.body;
 
       try {
@@ -110,16 +136,15 @@ export async function clientKnowledgeRoutes(app) {
 
   // ── 1. List all client files ──
   app.get(
-    '/knowledge/files',
+    `${base}/knowledge/files`,
     {
-      onRequest: [app.verifyJwt, app.requireClient],
+      onRequest: readGuards,
     },
     async (request, reply) => {
-      const clientIds = request.clientAccountIds;
-      if (!clientIds?.length) {
+      const clientId = clientIdOf(request);
+      if (!clientId) {
         return reply.status(403).send({ message: 'No client account linked' });
       }
-      const clientId = clientIds[0];
 
       try {
         initializeClientDirs(clientId);
@@ -133,9 +158,9 @@ export async function clientKnowledgeRoutes(app) {
 
   // ── 2. Read single OKF file ──
   app.get(
-    '/knowledge/files/:folder/:filename',
+    `${base}/knowledge/files/:folder/:filename`,
     {
-      onRequest: [app.verifyJwt, app.requireClient],
+      onRequest: readGuards,
       schema: {
         params: {
           type: 'object',
@@ -148,11 +173,10 @@ export async function clientKnowledgeRoutes(app) {
       }
     },
     async (request, reply) => {
-      const clientIds = request.clientAccountIds;
-      if (!clientIds?.length) {
+      const clientId = clientIdOf(request);
+      if (!clientId) {
         return reply.status(403).send({ message: 'No client account linked' });
       }
-      const clientId = clientIds[0];
       const { folder, filename } = request.params;
 
       try {
@@ -166,9 +190,9 @@ export async function clientKnowledgeRoutes(app) {
 
   // ── 3. Save or edit file ──
   app.post(
-    '/knowledge/files',
+    `${base}/knowledge/files`,
     {
-      onRequest: [app.verifyJwt, app.requireClient, app.requireClientWriter],
+      onRequest: writeGuards,
       schema: {
         body: {
           type: 'object',
@@ -183,11 +207,10 @@ export async function clientKnowledgeRoutes(app) {
       }
     },
     async (request, reply) => {
-      const clientIds = request.clientAccountIds;
-      if (!clientIds?.length) {
+      const clientId = clientIdOf(request);
+      if (!clientId) {
         return reply.status(403).send({ message: 'No client account linked' });
       }
-      const clientId = clientIds[0];
       const { folder, filename, metadata, body } = request.body;
 
       try {
@@ -201,9 +224,9 @@ export async function clientKnowledgeRoutes(app) {
 
   // ── 3b. Delete file ──
   app.delete(
-    '/knowledge/files/:folder/:filename',
+    `${base}/knowledge/files/:folder/:filename`,
     {
-      onRequest: [app.verifyJwt, app.requireClient, app.requireClientWriter],
+      onRequest: writeGuards,
       schema: {
         params: {
           type: 'object',
@@ -216,11 +239,10 @@ export async function clientKnowledgeRoutes(app) {
       }
     },
     async (request, reply) => {
-      const clientIds = request.clientAccountIds;
-      if (!clientIds?.length) {
+      const clientId = clientIdOf(request);
+      if (!clientId) {
         return reply.status(403).send({ message: 'No client account linked' });
       }
-      const clientId = clientIds[0];
       const { folder, filename } = request.params;
 
       try {
@@ -241,16 +263,15 @@ export async function clientKnowledgeRoutes(app) {
 
   // ── 4. Upload and analyze file ──
   app.post(
-    '/knowledge/upload',
+    `${base}/knowledge/upload`,
     {
-      onRequest: [app.verifyJwt, app.requireClient, app.requireClientWriter],
+      onRequest: writeGuards,
     },
     async (request, reply) => {
-      const clientIds = request.clientAccountIds;
-      if (!clientIds?.length) {
+      const clientId = clientIdOf(request);
+      if (!clientId) {
         return reply.status(403).send({ message: 'No client account linked' });
       }
-      const clientId = clientIds[0];
 
       const data = await request.file();
       if (!data) {
@@ -278,9 +299,9 @@ export async function clientKnowledgeRoutes(app) {
 
   // ── 5. Guided interview follow-up ──
   app.post(
-    '/knowledge/interview/followup',
+    `${base}/knowledge/interview/followup`,
     {
-      onRequest: [app.verifyJwt, app.requireClient],
+      onRequest: readGuards,
       schema: {
         body: {
           type: 'object',
@@ -293,11 +314,10 @@ export async function clientKnowledgeRoutes(app) {
       }
     },
     async (request, reply) => {
-      const clientIds = request.clientAccountIds;
-      if (!clientIds?.length) {
+      const clientId = clientIdOf(request);
+      if (!clientId) {
         return reply.status(403).send({ message: 'No client account linked' });
       }
-      const clientId = clientIds[0];
       const { question, answer } = request.body;
 
       try {
@@ -311,9 +331,9 @@ export async function clientKnowledgeRoutes(app) {
 
   // ── 6. Guided interview save ──
   app.post(
-    '/knowledge/interview/save',
+    `${base}/knowledge/interview/save`,
     {
-      onRequest: [app.verifyJwt, app.requireClient, app.requireClientWriter],
+      onRequest: writeGuards,
       schema: {
         body: {
           type: 'object',
@@ -327,11 +347,10 @@ export async function clientKnowledgeRoutes(app) {
       }
     },
     async (request, reply) => {
-      const clientIds = request.clientAccountIds;
-      if (!clientIds?.length) {
+      const clientId = clientIdOf(request);
+      if (!clientId) {
         return reply.status(403).send({ message: 'No client account linked' });
       }
-      const clientId = clientIds[0];
       const { theme, qaPairs, expertName } = request.body;
 
       try {
@@ -370,16 +389,15 @@ export async function clientKnowledgeRoutes(app) {
 
   // ── 7. Audit knowledge gaps ──
   app.get(
-    '/knowledge/gap-analysis',
+    `${base}/knowledge/gap-analysis`,
     {
-      onRequest: [app.verifyJwt, app.requireClient],
+      onRequest: readGuards,
     },
     async (request, reply) => {
-      const clientIds = request.clientAccountIds;
-      if (!clientIds?.length) {
+      const clientId = clientIdOf(request);
+      if (!clientId) {
         return reply.status(403).send({ message: 'No client account linked' });
       }
-      const clientId = clientIds[0];
 
       try {
         // Load client details
@@ -430,9 +448,9 @@ export async function clientKnowledgeRoutes(app) {
 
   // ── 8. Save gap analysis ──
   app.post(
-    '/knowledge/gap-analysis/save',
+    `${base}/knowledge/gap-analysis/save`,
     {
-      onRequest: [app.verifyJwt, app.requireClient, app.requireClientWriter],
+      onRequest: writeGuards,
       schema: {
         body: {
           type: 'object',
@@ -444,11 +462,10 @@ export async function clientKnowledgeRoutes(app) {
       }
     },
     async (request, reply) => {
-      const clientIds = request.clientAccountIds;
-      if (!clientIds?.length) {
+      const clientId = clientIdOf(request);
+      if (!clientId) {
         return reply.status(403).send({ message: 'No client account linked' });
       }
-      const clientId = clientIds[0];
       const { analysis } = request.body;
 
       try {
@@ -500,9 +517,9 @@ export async function clientKnowledgeRoutes(app) {
 
   // ── 9. Plan content opportunities ──
   app.post(
-    '/knowledge/opportunities',
+    `${base}/knowledge/opportunities`,
     {
-      onRequest: [app.verifyJwt, app.requireClient],
+      onRequest: readGuards,
       schema: {
         body: {
           type: 'object',
@@ -516,11 +533,10 @@ export async function clientKnowledgeRoutes(app) {
       }
     },
     async (request, reply) => {
-      const clientIds = request.clientAccountIds;
-      if (!clientIds?.length) {
+      const clientId = clientIdOf(request);
+      if (!clientId) {
         return reply.status(403).send({ message: 'No client account linked' });
       }
-      const clientId = clientIds[0];
       const { keyword, service, topic } = request.body;
 
       try {
@@ -535,9 +551,9 @@ export async function clientKnowledgeRoutes(app) {
 
   // ── 10. Save opportunities plan ──
   app.post(
-    '/knowledge/opportunities/save',
+    `${base}/knowledge/opportunities/save`,
     {
-      onRequest: [app.verifyJwt, app.requireClient, app.requireClientWriter],
+      onRequest: writeGuards,
       schema: {
         body: {
           type: 'object',
@@ -550,11 +566,10 @@ export async function clientKnowledgeRoutes(app) {
       }
     },
     async (request, reply) => {
-      const clientIds = request.clientAccountIds;
-      if (!clientIds?.length) {
+      const clientId = clientIdOf(request);
+      if (!clientId) {
         return reply.status(403).send({ message: 'No client account linked' });
       }
-      const clientId = clientIds[0];
       const { topic, opportunities } = request.body;
 
       try {
@@ -605,9 +620,9 @@ export async function clientKnowledgeRoutes(app) {
 
   // ── 11. Draft article ──
   app.post(
-    '/knowledge/article',
+    `${base}/knowledge/article`,
     {
-      onRequest: [app.verifyJwt, app.requireClient],
+      onRequest: readGuards,
       schema: {
         body: {
           type: 'object',
@@ -621,11 +636,10 @@ export async function clientKnowledgeRoutes(app) {
       }
     },
     async (request, reply) => {
-      const clientIds = request.clientAccountIds;
-      if (!clientIds?.length) {
+      const clientId = clientIdOf(request);
+      if (!clientId) {
         return reply.status(403).send({ message: 'No client account linked' });
       }
-      const clientId = clientIds[0];
       const { topic, question, referencePaths } = request.body;
 
       try {
@@ -650,9 +664,9 @@ export async function clientKnowledgeRoutes(app) {
 
   // ── 12. Save article ──
   app.post(
-    '/knowledge/article/save',
+    `${base}/knowledge/article/save`,
     {
-      onRequest: [app.verifyJwt, app.requireClient, app.requireClientWriter],
+      onRequest: writeGuards,
       schema: {
         body: {
           type: 'object',
@@ -666,11 +680,10 @@ export async function clientKnowledgeRoutes(app) {
       }
     },
     async (request, reply) => {
-      const clientIds = request.clientAccountIds;
-      if (!clientIds?.length) {
+      const clientId = clientIdOf(request);
+      if (!clientId) {
         return reply.status(403).send({ message: 'No client account linked' });
       }
-      const clientId = clientIds[0];
       const { topic, article, references } = request.body;
 
       try {
@@ -716,5 +729,9 @@ export async function clientKnowledgeRoutes(app) {
       }
     }
   );
+  };
 }
+
+export const clientKnowledgeRoutes = buildKnowledgeRoutes({ staff: false });
+export const staffKnowledgeRoutes = buildKnowledgeRoutes({ staff: true });
 export default clientKnowledgeRoutes;

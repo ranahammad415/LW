@@ -211,7 +211,7 @@ export async function clientContentMapRoutes(app) {
             authorName: request.user.name || 'Client',
             commentPreview: content.slice(0, 200),
           },
-          actionUrl: `/portal/pm/projects/${project.id}?tab=content-map`,
+          actionUrl: `/portal/pm/content-profile/${project.id}`,
           metadata: { mapId: map.id, projectId: project.id, nodeId },
         });
 
@@ -357,7 +357,7 @@ export async function clientContentMapRoutes(app) {
             nodeName: node.name,
             commentPreview: commentText.slice(0, 200),
           },
-          actionUrl: `/portal/pm/projects/${project.id}?tab=content-map`,
+          actionUrl: `/portal/pm/content-profile/${project.id}`,
           metadata: { mapId: map.id, projectId: project.id, nodeId: node.id },
         });
 
@@ -435,7 +435,7 @@ export async function clientContentMapRoutes(app) {
             projectName: project.name || '',
             commentPreview: commentText.slice(0, 200),
           },
-          actionUrl: `/portal/pm/projects/${project.id}?tab=content-map`,
+          actionUrl: `/portal/pm/content-profile/${project.id}`,
           metadata: { mapId: map.id, projectId: project.id },
         });
 
