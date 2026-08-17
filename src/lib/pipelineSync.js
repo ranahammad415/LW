@@ -3,6 +3,7 @@ import {
   commentsForStatus,
   parseWpDate,
 } from './pipelineFormat.js';
+import { mirrorPipelineToMaps } from './contentMapSync.js';
 
 /** Build WP agent headers. */
 function wpHeaders(apiKey) {
@@ -168,6 +169,9 @@ export async function syncPipelineFromWp({ projectId } = {}) {
               ...createAssignee,
             },
           });
+
+          // Reflect pipeline progress on any matching content map node.
+          mirrorPipelineToMaps(project.id, review).catch(() => {});
 
           // Only backfill when this review has no events yet. WP's `history`
           // array is post-wide (all pipeline rows for the post), so importing

@@ -67,6 +67,14 @@ const MATRIX = {
   content_ready_for_client_review: { active: true, owner: 1, pm: 1, mgr: 1, viewer: 0 },
   content_submitted_for_review:    { active: true, owner: 1, pm: 1, mgr: 1, viewer: 0 },
 
+  content_map_submitted:           { active: true, owner: 1, pm: 1, mgr: 1, viewer: 1 },
+  content_map_comment_added:       { active: true, owner: 1, pm: 1, mgr: 1, viewer: 0 },
+  content_map_client_approved:     { active: true, owner: 1, pm: 1, mgr: 1, viewer: 0 },
+  content_map_changes_requested:   { active: true, owner: 1, pm: 1, mgr: 1, viewer: 0 },
+  content_map_node_published:      { active: true, owner: 1, pm: 1, mgr: 1, viewer: 0 },
+  content_map_site_drift:          { active: true, owner: 1, pm: 1, mgr: 0, viewer: 0 },
+  content_map_node_overdue:        { active: true, owner: 1, pm: 1, mgr: 0, viewer: 0 },
+
   // Projects
   project_created:               { active: true,  owner: 1, pm: 1, mgr: 0, viewer: 0 },
 

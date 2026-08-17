@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import pdfParse from 'pdf-parse';
 import mammoth from 'mammoth';
@@ -21,12 +22,121 @@ const SUBDIRS = [
   'voice',
   'sales',
   'content/articles',
-  'knowledge-gaps'
+  'knowledge-gaps',
+  'locations',
+  'competitors',
+  'seo/strategy',
+  'seo/local'
 ];
+
+export const OKF_VERSION = '2.0';
 
 // Ensure base folder exists
 if (!fs.existsSync(KB_BASE_DIR)) {
   fs.mkdirSync(KB_BASE_DIR, { recursive: true });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 0. OKF write context + append-only revision history
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Ambient attribution for writes performed inside a request or agent run, so
+// revisions can record who/what produced them without threading a param through
+// every call site.
+let activeOkfContext = null;
+
+export function setOkfContext(ctx) {
+  activeOkfContext = ctx;
+}
+
+export function clearOkfContext() {
+  activeOkfContext = null;
+}
+
+// Per-file promise chain so concurrent fire-and-forget version recordings for
+// the SAME file run sequentially. Without this, overlapping writes all read the
+// same "latest" row and collide on versionNumber or miss the dedup check.
+const okfVersionQueues = new Map();
+
+function enqueueOkfVersion(key, task) {
+  const prev = okfVersionQueues.get(key) || Promise.resolve();
+  const next = prev.then(task, task).catch(() => {});
+  okfVersionQueues.set(key, next);
+  next.finally(() => {
+    if (okfVersionQueues.get(key) === next) okfVersionQueues.delete(key);
+  });
+  return next;
+}
+
+async function recordOkfVersion(clientId, relativeFolder, cleanFilename, metadata, serializedContent, ctx) {
+  try {
+    const { prisma } = await import('./prisma.js');
+    const relPath = `${relativeFolder}/${cleanFilename}`;
+
+    // Hash the substantive content only. Every write stamps a fresh updated_at
+    // and re-derives the schema fields, so hashing the whole file would never
+    // dedup.
+    const { created_at, updated_at, okf_version, schema_type, ...stableMeta } = metadata || {};
+    const hashSource = JSON.stringify(stableMeta) + '\u0000' + serializedContent
+      .replace(/^(created_at|updated_at|okf_version|schema_type):.*$/gm, '')
+      .trim();
+    const contentHash = crypto.createHash('sha256').update(hashSource).digest('hex');
+
+    const latest = await prisma.okfVersion.findFirst({
+      where: { clientId, relPath },
+      orderBy: { versionNumber: 'desc' },
+      select: { versionNumber: true, contentHash: true }
+    });
+
+    if (latest?.contentHash === contentHash) return;
+
+    await prisma.okfVersion.create({
+      data: {
+        clientId,
+        folder: relativeFolder,
+        filename: cleanFilename,
+        relPath,
+        versionNumber: (latest?.versionNumber || 0) + 1,
+        contentHash,
+        metadata: metadata ?? undefined,
+        body: serializedContent,
+        authorId: ctx?.userId || null,
+        agentName: ctx?.agentName || null,
+        changeSummary: metadata?.change_summary || ctx?.reason || null
+      }
+    });
+  } catch (_) {
+    // Revision history is best-effort; never fail the underlying file write.
+  }
+}
+
+/**
+ * Lists revision history (newest first) for a single OKF file. Bodies are
+ * excluded to keep the payload light — use getOkfVersion for a specific one.
+ */
+export async function listOkfVersions(clientId, relativeFolder, filename) {
+  const { prisma } = await import('./prisma.js');
+  const cleanFilename = filename.endsWith('.md') ? filename : `${filename}.md`;
+  const relPath = `${relativeFolder}/${cleanFilename}`;
+  return prisma.okfVersion.findMany({
+    where: { clientId, relPath },
+    orderBy: { versionNumber: 'desc' },
+    select: {
+      id: true,
+      versionNumber: true,
+      contentHash: true,
+      metadata: true,
+      authorId: true,
+      agentName: true,
+      changeSummary: true,
+      createdAt: true
+    }
+  });
+}
+
+export async function getOkfVersion(id) {
+  const { prisma } = await import('./prisma.js');
+  return prisma.okfVersion.findUnique({ where: { id } });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -148,13 +258,21 @@ export function writeOkfFile(clientId, relativeFolder, filename, metadata, body)
   metadata.updated_at = now;
 
   // Add standard OKF schemas
-  metadata.okf_version = "1.0.0";
+  metadata.okf_version = OKF_VERSION;
   metadata.schema_type = metadata.type || "general";
 
   const yamlHeader = stringifyYaml(metadata);
   const content = `---\n${yamlHeader}\n---\n\n${body.trim()}\n`;
 
   fs.writeFileSync(filePath, content, 'utf8');
+
+  // Snapshot the context now; the recorder runs later on the per-file queue.
+  const ctxSnapshot = activeOkfContext ? { ...activeOkfContext } : null;
+  enqueueOkfVersion(
+    `${clientId}:${relativeFolder}/${cleanFilename}`,
+    () => recordOkfVersion(clientId, relativeFolder, cleanFilename, metadata, content, ctxSnapshot)
+  );
+
   return filePath;
 }
 

@@ -3,6 +3,7 @@ import { maybeGenerateSummary, autoSyncSitemap } from '../lib/wpSync.js';
 import { notify, notifyTest } from '../lib/notificationService.js';
 import { publish as publishRealtime } from '../lib/realtimeBus.js';
 import { commentsForEventType, timestampsForEventType, parseWpDate } from '../lib/pipelineFormat.js';
+import { reconcileProjectMapsSafe, mirrorPipelineToMaps } from '../lib/contentMapSync.js';
 
 export async function wpWebhookRoutes(app) {
   app.post('/wp-content-change', async (request, reply) => {
@@ -267,6 +268,10 @@ export async function wpWebhookRoutes(app) {
       });
     } catch { /* fail-safe */ }
 
+    // Reflect the change on any content map. Detached so it cannot affect the
+    // webhook response the WP plugin is waiting on.
+    reconcileProjectMapsSafe(project.id, request.log);
+
     return reply.send({ success: true, projectId: project.id, wpPostId });
   });
 
@@ -433,6 +438,9 @@ export async function wpWebhookRoutes(app) {
         ...(isPublishEvent || isCancelEvent ? { isPublished: true, publishedAt: new Date() } : {}),
       },
     });
+
+    // Reflect pipeline progress on any matching content map node.
+    mirrorPipelineToMaps(project.id, review, request.log).catch(() => {});
 
     // Generate / persist AI summary on initial submit, resubmit, OR resend
     // notification (so legacy rows created before AI summary existed get

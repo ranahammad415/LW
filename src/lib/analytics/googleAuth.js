@@ -145,8 +145,34 @@ export async function getAgencyOAuth2Client() {
   return client;
 }
 
+async function getServiceAccountAuth() {
+  const keyFile = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
+  if (!keyFile) return null;
+  const auth = new google.auth.GoogleAuth({
+    keyFile,
+    scopes: ['https://www.googleapis.com/auth/webmasters.readonly'],
+  });
+  return auth.getClient();
+}
+
+/** Persist OAuth failure so Admin UI can prompt reconnect. */
+export async function markAgencyGoogleError(message) {
+  const row = await prisma.agencyGoogleConnection.findFirst({
+    where: { status: 'ACTIVE' },
+    orderBy: { connectedAt: 'desc' },
+    select: { id: true },
+  });
+  if (!row) return;
+  await prisma.agencyGoogleConnection.update({
+    where: { id: row.id },
+    data: { lastError: String(message || 'OAuth error').slice(0, 500) },
+  });
+}
+
 /**
  * Preferred auth for GSC: agency OAuth first, then service account.
+ * When the stored refresh token is dead (`invalid_grant`), fall back to SA
+ * so sync/heal can still run until Google is reconnected.
  */
 export async function getGscAuth() {
   const row = await prisma.agencyGoogleConnection.findFirst({
@@ -154,15 +180,27 @@ export async function getGscAuth() {
     orderBy: { connectedAt: 'desc' },
   });
   if (row) {
-    return getAgencyOAuth2Client();
+    try {
+      const client = await getAgencyOAuth2Client();
+      // Force a token refresh now so invalid_grant fails here (not mid-request
+      // after we've already preferred a broken OAuth client).
+      await client.getAccessToken();
+      return client;
+    } catch (err) {
+      const msg = err?.message || String(err);
+      await markAgencyGoogleError(msg);
+      const sa = await getServiceAccountAuth();
+      if (sa) {
+        // eslint-disable-next-line no-console
+        console.warn(`[googleAuth] agency OAuth failed (${msg}); using service-account fallback`);
+        return sa;
+      }
+      throw err;
+    }
   }
-  const keyFile = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
-  if (!keyFile) throw new Error('No agency Google connection or GOOGLE_SERVICE_ACCOUNT_KEY');
-  const auth = new google.auth.GoogleAuth({
-    keyFile,
-    scopes: ['https://www.googleapis.com/auth/webmasters.readonly'],
-  });
-  return auth.getClient();
+  const sa = await getServiceAccountAuth();
+  if (!sa) throw new Error('No agency Google connection or GOOGLE_SERVICE_ACCOUNT_KEY');
+  return sa;
 }
 
 export async function hasAnyGoogleAuth() {

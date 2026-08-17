@@ -82,6 +82,14 @@ model User {
   openedWorkCycles            WorkCycle[]              @relation("WorkCycleOpener")
   agencyGoogleConnections     AgencyGoogleConnection[] @relation("AgencyGoogleConnector")
   wpContentReviewComments     WpContentReviewComment[] @relation("WpContentReviewCommentAuthor")
+  contentMapComments          ContentMapComment[]      @relation("ContentMapCommentAuthor")
+  contentMapsCreated          ContentMap[]             @relation("ContentMapCreator")
+  contentMapEvents            ContentMapEvent[]        @relation("ContentMapEventActor")
+  contentMapVersions          ContentMapVersion[]      @relation("ContentMapVersionAuthor")
+  contentMapDecisions         ContentMap[]             @relation("ContentMapDecisionBy")
+  contentMapCommentsResolved  ContentMapComment[]      @relation("ContentMapCommentResolver")
+  contentMapNodesAssigned     ContentMapNode[]         @relation("ContentMapNodeAssignee")
+  contentMapDriftsResolved    ContentMapDrift[]        @relation("ContentMapDriftResolver")
 
   @@map("user")
 }
@@ -255,6 +263,9 @@ model ClientAccount {
   secondaryPmId        String?
   onboardingStatus     OnboardingStatus? @default(PENDING)
   onboardingStep       Int               @default(1)
+  intakeStatus         String?           @db.VarChar(50)
+  intakeData           Json?
+  intakeCompletedAt    DateTime?
   healthScore          Int?
   isActive             Boolean           @default(true)
   analyticsGoogleEmail String?           @db.VarChar(255)
@@ -477,6 +488,7 @@ model Project {
   aiVisibilityRuns    AiVisibilityRun[]
   siteLeadEvents      SiteLeadEvent[]
   siteLeadDailyMetrics SiteLeadDailyMetric[]
+  contentMaps         ContentMap[]
 
   @@map("project")
 }
@@ -489,8 +501,9 @@ model SitemapNode {
   pageType  String   @default("PAGE") @db.VarChar(50)
   createdAt DateTime @default(now())
 
-  project  Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  keywords KeywordTrack[]
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  keywords        KeywordTrack[]
+  contentMapNodes ContentMapNode[]
 
   @@map("sitemapnode")
 }
@@ -619,6 +632,7 @@ model Task {
   activityLogs        TaskActivityLog[]
   wpPages             WpPage[]
   clientInputRequests ClientInputRequest[]
+  contentMapNodes     ContentMapNode[]
 
   @@index([workCycleId])
   @@index([clonedFromTaskId])
@@ -766,6 +780,7 @@ model WorkCycle {
   tasks     Task[]
   reports   MonthlyReport[]
   snapshots WorkCycleAnalyticsSnapshot[]
+  contentMapNodes ContentMapNode[]
 
   @@unique([month, year])
   @@index([status])
@@ -933,10 +948,12 @@ model WpPage {
   syncedAt         DateTime  @default(now())
   createdAt        DateTime  @default(now())
 
-  project    Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  task       Task?            @relation(fields: [taskId], references: [id], onDelete: SetNull)
-  snapshots  WpPageSnapshot[]
-  promptLogs PromptLog[]
+  project         Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  task            Task?             @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  snapshots       WpPageSnapshot[]
+  promptLogs      PromptLog[]
+  contentMapNodes ContentMapNode[]
+  contentMapDrifts ContentMapDrift[]
 
   @@unique([projectId, wpPostId])
   @@map("wppage")
@@ -1012,6 +1029,7 @@ model WpContentReview {
   project  Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
   events   WpContentReviewEvent[]
   comments WpContentReviewComment[]
+  contentMapNodes ContentMapNode[]
 
   @@unique([projectId, wpPipelineId])
   @@index([assignedWorkerId])
@@ -1433,6 +1451,322 @@ model ModalityConfig {
 
   @@unique([featureKey, role])
   @@map("modality_config")
+}
+
+// ============================================
+// Open Knowledge Format (OKF) Models
+// ============================================
+
+// Searchable index of the markdown assets on disk under knowledge_base/{clientId}.
+// Kept in sync by okfIndexingService.reindexOkfAssets.
+model OkfAssetIndex {
+  id           String   @id @default(uuid())
+  clientId     String   @db.VarChar(255)
+  filename     String   @db.VarChar(255)
+  folder       String   @db.VarChar(255)
+  relPath      String   @db.VarChar(500)
+  title        String   @db.VarChar(255)
+  type         String   @db.VarChar(100)
+  sizeBytes    Int
+  lastModified DateTime
+  indexedAt    DateTime @default(now())
+
+  @@index([clientId])
+  @@map("okfassetindex")
+}
+
+// Append-only revision history for every OKF file write.
+// Populated automatically by knowledgeEngine.writeOkfFile, deduplicated by contentHash.
+model OkfVersion {
+  id            String   @id @default(uuid())
+  clientId      String   @db.VarChar(255)
+  folder        String   @db.VarChar(255)
+  filename      String   @db.VarChar(255)
+  relPath       String   @db.VarChar(500)
+  versionNumber Int      @default(1)
+  contentHash   String   @db.VarChar(64)
+  metadata      Json?
+  body          String   @db.LongText
+  authorId      String?  @db.VarChar(255)
+  agentName     String?  @db.VarChar(255)
+  changeSummary String?  @db.VarChar(500)
+  createdAt     DateTime @default(now())
+
+  @@index([clientId, relPath])
+  @@map("okfversion")
+}
+
+model StrategyVersion {
+  id            String   @id @default(uuid())
+  projectId     String   @db.VarChar(255)
+  versionNumber Int      @default(1)
+  content       String   @db.LongText
+  authorId      String   @db.VarChar(255)
+  changeSummary String   @db.VarChar(500)
+  createdAt     DateTime @default(now())
+
+  @@index([projectId])
+  @@map("strategyversion")
+}
+
+// ============================================
+// Content Map / Topical Map Planner
+// ============================================
+
+model ContentMap {
+  id                 String    @id @default(uuid())
+  projectId          String
+  name               String    @default("Content Map") @db.VarChar(255)
+  status             String    @default("DRAFT") @db.VarChar(30) // DRAFT | IN_REVIEW | APPROVED | ARCHIVED
+  clientVisible      Boolean   @default(false)
+  clientDecision     String?   @db.VarChar(50) // APPROVED | CHANGES_REQUESTED
+  clientDecisionAt   DateTime?
+  clientDecisionById String?
+  sections           Json?
+  settings           Json?
+  createdById        String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @default(now()) @updatedAt
+
+  project          Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy        User?               @relation("ContentMapCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  clientDecisionBy User?               @relation("ContentMapDecisionBy", fields: [clientDecisionById], references: [id], onDelete: SetNull)
+  nodes            ContentMapNode[]
+  comments         ContentMapComment[]
+  events           ContentMapEvent[]
+  versions         ContentMapVersion[]
+  syncState        ContentMapSync?
+  drifts           ContentMapDrift[]
+
+  @@index([projectId])
+  @@map("contentmap")
+}
+
+model ContentMapNode {
+  id            String   @id @default(uuid())
+  mapId         String
+  parentId      String?
+  kind          String   @db.VarChar(20) // ROOT | PILLAR | CLUSTER | PAGE
+  name          String   @db.VarChar(500)
+  slug          String?  @db.VarChar(500)
+  priority      String?  @db.VarChar(10) // P1 | P2 | P3
+  contentType   String?  @db.VarChar(100)
+  intent        String?  @db.VarChar(100)
+  accent        String?  @db.VarChar(50)
+  note          String?  @db.LongText
+  todo          String?  @db.LongText
+  links         Json?
+  isLive        Boolean  @default(false)
+  needsFix      Boolean  @default(false)
+  isSupport     Boolean  @default(false)
+  sortOrder     Int      @default(0)
+  posX          Float?
+  posY          Float?
+  collapsed     Boolean  @default(false)
+  nodeStatus    String?  @db.VarChar(50)
+  pmDecision    String?  @db.VarChar(50)
+  clientDecision String? @db.VarChar(50)
+  sitemapNodeId String?
+  taskId        String?
+  /// Where this node came from: PLANNED | WORDPRESS | SITEMAP | PIPELINE
+  source        String   @default("PLANNED") @db.VarChar(20)
+  /// PLANNED | IN_PIPELINE | LIVE | NEEDS_UPDATE | ARCHIVED | GAP
+  lifecycle     String   @default("PLANNED") @db.VarChar(20)
+  wpPageId          String?
+  wpContentReviewId String?
+  /// Resolved live URL once the node is mapped to real content.
+  url                String?   @db.VarChar(500)
+  pathDepth          Int?
+  plannedPublishDate DateTime?
+  publishedAt        DateTime?
+  workCycleId        String?
+  assigneeId         String?
+  /// Target keywords: [{ keyword, keywordTrackId? }]
+  keywords      Json?
+  /// Cached enrichment snapshot (word count, links, SEO lengths, traffic).
+  metrics       Json?
+  metricsAt     DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @default(now()) @updatedAt
+
+  map             ContentMap          @relation(fields: [mapId], references: [id], onDelete: Cascade)
+  parent          ContentMapNode?     @relation("ContentMapNodeTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children        ContentMapNode[]    @relation("ContentMapNodeTree")
+  comments        ContentMapComment[]
+  events          ContentMapEvent[]
+  drifts          ContentMapDrift[]
+  sitemapNode     SitemapNode?        @relation(fields: [sitemapNodeId], references: [id], onDelete: SetNull)
+  task            Task?               @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  wpPage          WpPage?             @relation(fields: [wpPageId], references: [id], onDelete: SetNull)
+  wpContentReview WpContentReview?    @relation(fields: [wpContentReviewId], references: [id], onDelete: SetNull)
+  workCycle       WorkCycle?          @relation(fields: [workCycleId], references: [id], onDelete: SetNull)
+  assignee        User?               @relation("ContentMapNodeAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  @@index([mapId, parentId, sortOrder])
+  @@index([mapId, slug])
+  @@index([mapId, lifecycle])
+  @@index([mapId, plannedPublishDate])
+  @@index([wpPageId])
+  @@map("contentmapnode")
+}
+
+/// Per-map WordPress sync state: when we last reconciled and with what result.
+model ContentMapSync {
+  id              String    @id @default(uuid())
+  mapId           String    @unique
+  lastSyncAt      DateTime?
+  lastSyncStats   Json?
+  /// Post types pulled into the map, e.g. ["page", "post"]. Null = all.
+  includePostTypes Json?
+  /// When true, new site content is adopted straight into the map instead of queued.
+  autoAdopt       Boolean   @default(false)
+  firstImportAt   DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @default(now()) @updatedAt
+
+  map ContentMap @relation(fields: [mapId], references: [id], onDelete: Cascade)
+
+  @@map("contentmapsync")
+}
+
+/// Review queue for differences between the live WordPress site and the map.
+/// Sync writes rows here rather than mutating the map behind the PM's back.
+model ContentMapDrift {
+  id           String    @id @default(uuid())
+  mapId        String
+  nodeId       String?
+  wpPageId     String?
+  /// NEW_CONTENT | REMOVED | URL_CHANGED | TITLE_CHANGED | STATUS_CHANGED | LIKELY_MATCH
+  driftType    String    @db.VarChar(30)
+  payload      Json?
+  confidence   Float?
+  /// PENDING | ADOPTED | MERGED | IGNORED
+  status       String    @default("PENDING") @db.VarChar(20)
+  resolvedById String?
+  resolvedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @default(now()) @updatedAt
+
+  map        ContentMap      @relation(fields: [mapId], references: [id], onDelete: Cascade)
+  node       ContentMapNode? @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  wpPage     WpPage?         @relation(fields: [wpPageId], references: [id], onDelete: Cascade)
+  resolvedBy User?           @relation("ContentMapDriftResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  @@index([mapId, status, createdAt])
+  @@index([mapId, driftType])
+  @@map("contentmapdrift")
+}
+
+model ContentMapComment {
+  id           String    @id @default(uuid())
+  mapId        String
+  nodeId       String?
+  userId       String
+  content      String    @db.LongText
+  parentId     String?
+  resolvedAt   DateTime?
+  resolvedById String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @default(now()) @updatedAt
+
+  map        ContentMap          @relation(fields: [mapId], references: [id], onDelete: Cascade)
+  node       ContentMapNode?     @relation(fields: [nodeId], references: [id], onDelete: Cascade)
+  user       User                @relation("ContentMapCommentAuthor", fields: [userId], references: [id], onDelete: Cascade)
+  resolvedBy User?               @relation("ContentMapCommentResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+  parent     ContentMapComment?  @relation("ContentMapCommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies    ContentMapComment[] @relation("ContentMapCommentReplies")
+
+  @@index([mapId, nodeId, createdAt])
+  @@map("contentmapcomment")
+}
+
+model ContentMapEvent {
+  id        String   @id @default(uuid())
+  mapId     String
+  nodeId    String?
+  userId    String?
+  eventType String   @db.VarChar(100)
+  message   String?  @db.VarChar(500)
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  map  ContentMap      @relation(fields: [mapId], references: [id], onDelete: Cascade)
+  node ContentMapNode? @relation(fields: [nodeId], references: [id], onDelete: SetNull)
+  user User?           @relation("ContentMapEventActor", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([mapId, createdAt])
+  @@map("contentmapevent")
+}
+
+model ContentMapVersion {
+  id            String   @id @default(uuid())
+  mapId         String
+  versionNumber Int      @default(1)
+  snapshot      Json
+  authorId      String?
+  changeSummary String   @db.VarChar(500)
+  createdAt     DateTime @default(now())
+
+  map    ContentMap @relation(fields: [mapId], references: [id], onDelete: Cascade)
+  author User?      @relation("ContentMapVersionAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([mapId, versionNumber])
+  @@map("contentmapversion")
+}
+
+// ============================================
+// Realtime Voice Business Agent
+// ============================================
+
+// One spoken interview between a client and the Realtime voice agent.
+// durationSeconds backs the per-client monthly minutes cap.
+model VoiceInterviewSession {
+  id              String    @id @default(uuid())
+  clientId        String    @db.VarChar(255)
+  projectId       String?   @db.VarChar(255)
+  userId          String    @db.VarChar(255)
+  status          String    @default("ACTIVE") @db.VarChar(30)
+  startedAt       DateTime  @default(now())
+  endedAt         DateTime?
+  durationSeconds Int       @default(0)
+  transcript      Json?
+  extractedData   Json?
+  summary         String?   @db.Text
+  model           String?   @db.VarChar(100)
+  createdAt       DateTime  @default(now())
+
+  drafts OkfDraftChange[]
+
+  @@index([clientId, startedAt])
+  @@index([userId])
+  @@map("voiceinterviewsession")
+}
+
+// A proposed OKF write awaiting human approval. Nothing the voice agent or a
+// gap interview produces reaches the knowledge base until one of these is
+// approved by the SEO team.
+model OkfDraftChange {
+  id               String    @id @default(uuid())
+  clientId         String    @db.VarChar(255)
+  sessionId        String?
+  folder           String    @db.VarChar(255)
+  filename         String    @db.VarChar(255)
+  title            String    @db.VarChar(255)
+  proposedMetadata Json?
+  proposedBody     String    @db.LongText
+  sourceType       String    @default("VOICE_AGENT") @db.VarChar(40)
+  confidence       Float?
+  status           String    @default("PENDING") @db.VarChar(20)
+  reviewerId       String?   @db.VarChar(255)
+  reviewedAt       DateTime?
+  reviewNote       String?   @db.VarChar(1000)
+  createdAt        DateTime  @default(now())
+
+  session VoiceInterviewSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  @@index([clientId, status])
+  @@index([sessionId])
+  @@map("okfdraftchange")
 }
 
 // ============================================

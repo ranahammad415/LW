@@ -9,6 +9,7 @@ const FEATURES = [
   { key: 'projects', scopes: ['OWNER', 'CLIENT'] },
   { key: 'tasks', scopes: ['OWNER', 'PM', 'TEAM_MEMBER', 'CONTRACTOR', 'CLIENT'] },
   { key: 'contentReviews', scopes: ['OWNER', 'PM', 'TEAM_MEMBER', 'CONTRACTOR', 'CLIENT'] },
+  { key: 'contentMap', scopes: ['OWNER', 'PM', 'TEAM_MEMBER', 'CONTRACTOR', 'CLIENT'] },
   { key: 'support', scopes: ['OWNER', 'PM', 'TEAM_MEMBER', 'CONTRACTOR', 'CLIENT'] },
   { key: 'meetings', scopes: ['OWNER', 'CLIENT'] },
   { key: 'team', scopes: ['OWNER', 'CLIENT'] },
@@ -24,6 +25,7 @@ const FEATURES = [
   { key: 'reports', scopes: ['PM'] },
   { key: 'dailyDigest', scopes: ['PM'] },
   { key: 'knowledgeEngine', scopes: ['OWNER', 'PM', 'CLIENT'] },
+  { key: 'voiceAgent', scopes: ['OWNER', 'PM', 'CLIENT'] },
 ];
 
 const ROLES = ['OWNER', 'PM', 'TEAM_MEMBER', 'CONTRACTOR', 'CLIENT'];

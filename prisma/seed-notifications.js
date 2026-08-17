@@ -153,6 +153,56 @@ const templates = [
     inAppMessage: '[{{projectName}}] "{{postTitle}}" ({{postType}}) has been published',
     variables: ['postTitle', 'projectName', 'postType', 'actionUrl'] },
 
+  // ── Content Map Category ──
+  { slug: 'content_map_submitted', name: 'Content Map Submitted', description: 'When a content map is submitted for client review', category: 'content_map',
+    subject: '[Review Needed] Content map ready — {{projectName}}',
+    bodyHtml: '<p>The content map <strong>{{mapName}}</strong> for project <strong>{{projectName}}</strong> is ready for your review.</p>',
+    bodyText: 'The content map "{{mapName}}" for project "{{projectName}}" is ready for your review.',
+    inAppMessage: '[{{projectName}}] Content map ready for review',
+    variables: ['mapName', 'projectName', 'actionUrl'] },
+
+  { slug: 'content_map_comment_added', name: 'Content Map Comment', description: 'When a comment is added on a content map', category: 'content_map',
+    subject: 'New comment on content map — {{projectName}}',
+    bodyHtml: '<p><strong>{{authorName}}</strong> commented on the content map in project <strong>{{projectName}}</strong>.</p><p>{{commentPreview}}</p>',
+    bodyText: '{{authorName}} commented on the content map in project "{{projectName}}": {{commentPreview}}',
+    inAppMessage: '[{{projectName}}] New content map comment from {{authorName}}',
+    variables: ['mapName', 'projectName', 'authorName', 'commentPreview', 'nodeName', 'actionUrl'] },
+
+  { slug: 'content_map_client_approved', name: 'Content Map Approved', description: 'When the client approves the content map', category: 'content_map',
+    subject: '[Approved] Content map — {{projectName}}',
+    bodyHtml: '<p>The client approved the content map <strong>{{mapName}}</strong> for project <strong>{{projectName}}</strong>.</p>',
+    bodyText: 'The client approved the content map "{{mapName}}" for project "{{projectName}}".',
+    inAppMessage: '[{{projectName}}] Content map approved by client',
+    variables: ['mapName', 'projectName', 'actionUrl'] },
+
+  { slug: 'content_map_changes_requested', name: 'Content Map Changes Requested', description: 'When the client requests changes on the content map', category: 'content_map',
+    subject: '[Changes Requested] Content map — {{projectName}}',
+    bodyHtml: '<p>The client requested changes on the content map <strong>{{mapName}}</strong> for project <strong>{{projectName}}</strong>.</p><p>{{commentPreview}}</p>',
+    bodyText: 'The client requested changes on the content map "{{mapName}}" for project "{{projectName}}": {{commentPreview}}',
+    inAppMessage: '[{{projectName}}] Client requested content map changes',
+    variables: ['mapName', 'projectName', 'commentPreview', 'nodeName', 'actionUrl'] },
+
+  { slug: 'content_map_node_published', name: 'Content Map Node Published', description: 'When a planned content map node goes live on the site', category: 'content_map',
+    subject: '[Published] {{nodeName}} is live — {{projectName}}',
+    bodyHtml: '<p><strong>{{nodeName}}</strong> is now live on the site for project <strong>{{projectName}}</strong>.</p><p><a href="{{pageUrl}}">{{pageUrl}}</a></p>',
+    bodyText: '{{nodeName}} is now live on the site for project "{{projectName}}": {{pageUrl}}',
+    inAppMessage: '[{{projectName}}] {{nodeName}} is now live',
+    variables: ['mapName', 'projectName', 'nodeName', 'pageUrl', 'actionUrl'] },
+
+  { slug: 'content_map_site_drift', name: 'Content Map Site Changes', description: 'When the site sync finds content changes needing PM review', category: 'content_map',
+    subject: '[Review] {{driftCount}} site changes to review — {{projectName}}',
+    bodyHtml: '<p>The latest site sync found <strong>{{driftCount}}</strong> change(s) on <strong>{{projectName}}</strong> that are not reflected in the content map.</p>',
+    bodyText: 'The latest site sync found {{driftCount}} change(s) on "{{projectName}}" that are not reflected in the content map.',
+    inAppMessage: '[{{projectName}}] {{driftCount}} site changes to review',
+    variables: ['mapName', 'projectName', 'driftCount', 'actionUrl'] },
+
+  { slug: 'content_map_node_overdue', name: 'Content Map Node Overdue', description: 'When a planned content node passes its expected publish date', category: 'content_map',
+    subject: '[Overdue] {{nodeName}} missed its publish date — {{projectName}}',
+    bodyHtml: '<p><strong>{{nodeName}}</strong> was expected to publish on {{plannedDate}} for <strong>{{projectName}}</strong> and is still not live.</p>',
+    bodyText: '{{nodeName}} was expected to publish on {{plannedDate}} for "{{projectName}}" and is still not live.',
+    inAppMessage: '[{{projectName}}] {{nodeName}} is overdue',
+    variables: ['mapName', 'projectName', 'nodeName', 'plannedDate', 'actionUrl'] },
+
   // ── Issue Category ──
   { slug: 'issue_created', name: 'Issue Created', description: 'When a new support issue is reported', category: 'issue',
     subject: 'New Issue: {{issueTitle}}',

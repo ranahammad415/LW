@@ -1,5 +1,6 @@
 import { prisma } from './prisma.js';
 import { generateChat, isAiConfigured } from './ai.js';
+import { reconcileProjectMapsSafe } from './contentMapSync.js';
 
 /** Headers many WordPress hosts expect (bare fetch() can be blocked as a bot). */
 function wpAgentHeaders(apiKey) {
@@ -243,6 +244,12 @@ export async function syncProjectPages(projectId) {
     }
   } catch {
     // Non-fatal for page sync
+  }
+
+  // Refresh any content maps against the new inventory. Detached on purpose so a
+  // content map failure can never affect the page sync result.
+  if (created || updated || deleted) {
+    reconcileProjectMapsSafe(projectId);
   }
 
   return { synced: remotePages.length, created, updated, deleted };
