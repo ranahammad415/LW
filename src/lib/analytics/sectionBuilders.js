@@ -5,6 +5,7 @@ import { prisma } from '../prisma.js';
 import { resolveCycle } from '../workCycle.js';
 import { buildClientAnalytics } from './freezeSnapshot.js';
 import { getClientTrafficSeries } from './gscSeries.js';
+import { stripTrailingIncomplete } from './seriesUtils.js';
 
 function cycleRange(cycle) {
   const start = new Date(Date.UTC(cycle.year, cycle.month - 1, 1));
@@ -429,10 +430,13 @@ export async function buildGscView(clientIds, view, query) {
       positionYoyDelta: yoy ? pctDelta(totals.position, yoy.position) : null,
     },
     // GSC series is already densified; index-zip YoY (and prev when present).
-    series: attachYoySeries(
-      attachPrevSeries(traffic.series, prevTraffic?.series || [], gscSeriesKeys),
-      yoyTraffic?.series || [],
-      gscSeriesKeys
+    series: stripTrailingIncomplete(
+      attachYoySeries(
+        attachPrevSeries(traffic.series, prevTraffic?.series || [], gscSeriesKeys),
+        yoyTraffic?.series || [],
+        gscSeriesKeys
+      ),
+      ['clicks', 'impressions']
     ),
     brandGeneric: {
       brand: { keywords: brand.length, clicks: sum(brand, 'clicks'), impressions: sum(brand, 'impressions') },
@@ -526,10 +530,13 @@ export async function buildGa4View(clientIds, view, query) {
   const yoySeriesDense = yoyRange
     ? densifyDailySeries(yoyRange.start, yoyRange.end, yoyAgg.series, ga4SeriesKeys)
     : [];
-  const series = attachYoySeries(
-    attachPrevSeries(currSeries, prevSeriesDense, ga4SeriesKeys),
-    yoySeriesDense,
-    ga4SeriesKeys
+  const series = stripTrailingIncomplete(
+    attachYoySeries(
+      attachPrevSeries(currSeries, prevSeriesDense, ga4SeriesKeys),
+      yoySeriesDense,
+      ga4SeriesKeys
+    ),
+    ['sessions', 'conversions']
   );
   const totals = curr.totals;
   const conversionRate = totals.sessions > 0 ? Number(((totals.conversions / totals.sessions) * 100).toFixed(2)) : 0;
@@ -737,7 +744,7 @@ export async function buildGmbView(clientIds, view, query) {
       websiteClicksYoyDelta: hasYoy ? pctDelta(sum('websiteClicks'), yoySum('websiteClicks')) : null,
       callsYoyDelta: hasYoy ? pctDelta(sum('calls'), yoySum('calls')) : null,
     },
-    series,
+    series: stripTrailingIncomplete(series, ['impressions', 'websiteClicks', 'directions', 'calls']),
     reviews: reviews.map((r) => ({
       id: r.id,
       reviewerName: r.reviewerName,

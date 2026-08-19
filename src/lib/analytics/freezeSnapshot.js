@@ -8,6 +8,7 @@
  */
 import { prisma } from '../prisma.js';
 import { getClientTrafficSeries } from './gscSeries.js';
+import { stripTrailingIncomplete } from './seriesUtils.js';
 
 /** First/last day (UTC) of a cycle's calendar month. */
 function cycleRange(cycle) {
@@ -204,7 +205,10 @@ export async function buildClientAnalytics(clientId, cycle, opts = {}) {
     users: sumRows(ga4Rows, 'totalUsers'),
     conversions: sumRows(ga4Rows, 'conversions'),
     pageViews: sumRows(ga4Rows, 'pageViews'),
-    series: aggregateByDate(ga4Rows, ['sessions', 'totalUsers', 'conversions', 'pageViews']),
+    series: stripTrailingIncomplete(
+      aggregateByDate(ga4Rows, ['sessions', 'totalUsers', 'conversions', 'pageViews']),
+      ['sessions', 'conversions']
+    ),
     deltas: hasPrevGa4
       ? {
           sessions: pctDelta(sumRows(ga4Rows, 'sessions'), sumRows(prevGa4Rows, 'sessions')),
@@ -236,14 +240,17 @@ export async function buildClientAnalytics(clientId, cycle, opts = {}) {
     websiteClicks: sumRows(gmbRows, 'websiteClicks'),
     calls: sumRows(gmbRows, 'calls'),
     actions: gmbActions,
-    series: aggregateByDate(gmbRows, [
-      'impressions',
-      'impressionsSearch',
-      'impressionsMaps',
-      'websiteClicks',
-      'directions',
-      'calls',
-    ]),
+    series: stripTrailingIncomplete(
+      aggregateByDate(gmbRows, [
+        'impressions',
+        'impressionsSearch',
+        'impressionsMaps',
+        'websiteClicks',
+        'directions',
+        'calls',
+      ]),
+      ['impressions', 'websiteClicks', 'directions', 'calls']
+    ),
     deltas: hasPrevGmb
       ? {
           impressions: pctDelta(sumRows(gmbRows, 'impressions'), sumRows(prevGmbRows, 'impressions')),
@@ -318,10 +325,13 @@ export async function buildClientAnalytics(clientId, cycle, opts = {}) {
   });
 
   const trafficKeys = ['clicks', 'impressions', 'ctr', 'position'];
-  const trafficSeries = attachYoySeries(
-    attachPrevSeries(traffic.series || [], prevTraffic?.series || [], trafficKeys),
-    yoyTraffic?.series || [],
-    trafficKeys
+  const trafficSeries = stripTrailingIncomplete(
+    attachYoySeries(
+      attachPrevSeries(traffic.series || [], prevTraffic?.series || [], trafficKeys),
+      yoyTraffic?.series || [],
+      trafficKeys
+    ),
+    ['clicks', 'impressions']
   );
 
   return {
