@@ -1,6 +1,7 @@
 import { prisma } from '../../lib/prisma.js';
 import { notify } from '../../lib/notificationService.js';
 import { syncPipelineFromWp } from '../../lib/pipelineSync.js';
+import { recordPipelineTombstone } from '../../lib/pipelineReviewGuard.js';
 import {
   STATUS_LABELS,
   STATUS_COLORS,
@@ -1259,6 +1260,10 @@ export async function pmPipelineRoutes(app) {
             // 404 / not_found → already gone on WP; still wipe OS.
             if (!res.ok && res.status !== 404) {
               const json = await res.json().catch(() => ({}));
+              request.log.warn(
+                { status: res.status, url, message: json.message },
+                'WP pipeline cancel returned a non-404 error; OS delete will still proceed'
+              );
               // Continue to OS delete unless WP is unreachable in a hard way.
               if (res.status >= 500) {
                 return reply.status(502).send({
@@ -1271,6 +1276,12 @@ export async function pmPipelineRoutes(app) {
             // If OS row exists, still delete it so Owner can clean stuck reviews.
           }
         }
+
+        await recordPipelineTombstone({
+          projectId,
+          wpPipelineId: pipelineId,
+          deletedById: request.user?.id || null,
+        });
 
         if (existing) {
           await prisma.wpContentReview.delete({ where: { id: existing.id } });

@@ -4,6 +4,7 @@ import {
   parseWpDate,
 } from './pipelineFormat.js';
 import { mirrorPipelineToMaps } from './contentMapSync.js';
+import { hasWpPostStatus, isOrphanWpPostStatus, listTombstonedPipelineIds } from './pipelineReviewGuard.js';
 
 /** Build WP agent headers. */
 function wpHeaders(apiKey) {
@@ -60,9 +61,15 @@ export async function syncPipelineFromWp({ projectId } = {}) {
         page += 1;
       }
 
+      const tombstonedIds = await listTombstonedPipelineIds(project.id);
+
       for (const p of items) {
         const wpPipelineId = Number(p.id);
         if (!wpPipelineId) continue;
+        if (tombstonedIds.has(wpPipelineId)) continue;
+
+        const wpPostStatus = p.wpPostStatus ?? p.wp_post_status ?? '';
+        const isOrphan = hasWpPostStatus(p) && isOrphanWpPostStatus(wpPostStatus);
 
         // Preserve an already-published state; never let sync regress it.
         // Do NOT treat WP post_status=publish alone as "review done" — active
@@ -71,12 +78,36 @@ export async function syncPipelineFromWp({ projectId } = {}) {
         const existing = await prisma.wpContentReview.findUnique({
           where: { projectId_wpPipelineId: { projectId: project.id, wpPipelineId } },
           select: {
+            id: true,
             isPublished: true,
             publishedAt: true,
             assignedWorkerId: true,
             assignedWorkerName: true,
           },
         });
+
+        // Page gone from WordPress: never create a new review, and hide any
+        // leftover OS row from the default Content Reviews list.
+        if (isOrphan) {
+          if (existing && !existing.isPublished) {
+            try {
+              await prisma.wpContentReview.update({
+                where: { id: existing.id },
+                data: {
+                  isPublished: true,
+                  publishedAt: existing.publishedAt || new Date(),
+                  status: 'cancelled',
+                  lastEventType: 'pipeline_orphaned',
+                },
+              });
+              synced++;
+            } catch {
+              errors++;
+            }
+          }
+          continue;
+        }
+
         const pipelineStatus = String(p.status || '').slice(0, 50);
         const wpSaysPublished =
           pipelineStatus === 'published' || pipelineStatus === 'publish';

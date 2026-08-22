@@ -4,6 +4,7 @@ import { notify, notifyTest } from '../lib/notificationService.js';
 import { publish as publishRealtime } from '../lib/realtimeBus.js';
 import { commentsForEventType, timestampsForEventType, parseWpDate } from '../lib/pipelineFormat.js';
 import { reconcileProjectMapsSafe, mirrorPipelineToMaps } from '../lib/contentMapSync.js';
+import { isPipelineTombstoned } from '../lib/pipelineReviewGuard.js';
 
 export async function wpWebhookRoutes(app) {
   app.post('/wp-content-change', async (request, reply) => {
@@ -295,6 +296,10 @@ export async function wpWebhookRoutes(app) {
     const wpPipelineId = Number(body.pipelineId);
     if (!Number.isInteger(wpPipelineId) || wpPipelineId <= 0) {
       return reply.status(400).send({ message: 'Invalid pipelineId' });
+    }
+
+    if (await isPipelineTombstoned(project.id, wpPipelineId)) {
+      return reply.send({ success: true, skipped: 'tombstoned' });
     }
 
     const eventType = String(body.eventType || '').trim();

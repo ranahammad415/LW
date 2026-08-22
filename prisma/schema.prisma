@@ -82,6 +82,7 @@ model User {
   openedWorkCycles            WorkCycle[]              @relation("WorkCycleOpener")
   agencyGoogleConnections     AgencyGoogleConnection[] @relation("AgencyGoogleConnector")
   wpContentReviewComments     WpContentReviewComment[] @relation("WpContentReviewCommentAuthor")
+  wpContentReviewTombstones   WpContentReviewTombstone[] @relation("WpContentReviewTombstoneDeletedBy")
   contentMapComments          ContentMapComment[]      @relation("ContentMapCommentAuthor")
   contentMapsCreated          ContentMap[]             @relation("ContentMapCreator")
   contentMapEvents            ContentMapEvent[]        @relation("ContentMapEventActor")
@@ -481,6 +482,7 @@ model Project {
   clientIssues         ClientIssue[]
   wpPages              WpPage[]
   contentReviews       WpContentReview[]
+  contentReviewTombstones WpContentReviewTombstone[]
   intakeSubmissions    IntakeSubmission[]
   contractRecords      ContractRecord[]
   onboardingChecklist  OnboardingChecklist?  @relation("ProjectOnboardingChecklist")
@@ -1043,6 +1045,22 @@ model WpContentReview {
   @@unique([projectId, wpPipelineId])
   @@index([assignedWorkerId])
   @@map("wpcontentreview")
+}
+
+/// Owner-deleted pipeline ids. Sync and webhooks must not recreate these rows.
+model WpContentReviewTombstone {
+  id           String   @id @default(uuid())
+  projectId    String
+  wpPipelineId Int
+  deletedAt    DateTime @default(now())
+  deletedById  String?
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  deletedBy User?   @relation("WpContentReviewTombstoneDeletedBy", fields: [deletedById], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, wpPipelineId])
+  @@index([projectId])
+  @@map("wpcontentreviewtombstone")
 }
 
 /// Freeform OS-side comments on a content review (discussion; not WP decisions).
