@@ -8,6 +8,7 @@ import {
   contentTypeLabel,
 } from '../../lib/pipelineFormat.js';
 import { resolveCycle } from '../../lib/workCycle.js';
+import { syncClientProjectsFromWp } from '../../lib/pipelineSync.js';
 
 async function buildCycleWhere(query = {}) {
   if (query.cycle === 'all') return {};
@@ -858,6 +859,7 @@ export async function clientProjectsRoutes(app) {
       }
 
       try {
+        await syncClientProjectsFromWp([projectId], request.log);
         const reviews = await prisma.wpContentReview.findMany({
           where: {
             projectId,
@@ -941,6 +943,19 @@ export async function clientProjectsRoutes(app) {
       const { status, includePublished } = request.query || {};
 
       try {
+        const wpProjects = await prisma.project.findMany({
+          where: {
+            clientId: { in: clientIds },
+            wpUrl: { not: null },
+            wpApiKey: { not: null },
+          },
+          select: { id: true },
+        });
+        await syncClientProjectsFromWp(
+          wpProjects.map((p) => p.id),
+          request.log
+        );
+
         const where = {
           project: { clientId: { in: clientIds } },
         };

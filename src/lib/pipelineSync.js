@@ -291,6 +291,34 @@ export async function syncPipelineFromWp({ projectId } = {}) {
   return { synced, errors };
 }
 
+/**
+ * Heal OS pipeline rows for one or more projects by pulling from WordPress.
+ * Failures are logged and swallowed so a down WP site cannot 500 the OS list.
+ */
+export async function syncClientProjectsFromWp(projectIds, logger) {
+  const ids = [...new Set((projectIds || []).filter(Boolean))];
+  if (ids.length === 0) return { synced: 0, errors: 0 };
+
+  const results = await Promise.all(
+    ids.map(async (projectId) => {
+      try {
+        return await syncPipelineFromWp({ projectId });
+      } catch (err) {
+        logger?.warn?.({ err, projectId }, 'Client pipeline WP sync failed');
+        return { synced: 0, errors: 1 };
+      }
+    })
+  );
+
+  return results.reduce(
+    (acc, r) => ({
+      synced: acc.synced + (r?.synced || 0),
+      errors: acc.errors + (r?.errors || 0),
+    }),
+    { synced: 0, errors: 0 }
+  );
+}
+
 let syncIntervalId = null;
 
 /**

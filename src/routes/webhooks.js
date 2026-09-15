@@ -5,6 +5,10 @@ import { publish as publishRealtime } from '../lib/realtimeBus.js';
 import { commentsForEventType, timestampsForEventType, parseWpDate } from '../lib/pipelineFormat.js';
 import { reconcileProjectMapsSafe, mirrorPipelineToMaps } from '../lib/contentMapSync.js';
 import { isPipelineTombstoned } from '../lib/pipelineReviewGuard.js';
+import {
+  shouldIgnoreStaleClientRewind,
+  shouldClearClientDecision,
+} from '../lib/pipelineWebhookGuard.js';
 
 export async function wpWebhookRoutes(app) {
   app.post('/wp-content-change', async (request, reply) => {
@@ -344,24 +348,40 @@ export async function wpWebhookRoutes(app) {
 
     let alreadyPublished = false;
     let existingAssigneeId = null;
+    let existingStatus = null;
     try {
       const existingReview = await prisma.wpContentReview.findUnique({
         where: {
           projectId_wpPipelineId: { projectId: project.id, wpPipelineId },
         },
-        select: { isPublished: true, assignedWorkerId: true },
+        select: { isPublished: true, assignedWorkerId: true, status: true },
       });
       alreadyPublished = existingReview?.isPublished || false;
       existingAssigneeId = existingReview?.assignedWorkerId || null;
+      existingStatus = existingReview?.status || null;
     } catch { /* fail-safe */ }
+
+    if (
+      shouldIgnoreStaleClientRewind({
+        existingStatus,
+        existingIsPublished: alreadyPublished,
+        eventType,
+        incomingStatus: status,
+      })
+    ) {
+      return reply.send({ success: true, skipped: 'stale_client_rewind' });
+    }
 
     const resolvedStatus =
       isPublishEvent || alreadyPublished ? 'published' : status;
     // When WP re-enters a pending_* stage, drop stale decision fields so OS
     // badges match WP (e.g. changes_updated → pending_client_review).
-    const shouldClearClient =
-      resolvedStatus === 'pending_client_review' ||
-      eventType === 'pipeline_sent_to_client';
+    const shouldClearClient = shouldClearClientDecision({
+      resolvedStatus,
+      eventType,
+      existingStatus,
+      existingIsPublished: alreadyPublished,
+    });
     const shouldClearPm =
       resolvedStatus === 'pending_pm_review' ||
       eventType === 'pipeline_resubmitted';
