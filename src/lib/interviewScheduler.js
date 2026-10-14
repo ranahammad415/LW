@@ -31,12 +31,15 @@ import { sendEmail } from './mailer.js';
 import { notificationEmailsPaused } from './notificationEmailPause.js';
 import { resolveInterviewSettings } from './interviewSettings.js';
 import { MAX_SESSION_SECONDS } from './realtimeVoice.js';
+import { billedSeconds } from './interviewSession.js';
 
 const LOCK_TTL_MS = 10 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const VOICE_STALE_HEARTBEAT_MS = 10 * 60 * 1000;
 const SESSION_MAX_AGE_MS = 60 * 60 * 1000;
 const UNCONFIRMED_TTL_MS = 24 * 60 * 60 * 1000;
+/** A RUNNING consolidation or PENDING summary older than this is retried (review fix M1). */
+export const LEASE_TTL_MS = 15 * 60 * 1000;
 
 export const EXPIRABLE_STATUSES = ['PENDING', 'SENT', 'SEND_FAILED', 'OPENED', 'IN_PROGRESS', 'PENDING_CONFIRM'];
 
@@ -82,10 +85,22 @@ export function dueReminderIndex(invite, now = new Date()) {
 
 /** Seconds to bill for a session that never reported completion (pure). */
 export function reapBilledSeconds(session, now = new Date()) {
-  if (session.mode !== 'VOICE') return 0;
+  // Same rules as interviewSession.billedSeconds (review fix H1): heartbeat
+  // span + grace, or full wall-clock time when no heartbeat ever arrived.
+  return billedSeconds(session, { now, reaped: true });
+}
+
+/** Whether a public session should be reaped now (pure). */
+export function isSessionStale(session, now = new Date()) {
   const started = new Date(session.startedAt).getTime();
-  const end = session.lastHeartbeatAt ? new Date(session.lastHeartbeatAt).getTime() : now.getTime();
-  return Math.max(0, Math.min(Math.round((end - started) / 1000), MAX_SESSION_SECONDS));
+  const hb = session.lastHeartbeatAt ? new Date(session.lastHeartbeatAt).getTime() : null;
+  if (session.mode === 'VOICE') {
+    if (hb !== null) return now.getTime() - hb > VOICE_STALE_HEARTBEAT_MS;
+    // Never heartbeated: give it the full session length plus 5 minutes.
+    return now.getTime() - started > (MAX_SESSION_SECONDS + 300) * 1000;
+  }
+  const last = hb !== null ? hb : started;
+  return now.getTime() - last > SESSION_MAX_AGE_MS;
 }
 
 // ── Steps ────────────────────────────────────────────────────────────────────
@@ -111,10 +126,28 @@ export async function sendScheduledInvites({ now, instance }) {
       await releaseInvite(inv.id);
     }
   }
+  // Landing-page delegations created while emails were paused stay PENDING
+  // without a link; send them now (review LOW fix).
+  const stuckChildren = await prisma.knowledgeInterviewInvite.findMany({
+    where: { status: 'PENDING', respondentRole: 'STAFF', tokenNonce: null, sentToEmail: { not: null }, expiresAt: { gt: now } },
+    take: 20,
+  });
+  for (const child of stuckChildren) {
+    if (!(await claimInvite(child.id, { status: 'PENDING', tokenNonce: null }, now, instance))) continue;
+    try {
+      const res = await dispatchInvite(child, { kind: 'SEND', instance });
+      if (res.ok) sent++;
+      else failed++;
+    } finally {
+      await releaseInvite(child.id);
+    }
+  }
   return { sent, failed };
 }
 
 export async function sendReminders({ now, instance }) {
+  // Don't consume reminderCount while emails are paused (review LOW fix).
+  if (notificationEmailsPaused()) return { sent: 0, paused: true };
   const candidates = await prisma.knowledgeInterviewInvite.findMany({
     where: {
       status: { in: ['SENT', 'OPENED'] },
@@ -135,7 +168,10 @@ export async function sendReminders({ now, instance }) {
       data: { reminderCount: n + 1, lastReminderAt: now },
     });
     if (claimed.count !== 1) continue;
-    const res = await dispatchInvite(inv, { kind: 'REMINDER', instance });
+    // Re-read after the claim: a concurrent resend may have rotated the link.
+    const fresh = await prisma.knowledgeInterviewInvite.findUnique({ where: { id: inv.id } });
+    if (!fresh || !['SENT', 'OPENED'].includes(fresh.status) || !fresh.tokenNonce) continue;
+    const res = await dispatchInvite(fresh, { kind: 'REMINDER', instance });
     if (res.ok) sent++;
   }
   return { sent };
@@ -160,18 +196,16 @@ export async function reapStaleSessions({ now, instance }) {
   const sessions = await prisma.voiceInterviewSession.findMany({
     where: {
       status: 'ACTIVE',
-      // Never touch the portal's text expert interviews (mode TEXT, no invite).
-      OR: [{ mode: 'VOICE' }, { inviteId: { not: null } }],
+      // Only public interview-link sessions. Portal sessions (no invite) keep
+      // their old behaviour, so sessions stuck ACTIVE before this feature are
+      // never suddenly billed at the full maximum (review LOW fix).
+      inviteId: { not: null },
     },
     take: 200,
   });
   let reaped = 0;
   for (const s of sessions) {
-    const started = new Date(s.startedAt).getTime();
-    const hb = s.lastHeartbeatAt ? new Date(s.lastHeartbeatAt).getTime() : null;
-    const staleWindow = s.mode === 'VOICE' ? VOICE_STALE_HEARTBEAT_MS : SESSION_MAX_AGE_MS;
-    const stale = hb !== null ? now.getTime() - hb > staleWindow : now.getTime() - started > SESSION_MAX_AGE_MS;
-    if (!stale && now.getTime() - started <= (s.mode === 'VOICE' ? SESSION_MAX_AGE_MS : 6 * SESSION_MAX_AGE_MS)) continue;
+    if (!isSessionStale(s, now)) continue;
 
     const billed = reapBilledSeconds(s, now);
     const hasDrafts = s.inviteId ? (await prisma.okfDraftChange.count({ where: { sessionId: s.id } })) > 0 : false;
@@ -200,6 +234,12 @@ export async function reapStaleSessions({ now, instance }) {
 }
 
 export async function runConsolidation({ now, instance, log }) {
+  // Recover sessions left RUNNING by a crash/restart: consolidatedAt doubles
+  // as the claim time while RUNNING (review fix M1).
+  await prisma.voiceInterviewSession.updateMany({
+    where: { consolidationStatus: 'RUNNING', OR: [{ consolidatedAt: null }, { consolidatedAt: { lt: new Date(now.getTime() - LEASE_TTL_MS) } }] },
+    data: { consolidationStatus: 'PENDING' },
+  });
   const pending = await prisma.voiceInterviewSession.findMany({
     where: { consolidationStatus: 'PENDING' },
     orderBy: { startedAt: 'asc' },
@@ -210,7 +250,7 @@ export async function runConsolidation({ now, instance, log }) {
   for (const s of pending) {
     const claimed = await prisma.voiceInterviewSession.updateMany({
       where: { id: s.id, consolidationStatus: 'PENDING' },
-      data: { consolidationStatus: 'RUNNING' },
+      data: { consolidationStatus: 'RUNNING', consolidatedAt: now },
     });
     if (claimed.count !== 1) continue;
     try {
@@ -282,6 +322,13 @@ export function treeIsSettled({ root, children, sessions }) {
  * summaryStatus NONE → PENDING makes it once-only across instances.
  */
 export async function finalizeRootInvites({ now, instance, log }) {
+  // A summary claimed by an instance that then crashed is retried (review fix M1).
+  await prisma.knowledgeInterviewInvite.updateMany({
+    where: { summaryStatus: 'PENDING', OR: [{ lockedAt: null }, { lockedAt: { lt: new Date(now.getTime() - LEASE_TTL_MS) } }] },
+    data: { summaryStatus: 'NONE', lockedAt: null, lockedBy: null },
+  });
+  // Least-recently-checked first, and unsettled roots are "touched" below, so
+  // 20 roots waiting on colleagues can never starve the rest (review fix M1).
   const roots = await prisma.knowledgeInterviewInvite.findMany({
     where: {
       status: { in: ['COMPLETED', 'EXPIRED'] },
@@ -290,6 +337,7 @@ export async function finalizeRootInvites({ now, instance, log }) {
       // Only new-flow invites: legacy rows have no derivable link to send.
       tokenNonce: { not: null },
     },
+    orderBy: { updatedAt: 'asc' },
     take: 20,
   });
   let sent = 0;
@@ -303,7 +351,11 @@ export async function finalizeRootInvites({ now, instance, log }) {
       where: { inviteId: { in: tree.map((t) => t.id).concat(root.id) } },
       select: { id: true, status: true, consolidationStatus: true },
     });
-    if (!treeIsSettled({ root, children, sessions })) continue;
+    if (!treeIsSettled({ root, children, sessions })) {
+      // Bumps updatedAt so the next tick looks at other roots first.
+      await prisma.knowledgeInterviewInvite.update({ where: { id: root.id }, data: { statusReason: root.statusReason ?? null } }).catch(() => {});
+      continue;
+    }
 
     const claimed = await prisma.knowledgeInterviewInvite.updateMany({
       where: { id: root.id, summaryStatus: 'NONE' },

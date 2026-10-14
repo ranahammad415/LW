@@ -10,6 +10,7 @@ import crypto from 'crypto';
 import { z } from 'zod';
 import { writeOkfFile, readOkfFile, setOkfContext, clearOkfContext } from '../../lib/knowledgeEngine.js';
 import { reindexOkfAssets } from '../../lib/okfIndexingService.js';
+import { rebaseDraftOnCurrent, approvalMetadata } from '../../lib/interviewConsolidation.js';
 
 /** Optional interview filters on the queue (plan §6, §9, §23). */
 const draftFilterSchema = z.object({
@@ -174,13 +175,23 @@ export async function pmOkfReviewRoutes(app) {
       }
 
       // The reviewer can correct the agent's filing and wording before it lands.
-      const { folder, filename, title, body, reviewNote } = request.body || {};
+      const { folder, filename, title, body, reviewNote, force } = request.body || {};
       const finalFolder = folder || draft.folder;
       const finalFilename = (filename || draft.filename).replace(/\.md$/, '');
       const finalTitle = title || draft.title;
-      const finalBody = body ?? draft.proposedBody;
-      // Approval never blocks on staleness, but the reviewer is told (plan §6).
       const staleAtApproval = isStale(draft, safeReadOkf(draft.clientId, draft.folder, draft.filename));
+      // Review fix H2: rebase onto the file as it is now, so approving a draft
+      // never erases another draft approved into the same file since.
+      const current = safeReadOkf(draft.clientId, finalFolder, finalFilename);
+      const rebase = rebaseDraftOnCurrent({ ...draft, title: finalTitle }, current);
+      const reviewerEdited = typeof body === 'string' && body !== draft.proposedBody;
+      if (reviewerEdited && rebase.rebased && !force) {
+        return reply.status(409).send({
+          message: 'This file changed since the draft was prepared. Reload the diff and edit again, or approve with force to keep your edit as the whole file.',
+          code: 'STALE_DRAFT',
+        });
+      }
+      const finalBody = reviewerEdited ? body : rebase.body;
 
       setOkfContext({
         userId: request.user.id,
@@ -195,7 +206,7 @@ export async function pmOkfReviewRoutes(app) {
           finalFolder,
           finalFilename,
           {
-            ...(draft.proposedMetadata || {}),
+            ...approvalMetadata(draft.proposedMetadata),
             title: finalTitle,
             source: draft.sourceType,
             approved_by: request.user.id,
@@ -227,7 +238,7 @@ export async function pmOkfReviewRoutes(app) {
 
       await reindexOkfAssets(draft.clientId);
 
-      return reply.send({ success: true, path: filePath, wasStale: staleAtApproval });
+      return reply.send({ success: true, path: filePath, wasStale: staleAtApproval, rebased: rebase.rebased && !reviewerEdited });
     }
   );
 
@@ -304,22 +315,24 @@ export async function pmOkfReviewRoutes(app) {
           reason: `Bulk-approved draft ${draft.id}`,
         });
         try {
+          // Sequential + rebased on the file as the previous draft left it (H2).
+          const { body: rebasedBody } = rebaseDraftOnCurrent(draft, safeReadOkf(draft.clientId, draft.folder, draft.filename));
           writeOkfFile(
             draft.clientId,
             draft.folder,
             draft.filename,
             {
-              ...(draft.proposedMetadata || {}),
+              ...approvalMetadata(draft.proposedMetadata),
               title: draft.title,
               source: draft.sourceType,
               approved_by: request.user.id,
               approved_at: new Date().toISOString(),
             },
-            draft.proposedBody
+            rebasedBody
           );
           await prisma.okfDraftChange.update({
             where: { id: draft.id },
-            data: { status: 'APPROVED', reviewerId: request.user.id, reviewedAt: new Date() },
+            data: { status: 'APPROVED', reviewerId: request.user.id, reviewedAt: new Date(), proposedBody: rebasedBody },
           });
           touchedClients.add(draft.clientId);
           approved++;

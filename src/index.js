@@ -90,6 +90,7 @@ import { initGscClient } from './lib/gscClient.js';
 import { runGscSync } from './lib/gscSync.js';
 import { runNativeAnalyticsSync } from './lib/analytics/runNativeSync.js';
 import { initSentry } from './lib/sentry.js';
+import { redactedRequestSerializer } from './lib/logRedaction.js';
 import { runWeeklyClientDigest } from './lib/weeklyDigest.js';
 import { runScheduledTaskSync } from './lib/dataImport/scheduledSync.js';
 import { runInterviewSchedulerTick, isSchedulerEnabled, isLeader } from './lib/interviewScheduler.js';
@@ -115,7 +116,8 @@ if (
 }
 
 const TRUST_PROXY = String(process.env.TRUST_PROXY || '').toLowerCase() === 'true';
-const app = Fastify({ logger: true, trustProxy: TRUST_PROXY });
+// Request URLs are redacted in logs: interview links carry their token in the path.
+const app = Fastify({ logger: { serializers: { req: redactedRequestSerializer } }, trustProxy: TRUST_PROXY });
 
 // Ensure uploads directory exists
 const __filename = fileURLToPath(import.meta.url);

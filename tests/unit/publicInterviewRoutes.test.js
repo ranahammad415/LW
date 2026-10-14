@@ -33,6 +33,7 @@ vi.mock('../../src/lib/realtimeVoice.js', async (orig) => ({
   isRealtimeVoiceConfigured: () => true,
   mintRealtimeSession: vi.fn(async () => ({ clientSecret: 'ek_test', expiresAt: null, model: 'gpt-realtime', voice: 'marin' })),
 }));
+vi.mock('../../src/lib/ai.js', async (orig) => ({ ...(await orig()), isAiConfigured: () => true }));
 vi.mock('../../src/lib/okfIndexingService.js', () => ({ listOkfIndex: async () => [] }));
 vi.mock('../../src/lib/mailer.js', () => ({ sendEmail: vi.fn(async () => ({ success: true })) }));
 vi.mock('../../src/lib/notificationService.js', () => ({ notify: vi.fn(async () => {}) }));
@@ -63,6 +64,7 @@ function invite(overrides = {}) {
     totalVoiceSeconds: 0,
     sessionCount: 0,
     consentAt: null,
+    consentVersion: '2026-10-v1',
     agenda: { questions: [{ id: 'q1', folder: 'company', prompt: 'Hours?', topic: 'Hours', kind: 'primary' }], goals: ['Catch up'] },
     ...overrides,
   };
@@ -184,5 +186,105 @@ describe('public interview routes', () => {
     expect((await post(token, '/voice/s/capture', { calls: [] })).statusCode).toBe(400);
     db.overrides['voiceInterviewSession.findUnique'] = async () => ({ id: 's', inviteId: 'someone-else', mode: 'VOICE', status: 'ACTIVE' });
     expect((await post(token, '/voice/s/capture', { calls: [{ callId: 'a', tool: 'save_business_fact', args: {} }] })).statusCode).toBe(404);
+  });
+});
+
+describe('review fixes (routes)', () => {
+  it('M2: an EXPIRED root whose summary was emailed opens in summary mode; otherwise 410', async () => {
+    const sent = invite({ status: 'EXPIRED', summaryStatus: 'SENT', summarySentAt: new Date(), expiresAt: new Date(Date.now() - 864e5) });
+    const res = await get(sent.token);
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).mode).toBe('summary');
+    expect((await post(sent.token, '/voice/session')).statusCode).toBe(410);
+    const notSent = invite({ status: 'EXPIRED', summaryStatus: 'NONE', expiresAt: new Date(Date.now() - 864e5) });
+    expect((await get(notSent.token)).statusCode).toBe(410);
+  });
+
+  it('M4: a confirm_change draft only accepts a new value, never free text', async () => {
+    const { token, row } = invite();
+    db.overrides['okfDraftChange.findUnique'] = async () => ({
+      id: 'd1', inviteId: row.id, rootInviteId: row.id, clientId: 'c1', folder: 'services', filename: 'mot', status: 'PENDING', sessionId: null,
+      proposedBody: 'MOT from £45', proposedMetadata: { change: { field: 'price', old_value: '£40', new_value: '£45' } },
+    });
+    const bad = await post(token, '/captures/d1/correct', { content: 'wipe the whole file' });
+    expect(bad.statusCode).toBe(400);
+    expect(JSON.parse(bad.body).code).toBe('NEW_VALUE_REQUIRED');
+    let written = null;
+    db.overrides['okfDraftChange.update'] = async ({ data }) => { written = data; return { id: 'd1', title: 't', status: 'PENDING' }; };
+    expect((await post(token, '/captures/d1/correct', { newValue: '£50' })).statusCode).toBe(200);
+    expect(written.proposedMetadata.change.new_value).toBe('£50');
+  });
+
+  it('LOW: a correction while consolidation is RUNNING is refused', async () => {
+    const { token, row } = invite();
+    db.overrides['okfDraftChange.findUnique'] = async () => ({ id: 'd2', inviteId: row.id, status: 'PENDING', sessionId: 's9', proposedBody: 'x', proposedMetadata: {} });
+    db.overrides['voiceInterviewSession.findUnique'] = async () => ({ consolidationStatus: 'RUNNING' });
+    const res = await post(token, '/captures/d2/correct', { content: 'better text' });
+    expect(JSON.parse(res.body).code).toBe('CONSOLIDATION_RUNNING');
+  });
+
+  it('M6: a second mint while one is starting is refused (DB lease)', async () => {
+    const { token } = invite({ consentAt: new Date() });
+    const base = db.overrides['knowledgeInterviewInvite.updateMany'];
+    db.overrides['knowledgeInterviewInvite.updateMany'] = async (args) => (args.data?.lockedBy === 'voice-mint' ? { count: 0 } : base(args));
+    const res = await post(token, '/voice/session');
+    expect(res.statusCode).toBe(429);
+    expect(JSON.parse(res.body).code).toBe('VOICE_MINT_IN_PROGRESS');
+  });
+
+  it('M6: concurrent public sessions per client are capped', async () => {
+    const { token } = invite({ consentAt: new Date() });
+    db.overrides['voiceInterviewSession.count'] = async ({ where }) => (where.clientId && where.status === 'ACTIVE' ? 3 : 0);
+    const res = await post(token, '/voice/session');
+    expect(JSON.parse(res.body).code).toBe('VOICE_CONCURRENCY_LIMIT');
+  });
+
+  it('H1/FH1: mint sets no heartbeat and only closes VOICE sessions', async () => {
+    const { token } = invite({ consentAt: new Date() });
+    let created = null;
+    let closeWhere = null;
+    db.overrides['voiceInterviewSession.create'] = async ({ data }) => { created = data; return { id: 's-new', startedAt: new Date(), ...data }; };
+    db.overrides['voiceInterviewSession.findMany'] = async ({ where }) => { if (where.status === 'ACTIVE') closeWhere = where; return []; };
+    expect((await post(token, '/voice/session')).statusCode).toBe(200);
+    expect(created.lastHeartbeatAt).toBeUndefined();
+    expect(closeWhere.mode).toBe('VOICE');
+  });
+
+  it('LOW: no sessionCount is consumed when the invite has no attributable user (503)', async () => {
+    const { token, row } = invite({ consentAt: new Date(), createdById: null });
+    db.overrides['user.findFirst'] = async () => null;
+    expect((await post(token, '/voice/session')).statusCode).toBe(503);
+    expect(db.invites.get(row.id).sessionCount).toBe(0);
+  });
+
+  it('LOW: consent must match the current consent version', async () => {
+    const { token } = invite({ consentAt: new Date(), consentVersion: 'old-version' });
+    expect(JSON.parse((await post(token, '/voice/session')).body).code).toBe('CONSENT_REQUIRED');
+  });
+
+  it('LOW: transcript and lookup refuse ended sessions', async () => {
+    const { token, row } = invite({ consentAt: new Date() });
+    db.overrides['voiceInterviewSession.findUnique'] = async () => ({ id: 's', inviteId: row.id, mode: 'VOICE', status: 'COMPLETED', startedAt: new Date(0), endedAt: new Date(Date.now() - 10 * 60e3) });
+    expect((await post(token, '/voice/s/transcript', { turns: [] })).statusCode).toBe(409);
+    expect((await post(token, '/voice/s/lookup', { query: 'x' })).statusCode).toBe(409);
+  });
+
+  it('FH2: complete merges the full transcript even for an already-closed session', async () => {
+    const { token, row } = invite({ consentAt: new Date() });
+    let saved = null;
+    db.overrides['voiceInterviewSession.findUnique'] = async () => ({ id: 's', inviteId: row.id, mode: 'VOICE', status: 'COMPLETED', startedAt: new Date(0), transcript: [{ index: 0, role: 'assistant', content: 'Hi' }] });
+    db.overrides['voiceInterviewSession.update'] = async ({ data }) => { saved = data; return {}; };
+    const res = await post(token, '/voice/s/complete', { durationSeconds: 5, transcript: [{ index: 0, role: 'assistant', content: 'Hi' }, { index: 1, role: 'user', content: 'Hello' }] });
+    expect(res.statusCode).toBe(200);
+    expect(saved.transcript.map((t) => t.index)).toEqual([0, 1]);
+  });
+
+  it('LOW: the text turn cap counts every text session of the invite', async () => {
+    const { token } = invite({ consentAt: new Date() });
+    const big = Array.from({ length: 200 }, (_, i) => ({ index: i, role: 'user', content: 'x' }));
+    db.overrides['voiceInterviewSession.findFirst'] = async () => ({ id: 'active', transcript: [], startedAt: new Date() });
+    db.overrides['voiceInterviewSession.findMany'] = async () => [{ transcript: big }, { transcript: big }];
+    const res = await post(token, '/text/turn', { message: 'hi' });
+    expect(JSON.parse(res.body).code).toBe('TEXT_TURN_LIMIT');
   });
 });

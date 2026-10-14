@@ -12,7 +12,7 @@
 import { prisma } from './prisma.js';
 import { readOkfFile } from './knowledgeEngine.js';
 import { generateChat, isAiConfigured, sanitizeUserInputForPrompt } from './ai.js';
-import { sha256, HIGH_RISK_FACT_TYPES } from './interviewCapture.js';
+import { sha256, HIGH_RISK_FACT_TYPES, applyChangeToBody } from './interviewCapture.js';
 import { logDispatch } from './interviewInvites.js';
 
 const MAX_AI_DRAFTS = 15;
@@ -291,4 +291,60 @@ export async function consolidateSession(sessionId, { useAi = true, now = new Da
     });
   }
   return { processed: states.length, duplicates, byRisk };
+}
+
+/** Internal bookkeeping keys that must not be written into the OKF front-matter. */
+const INTERNAL_META_KEYS = ['capture_fragment', 'merged_into_current'];
+
+export function approvalMetadata(meta) {
+  const out = { ...(meta || {}) };
+  for (const k of INTERNAL_META_KEYS) delete out[k];
+  return out;
+}
+
+/**
+ * Review fix H2: recompute what an approval should write, against the file
+ * as it is NOW. Consolidation merged a capture into the file body it saw;
+ * if another draft was approved into the same file since then, writing the
+ * stored proposedBody would erase that change. Rebase instead:
+ *  - confirm_change drafts: re-apply old → new to the current body;
+ *  - merged captures: re-merge the original fragment onto the current body;
+ *  - unconsolidated interview captures for a file that now exists: merge.
+ * Other sources (crawl, portal voice) keep their stored body.
+ *
+ * @returns {{body: string, rebased: boolean}}
+ */
+export function rebaseDraftOnCurrent(draft, current, { now = new Date() } = {}) {
+  const meta = draft.proposedMetadata || {};
+  const currentBody = current?.body ?? null;
+  const currentHash = currentBody !== null ? sha256(currentBody) : null;
+
+  if (meta.change) {
+    if ((draft.currentBodyHash || null) === currentHash) return { body: draft.proposedBody, rebased: false };
+    return {
+      body: applyChangeToBody(currentBody || '', {
+        field: meta.change.field,
+        oldValue: meta.change.old_value,
+        newValue: meta.change.new_value,
+        effectiveFrom: meta.change.effective_from,
+        date: now,
+      }).body,
+      rebased: true,
+    };
+  }
+
+  if (meta.merged_into_current && meta.capture_fragment) {
+    if (currentHash && draft.currentBodyHash === currentHash) return { body: draft.proposedBody, rebased: false };
+    if (!currentBody) return { body: meta.capture_fragment, rebased: true };
+    return { body: mergeIntoCurrent(currentBody, { title: draft.title, content: meta.capture_fragment, date: now }), rebased: true };
+  }
+
+  if (draft.sourceType === 'INTERVIEW_LINK' && currentBody && currentBody.trim()) {
+    if (normaliseForHash(currentBody).includes(normaliseForHash(draft.proposedBody))) {
+      return { body: currentBody, rebased: true };
+    }
+    return { body: mergeIntoCurrent(currentBody, { title: draft.title, content: draft.proposedBody, date: now }), rebased: true };
+  }
+
+  return { body: draft.proposedBody, rebased: false };
 }

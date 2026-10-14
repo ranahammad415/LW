@@ -38,8 +38,25 @@ export function isFolderAllowed(folder, allowFolders) {
   const f = String(folder || '').toLowerCase();
   return allowFolders.some((a) => {
     const al = String(a).toLowerCase();
-    return f === al || f.startsWith(`${al}/`) || al.startsWith(`${f}/`);
+    // Exact folder or a sub-folder of an allowed one. A PARENT of an allowed
+    // folder is not allowed (review fix M7: proof/testimonials must not open proof).
+    return f === al || f.startsWith(`${al}/`);
   });
+}
+
+/** Company files every worker may read (the digest gives them these too). */
+const WORKER_ALWAYS_FILES = new Set(['company/profile', 'company/restricted-claims']);
+/** Never shown to a worker, even when their cluster includes the folder (digest excludes it). */
+const WORKER_NEVER_FILES = new Set(['company/approved-claims']);
+
+/** File-level visibility for lookup: folder allow-list plus the worker exceptions above. */
+export function isFileVisible(folder, name, allowFolders) {
+  if (isExcludedFolder(folder)) return false;
+  if (!allowFolders) return true;
+  const key = `${String(folder).toLowerCase()}/${String(name).replace(/\.md$/, '').toLowerCase()}`;
+  if (WORKER_NEVER_FILES.has(key)) return false;
+  if (WORKER_ALWAYS_FILES.has(key)) return true;
+  return isFolderAllowed(folder, allowFolders);
 }
 
 function trimBody(body, max) {
@@ -130,7 +147,7 @@ export function lookupKnowledge({ clientId, query = '', folder = null, filename 
     if (!dir || !name || !SAFE_SEGMENT.test(name) || !dir.split('/').every((p) => SAFE_SEGMENT.test(p))) {
       return { ok: false, results: [], note: 'That file name is not valid.' };
     }
-    if (!isFolderAllowed(dir, allowFolders)) {
+    if (!isFileVisible(dir, name, allowFolders)) {
       return { ok: true, results: [], note: 'Nothing on file that you can look up there.' };
     }
     const doc = safeRead(clientId, dir, name);
@@ -148,7 +165,7 @@ export function lookupKnowledge({ clientId, query = '', folder = null, filename 
     hits = [];
   }
   const results = hits
-    .filter((h) => isFolderAllowed(h.asset.folder, allowFolders))
+    .filter((h) => isFileVisible(h.asset.folder, h.asset.filename, allowFolders))
     .filter((h) => !folder || String(h.asset.folder).toLowerCase().startsWith(String(folder).toLowerCase()))
     .slice(0, 3)
     .map((h) => ({

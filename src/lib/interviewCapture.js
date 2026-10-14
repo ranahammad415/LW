@@ -14,7 +14,7 @@ import { prisma } from './prisma.js';
 import { upsertInterviewDrafts, CAPTURE_FOLDERS } from './expertInterview.js';
 import { readOkfFile } from './knowledgeEngine.js';
 import { FACT_TYPES } from './interviewQuestionBank.js';
-import { lookupKnowledge } from './interviewKnowledge.js';
+import { lookupKnowledge, isFolderAllowed } from './interviewKnowledge.js';
 import { createDelegation, DelegationError } from './interviewDelegation.js';
 import { maskEmail } from './interviewInvites.js';
 import { PUBLIC_TOOL_NAMES } from './realtimeVoice.js';
@@ -135,10 +135,14 @@ const delegateSchema = z.object({
   topic_summary: z.string().max(300).optional().nullable(),
 });
 
-/** Folders a respondent may look up: root = all non-excluded; worker = cluster + company. */
+/**
+ * Folders a respondent may read and write: root = all (null); worker = only the
+ * folders of their question cluster (review fix M7). Workers additionally read
+ * company/profile and company/restricted-claims (see interviewKnowledge.isFileVisible).
+ */
 export function respondentAllowFolders(invite) {
   if (invite.respondentRole !== 'STAFF') return null;
-  const folders = new Set(['company']);
+  const folders = new Set();
   for (const q of Array.isArray(invite.questionCluster) ? invite.questionCluster : []) {
     if (q?.folder) folders.add(q.folder);
   }
@@ -225,6 +229,9 @@ export async function processInterviewTool({ invite, session, tool, args, transc
       const a = parsed.data;
       const folder = coerceFolder(a.folder);
       if (!folder) return { result: { ok: false, error: `Unknown folder ${a.folder}` }, ack: null };
+      if (!isFolderAllowed(folder, respondentAllowFolders(invite))) {
+        return { result: { ok: false, error: 'That topic is outside the questions this person was asked. Do not record it.' }, ack: null };
+      }
       const factType = a.fact_type && FACT_TYPES.includes(a.fact_type) ? a.fact_type : null;
       const [draft] = await upsertInterviewDrafts({
         clientId: invite.clientId,
@@ -323,6 +330,9 @@ export async function processInterviewTool({ invite, session, tool, args, transc
       const a = parsed.data;
       const folder = coerceFolder(a.folder);
       if (!folder) return { result: { ok: false, error: `Unknown folder ${a.folder}` }, ack: null };
+      if (!isFolderAllowed(folder, respondentAllowFolders(invite))) {
+        return { result: { ok: false, error: 'That topic is outside the questions this person was asked. Do not record it.' }, ack: null };
+      }
       const filename = slugifyFilename(a.filename.split('/').pop());
       const current = safeReadFile(invite.clientId, folder, filename);
       const { body, replacedInPlace } = applyChangeToBody(current?.body || '', {

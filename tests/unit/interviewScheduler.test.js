@@ -52,6 +52,7 @@ import {
   finalizeRootInvites,
   cancelUnconfirmedDelegations,
   runInterviewSchedulerTick,
+  isSessionStale,
 } from '../../src/lib/interviewScheduler.js';
 
 const NOW = new Date('2026-10-15T09:00:00Z');
@@ -84,11 +85,19 @@ describe('pure helpers', () => {
     expect(dueReminderIndex({ ...inv, sentAt: null }, NOW)).toBe(-1);
   });
 
-  it('reaper bills up to the last heartbeat, capped, and never bills text', () => {
+  it('reaper bills heartbeat span + grace, wall-clock when no heartbeat (H1), never text', () => {
     const started = new Date(NOW.getTime() - 30 * 60e3);
-    expect(reapBilledSeconds({ mode: 'VOICE', startedAt: started, lastHeartbeatAt: new Date(started.getTime() + 300e3) }, NOW)).toBe(300);
+    expect(reapBilledSeconds({ mode: 'VOICE', startedAt: started, lastHeartbeatAt: new Date(started.getTime() + 300e3) }, NOW)).toBe(330);
+    // never heartbeated → full wall clock, capped at the session max
     expect(reapBilledSeconds({ mode: 'VOICE', startedAt: started, lastHeartbeatAt: null }, NOW)).toBe(900);
+    expect(reapBilledSeconds({ mode: 'VOICE', startedAt: new Date(NOW.getTime() - 120e3), lastHeartbeatAt: null }, NOW)).toBe(120);
     expect(reapBilledSeconds({ mode: 'TEXT', startedAt: started }, NOW)).toBe(0);
+  });
+
+  it('isSessionStale: voice without heartbeat waits for the full max + 5 min', () => {
+    expect(isSessionStale({ mode: 'VOICE', startedAt: new Date(NOW.getTime() - 10 * 60e3), lastHeartbeatAt: null }, NOW)).toBe(false);
+    expect(isSessionStale({ mode: 'VOICE', startedAt: new Date(NOW.getTime() - 21 * 60e3), lastHeartbeatAt: null }, NOW)).toBe(true);
+    expect(isSessionStale({ mode: 'VOICE', startedAt: new Date(NOW.getTime() - 5 * 60e3), lastHeartbeatAt: new Date(NOW.getTime() - 11 * 60e3) }, NOW)).toBe(true);
   });
 
   it('a tree is settled only when root, children and sessions are done', () => {
@@ -102,7 +111,7 @@ describe('pure helpers', () => {
 
 describe('CAS claims', () => {
   it('sends a scheduled invite only when this instance wins the claim', async () => {
-    m.inviteFindMany.mockResolvedValue([{ id: 'a' }, { id: 'b' }]);
+    m.inviteFindMany.mockImplementation(async ({ where }) => (where.status === 'SCHEDULED' ? [{ id: 'a' }, { id: 'b' }] : []));
     m.inviteUpdateMany.mockImplementation(async ({ where }) => ({ count: where.id === 'a' ? 1 : 0 }));
     m.inviteFindUnique.mockResolvedValue({ id: 'a', status: 'SCHEDULED' });
     m.dispatchInvite.mockResolvedValue({ ok: true });
@@ -126,9 +135,28 @@ describe('CAS claims', () => {
       return { count: 0 };
     });
     m.dispatchInvite.mockResolvedValue({ ok: true });
+    m.inviteFindUnique.mockResolvedValue({ ...inv, tokenNonce: 'fresh-nonce' });
     await Promise.all([sendReminders({ now: NOW, instance: 'a' }), sendReminders({ now: NOW, instance: 'b' })]);
     expect(m.dispatchInvite).toHaveBeenCalledTimes(1);
     expect(m.dispatchInvite.mock.calls[0][1].kind).toBe('REMINDER');
+    // re-read after the claim: the fresh row (rotated link) is what gets sent
+    expect(m.dispatchInvite.mock.calls[0][0].tokenNonce).toBe('fresh-nonce');
+  });
+
+  it('reminders are not consumed while emails are paused', async () => {
+    process.env.NOTIFICATION_EMAILS_PAUSED = 'true';
+    const res = await sendReminders({ now: NOW, instance: 'a' });
+    expect(res.paused).toBe(true);
+    expect(m.inviteUpdateMany).not.toHaveBeenCalled();
+  });
+
+  it('retries landing-page delegations created while emails were paused', async () => {
+    m.inviteFindMany.mockImplementation(async ({ where }) => (where.respondentRole === 'STAFF' ? [{ id: 'kid', status: 'PENDING' }] : []));
+    m.inviteUpdateMany.mockResolvedValue({ count: 1 });
+    m.dispatchInvite.mockResolvedValue({ ok: true });
+    const res = await sendScheduledInvites({ now: NOW, instance: 'i' });
+    expect(res.sent).toBe(1);
+    expect(m.dispatchInvite.mock.calls[0][0].id).toBe('kid');
   });
 
   it('scheduled sends wait while notification emails are paused', async () => {
@@ -151,8 +179,10 @@ describe('sessions', () => {
     const res = await reapStaleSessions({ now: NOW, instance: 'i' });
     expect(res.reaped).toBe(1);
     const data = m.sessionUpdateMany.mock.calls[0][0].data;
-    expect(data).toMatchObject({ status: 'ABANDONED', durationSeconds: 300, consolidationStatus: 'PENDING' });
-    expect(m.inviteUpdate.mock.calls[0][0].data).toEqual({ totalVoiceSeconds: { increment: 300 } });
+    expect(data).toMatchObject({ status: 'ABANDONED', durationSeconds: 330, consolidationStatus: 'PENDING' });
+    expect(m.inviteUpdate.mock.calls[0][0].data).toEqual({ totalVoiceSeconds: { increment: 330 } });
+    // portal sessions (no invite) are never reaped (no billing surprise after deploy)
+    expect(m.sessionFindMany.mock.calls[0][0].where.inviteId).toEqual({ not: null });
   });
 
   it('consolidation claims PENDING → RUNNING and marks DONE', async () => {
@@ -161,7 +191,10 @@ describe('sessions', () => {
     m.consolidateSession.mockResolvedValue({ processed: 2, byRisk: { LOW: 1, MEDIUM: 0, HIGH: 1 } });
     const res = await runConsolidation({ now: NOW, instance: 'i' });
     expect(res.consolidated).toBe(1);
-    expect(m.sessionUpdateMany.mock.calls[0][0]).toMatchObject({ where: { id: 's1', consolidationStatus: 'PENDING' }, data: { consolidationStatus: 'RUNNING' } });
+    // first call recovers stale RUNNING leases (M1), second claims
+    expect(m.sessionUpdateMany.mock.calls[0][0].where.consolidationStatus).toBe('RUNNING');
+    expect(m.sessionUpdateMany.mock.calls[0][0].data).toEqual({ consolidationStatus: 'PENDING' });
+    expect(m.sessionUpdateMany.mock.calls[1][0]).toMatchObject({ where: { id: 's1', consolidationStatus: 'PENDING' }, data: { consolidationStatus: 'RUNNING' } });
     expect(m.sessionUpdate.mock.calls[0][0].data.consolidationStatus).toBe('DONE');
     expect(m.notify).toHaveBeenCalledWith(expect.objectContaining({ slug: 'interview_drafts_ready' }));
   });
@@ -173,9 +206,14 @@ describe('finalizeRootInvites', () => {
   it('waits while a child is still open', async () => {
     m.inviteFindMany.mockImplementation(async ({ where }) => (where.rootInviteId ? [root, { id: 'child', status: 'SENT', parentInviteId: 'root' }] : [root]));
     m.sessionFindMany.mockResolvedValue([]);
+    m.inviteUpdateMany.mockResolvedValue({ count: 0 });
     const res = await finalizeRootInvites({ now: NOW, instance: 'i' });
     expect(res.summaries).toBe(0);
-    expect(m.inviteUpdateMany).not.toHaveBeenCalled();
+    // only the lease-recovery updateMany ran; no summary claim
+    expect(m.inviteUpdateMany.mock.calls.every((c) => c[0].data.summaryStatus !== 'PENDING')).toBe(true);
+    // the unsettled root is touched so others get a turn (M1)
+    expect(m.inviteUpdate.mock.calls[0][0].where.id).toBe('root');
+    expect(m.inviteFindMany.mock.calls[0][0].orderBy).toEqual({ updatedAt: 'asc' });
   });
 
   it('sends exactly one summary even with two concurrent ticks', async () => {
@@ -183,7 +221,8 @@ describe('finalizeRootInvites', () => {
     m.sessionFindMany.mockResolvedValue([{ id: 's', status: 'COMPLETED', consolidationStatus: 'DONE' }]);
     m.draftFindMany.mockResolvedValue([{ id: 'd', inviteId: 'child', title: 'Prices', folder: 'services', proposedBody: 'MOT £45', respondentName: 'Asif', respondentRole: 'STAFF', status: 'PENDING', proposedMetadata: {} }]);
     let won = false;
-    m.inviteUpdateMany.mockImplementation(async () => {
+    m.inviteUpdateMany.mockImplementation(async ({ data }) => {
+      if (data.summaryStatus !== 'PENDING') return { count: 0 };
       if (won) return { count: 0 };
       won = true;
       return { count: 1 };

@@ -106,6 +106,10 @@ const FINISH_LIMIT = { max: 10, timeWindow: '10 minutes' };
 
 export const SUMMARY_WINDOW_DAYS = 30;
 export const MAX_SESSIONS_PER_INVITE = 8;
+/** Concurrent public voice sessions per client, across the root and its colleagues (review fix M6). */
+export const MAX_CONCURRENT_PUBLIC_SESSIONS_PER_CLIENT = 3;
+const MINT_LOCK_MS = 30 * 1000;
+const TRANSCRIPT_FLUSH_GRACE_MS = 2 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
@@ -146,6 +150,12 @@ async function resolveInvite(request, reply, { allowSummary = false } = {}) {
     reply.status(410).send({ message: 'This interview has already been completed. Thank you!' });
     return null;
   }
+  // An EXPIRED root that was sent a summary email opens in summary mode for
+  // 30 days from that email, so its "Correct it" button works (review fix M2).
+  if (allowSummary && invite.status === 'EXPIRED' && invite.summaryStatus === 'SENT') {
+    const sentAt = (invite.summarySentAt || invite.rootCompletedAt || invite.updatedAt || new Date()).getTime();
+    if (Date.now() - sentAt <= SUMMARY_WINDOW_DAYS * DAY_MS) return { invite, summaryMode: true };
+  }
   if (invite.status === 'EXPIRED' || invite.expiresAt.getTime() < Date.now()) {
     reply.status(410).send({ message: 'This link has expired. Ask your team for a new one.' });
     return null;
@@ -165,7 +175,8 @@ function sendZodError(reply, err) {
 }
 
 function requireConsent(invite, reply) {
-  if (!invite.consentAt) {
+  // Consent is versioned: a changed notice must be accepted again.
+  if (!invite.consentAt || invite.consentVersion !== CONSENT_VERSION()) {
     reply.status(403).send({ message: 'Please accept the consent notice first.', code: 'CONSENT_REQUIRED' });
     return false;
   }
@@ -339,6 +350,14 @@ const completeSchema = z.object({
   durationSeconds: z.number().min(0).max(24 * 3600).optional(),
   summary: z.string().max(4000).optional().nullable(),
   usage: z.record(z.any()).optional().nullable(),
+  // Full transcript at the end, so turns lost to a network drop are recovered
+  // (merged by index; frontend review FH2).
+  transcript: z.array(z.object({
+    index: z.number().int().min(0).max(100000),
+    role: z.enum(['user', 'assistant']),
+    content: z.string().max(4000),
+    at: z.string().max(40).optional(),
+  })).max(400).optional(),
 }).optional();
 const lookupSchema = z.object({
   query: z.string().max(300).optional().default(''),
@@ -532,56 +551,98 @@ export async function publicKnowledgeInterviewRoutes(app) {
         return reply.status(429).send({ message: 'Voice is busy right now. You can carry on by typing.', code: 'AGENCY_LIMIT' });
       }
 
-      // Per-invite session cap, CAS so it holds across instances.
-      const claimed = await prisma.knowledgeInterviewInvite.updateMany({
-        where: { id: invite.id, sessionCount: { lt: MAX_SESSIONS_PER_INVITE } },
-        data: { sessionCount: { increment: 1 } },
-      });
-      if (claimed.count !== 1) {
-        return reply.status(429).send({ message: 'This link has reached its limit of voice sessions. You can carry on by typing.', code: 'INVITE_SESSION_LIMIT' });
-      }
-
-      // Concurrency 1 per invite: a reconnect (closed tab, new phone) ends the old session.
-      await closeActiveSessions(invite, { status: 'ABANDONED' });
-
       const userId = await attributionUserId(invite);
       if (!userId) return reply.status(503).send({ message: 'This interview link is not fully set up.' });
 
-      const priorSessions = await prisma.voiceInterviewSession.count({ where: { inviteId: invite.id } });
-      const maxSessionSeconds = Math.max(60, Math.min(MAX_SESSION_SECONDS, inviteLeft, usage.remainingSeconds, agency.remainingSeconds));
-      const fresh = await prisma.knowledgeInterviewInvite.findUnique({ where: { id: invite.id } });
-      const promptOpts = await buildPromptOptions(fresh, { remainingSeconds: maxSessionSeconds, isResume: priorSessions > 0 });
-
-      let minted;
-      try {
-        minted = await mintRealtimeSession({
-          instructions: buildPublicInterviewInstructions(promptOpts),
-          tools: buildPublicInterviewTools({ canDelegate: promptOpts.canDelegate }),
-          userId,
-          safetyKey: invite.id,
-        });
-      } catch (err) {
-        request.log.error({ err: err?.message }, 'Failed to mint public realtime session');
-        await prisma.knowledgeInterviewInvite.updateMany({
-          where: { id: invite.id, sessionCount: { gt: 0 } },
-          data: { sessionCount: { decrement: 1 } },
-        });
-        return reply.status(502).send({ message: 'Could not start the voice session. You can type your answers instead.', code: 'VOICE_MINT_FAILED' });
-      }
-
-      const session = await prisma.voiceInterviewSession.create({
-        data: {
-          clientId: invite.clientId,
-          projectId: invite.projectId,
-          userId,
-          inviteId: invite.id,
-          mode: 'VOICE',
-          status: 'ACTIVE',
-          model: minted.model,
-          language: parsed.data?.language || invite.language || 'en',
-          lastHeartbeatAt: new Date(),
+      // One mint at a time per invite (review fix M6): a short DB lease on the
+      // invite row, so parallel taps or tabs cannot open two sessions.
+      const mintNow = new Date();
+      const leased = await prisma.knowledgeInterviewInvite.updateMany({
+        where: {
+          id: invite.id,
+          OR: [{ lockedAt: null }, { lockedAt: { lt: new Date(mintNow.getTime() - MINT_LOCK_MS) } }],
         },
+        data: { lockedAt: mintNow, lockedBy: 'voice-mint' },
       });
+      if (leased.count !== 1) {
+        return reply.status(429).send({ message: 'A voice session is already starting. Please wait a moment.', code: 'VOICE_MINT_IN_PROGRESS' });
+      }
+      const releaseLease = () =>
+        prisma.knowledgeInterviewInvite
+          .updateMany({ where: { id: invite.id, lockedBy: 'voice-mint' }, data: { lockedAt: null, lockedBy: null } })
+          .catch(() => {});
+
+      let session;
+      let minted;
+      let maxSessionSeconds;
+      try {
+        // Concurrent public voice sessions per client (root + colleagues share the cap).
+        const concurrent = await prisma.voiceInterviewSession.count({
+          where: {
+            clientId: invite.clientId,
+            mode: 'VOICE',
+            status: 'ACTIVE',
+            inviteId: { not: null },
+            NOT: { inviteId: invite.id },
+            startedAt: { gte: new Date(mintNow.getTime() - (MAX_SESSION_SECONDS + 300) * 1000) },
+          },
+        });
+        if (concurrent >= MAX_CONCURRENT_PUBLIC_SESSIONS_PER_CLIENT) {
+          return reply.status(429).send({ message: 'Several people from your team are talking to us right now. Please try again in a few minutes, or type instead.', code: 'VOICE_CONCURRENCY_LIMIT' });
+        }
+
+        // Per-invite session cap, CAS so it holds across instances.
+        const claimed = await prisma.knowledgeInterviewInvite.updateMany({
+          where: { id: invite.id, sessionCount: { lt: MAX_SESSIONS_PER_INVITE } },
+          data: { sessionCount: { increment: 1 } },
+        });
+        if (claimed.count !== 1) {
+          return reply.status(429).send({ message: 'This link has reached its limit of voice sessions. You can carry on by typing.', code: 'INVITE_SESSION_LIMIT' });
+        }
+
+        // Concurrency 1 per invite: a reconnect (closed tab, new phone) ends the old session.
+        // Only VOICE sessions: a text session the respondent is using in another
+        // tab must not be killed by a voice mint (frontend review FH1).
+        await closeActiveSessions(invite, { mode: 'VOICE', status: 'ABANDONED' });
+
+        const priorSessions = await prisma.voiceInterviewSession.count({ where: { inviteId: invite.id } });
+        maxSessionSeconds = Math.max(60, Math.min(MAX_SESSION_SECONDS, inviteLeft, usage.remainingSeconds, agency.remainingSeconds));
+        const fresh = await prisma.knowledgeInterviewInvite.findUnique({ where: { id: invite.id } });
+        const promptOpts = await buildPromptOptions(fresh, { remainingSeconds: maxSessionSeconds, isResume: priorSessions > 0 });
+
+        try {
+          minted = await mintRealtimeSession({
+            instructions: buildPublicInterviewInstructions(promptOpts),
+            tools: buildPublicInterviewTools({ canDelegate: promptOpts.canDelegate }),
+            userId,
+            safetyKey: invite.id,
+          });
+        } catch (err) {
+          request.log.error({ err: err?.message }, 'Failed to mint public realtime session');
+          await prisma.knowledgeInterviewInvite.updateMany({
+            where: { id: invite.id, sessionCount: { gt: 0 } },
+            data: { sessionCount: { decrement: 1 } },
+          });
+          return reply.status(502).send({ message: 'Could not start the voice session. You can type your answers instead.', code: 'VOICE_MINT_FAILED' });
+        }
+
+        // No lastHeartbeatAt at mint (review fix H1): a session that never
+        // heartbeats is billed wall-clock time by the reaper.
+        session = await prisma.voiceInterviewSession.create({
+          data: {
+            clientId: invite.clientId,
+            projectId: invite.projectId,
+            userId,
+            inviteId: invite.id,
+            mode: 'VOICE',
+            status: 'ACTIVE',
+            model: minted.model,
+            language: parsed.data?.language || invite.language || 'en',
+          },
+        });
+      } finally {
+        await releaseLease();
+      }
       await markInProgress(invite);
 
       return reply.send({
@@ -635,6 +696,10 @@ export async function publicKnowledgeInterviewRoutes(app) {
       if (!invite) return;
       const session = await loadSession(invite, request.params.sessionId, reply);
       if (!session) return;
+      // Ended sessions only accept a late flush for 2 minutes (review LOW fix).
+      if (session.status !== 'ACTIVE' && !(session.endedAt && Date.now() - session.endedAt.getTime() <= TRANSCRIPT_FLUSH_GRACE_MS)) {
+        return reply.status(409).send({ message: 'This voice session has ended.', code: 'SESSION_ENDED' });
+      }
       const parsed = transcriptSchema.safeParse(request.body || {});
       if (!parsed.success) return sendZodError(reply, parsed.error);
       const transcript = mergeTranscript(session.transcript, parsed.data.turns);
@@ -675,6 +740,12 @@ export async function publicKnowledgeInterviewRoutes(app) {
       if (!session) return;
       const parsed = completeSchema.safeParse(request.body || undefined);
       if (!parsed.success) return sendZodError(reply, parsed.error);
+      if (parsed.data?.transcript?.length) {
+        await prisma.voiceInterviewSession.update({
+          where: { id: session.id },
+          data: { transcript: mergeTranscript(session.transcript, parsed.data.transcript) },
+        });
+      }
       if (session.status !== 'ACTIVE') return reply.send({ success: true, alreadyClosed: true });
       const { billed } = await closeSession(session, {
         status: 'COMPLETED',
@@ -709,6 +780,7 @@ export async function publicKnowledgeInterviewRoutes(app) {
       if (!invite) return;
       const session = await loadSession(invite, request.params.sessionId, reply);
       if (!session) return;
+      if (session.status !== 'ACTIVE') return reply.status(409).send({ message: 'This voice session has ended.', code: 'SESSION_ENDED' });
       const parsed = lookupSchema.safeParse(request.body || {});
       if (!parsed.success) return sendZodError(reply, parsed.error);
       const { result } = await processInterviewTool({ invite, session, tool: 'lookup_knowledge', args: parsed.data });
@@ -778,8 +850,13 @@ export async function publicKnowledgeInterviewRoutes(app) {
 
       const session = await activeTextSession(invite, { create: true });
       if (!session) return reply.status(503).send({ message: 'This interview link is not fully set up.' });
-      // Each turn stores a user and an assistant message.
-      const turns = Array.isArray(session.transcript) ? session.transcript.length : 0;
+      // Cap per invite across all its text sessions (review LOW fix: /text/end
+      // + /text/start must not reset it). Each turn stores two messages.
+      const textSessions = await prisma.voiceInterviewSession.findMany({
+        where: { inviteId: invite.id, mode: 'TEXT' },
+        select: { transcript: true },
+      });
+      const turns = textSessions.reduce((n, s) => n + (Array.isArray(s.transcript) ? s.transcript.length : 0), 0);
       if (turns >= MAX_TEXT_TURNS_PER_INVITE * 2) {
         return reply.status(429).send({ message: 'This conversation is very long. Please finish, and your team will follow up.', code: 'TEXT_TURN_LIMIT' });
       }
@@ -844,6 +921,19 @@ export async function publicKnowledgeInterviewRoutes(app) {
         corrected_by_role: invite.respondentRole === 'STAFF' ? 'STAFF' : 'CLIENT',
       };
       let proposedBody = draft.proposedBody;
+
+      // A confirm_change draft is a whole-file rewrite; free text must never
+      // replace it, only a new value re-applied to the file (review fix M4).
+      if (meta.change && !parsed.data.newValue) {
+        return reply.status(400).send({ message: 'Send the corrected value for this change.', code: 'NEW_VALUE_REQUIRED' });
+      }
+      // Don't let a consolidation pass that is running right now overwrite the correction.
+      if (draft.sessionId) {
+        const s = await prisma.voiceInterviewSession.findUnique({ where: { id: draft.sessionId }, select: { consolidationStatus: true } });
+        if (s?.consolidationStatus === 'RUNNING') {
+          return reply.status(409).send({ message: 'We are processing your answers right now. Please try again in a minute.', code: 'CONSOLIDATION_RUNNING' });
+        }
+      }
 
       if (meta.change && parsed.data.newValue) {
         let current = null;

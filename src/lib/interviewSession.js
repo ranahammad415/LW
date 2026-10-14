@@ -24,12 +24,34 @@ export function inviteRemainingSeconds(invite) {
   return Math.max(0, (Number(invite.minutesBudget) || 0) * 60 - (Number(invite.totalVoiceSeconds) || 0));
 }
 
-/** Plan §9: bill min(server span, client-reported, max). Text is never billed. */
-export function billedSeconds(session, { clientSeconds = null, now = new Date() } = {}) {
+/** Seconds added after the last heartbeat (heartbeats arrive every 20 s). */
+export const HEARTBEAT_GRACE_SECONDS = 30;
+/** Every voice session that was minted is charged at least this much. */
+export const MIN_CHARGE_SECONDS = 30;
+
+/**
+ * Seconds to bill for a voice session (review fix H1). The browser cannot
+ * lower the bill: we take the LARGEST of the server wall-clock span, the
+ * client-reported duration and the heartbeat span, then cap at the session
+ * maximum. Text is never billed.
+ *
+ *  - reaped=false (complete/abandon called by the browser): max(server span,
+ *    client, heartbeat span + grace).
+ *  - reaped=true (reaper, or a new mint/finish closing a dead tab): the
+ *    heartbeat span + grace when a post-mint heartbeat arrived; otherwise the
+ *    full server span (a client that never heartbeats pays wall-clock time).
+ */
+export function billedSeconds(session, { clientSeconds = null, now = new Date(), reaped = false } = {}) {
   if (session.mode !== 'VOICE') return 0;
-  const server = Math.max(0, Math.round((now.getTime() - new Date(session.startedAt).getTime()) / 1000));
-  const client = Number.isFinite(clientSeconds) && clientSeconds > 0 ? Math.round(clientSeconds) : server;
-  return Math.min(server, client, MAX_SESSION_SECONDS);
+  const started = new Date(session.startedAt).getTime();
+  const serverSpan = Math.max(0, Math.round((now.getTime() - started) / 1000));
+  const hb = session.lastHeartbeatAt ? new Date(session.lastHeartbeatAt).getTime() : null;
+  const hbSpan = hb !== null ? Math.max(0, Math.round((hb - started) / 1000)) + HEARTBEAT_GRACE_SECONDS : 0;
+  const client = Number.isFinite(clientSeconds) && clientSeconds > 0 ? Math.round(clientSeconds) : 0;
+  let billed;
+  if (reaped) billed = hb !== null ? Math.min(hbSpan, serverSpan) : serverSpan;
+  else billed = Math.max(serverSpan, client, hbSpan);
+  return Math.min(Math.max(billed, MIN_CHARGE_SECONDS), MAX_SESSION_SECONDS);
 }
 
 /**
@@ -37,8 +59,8 @@ export function billedSeconds(session, { clientSeconds = null, now = new Date() 
  * double "complete" (or the reaper racing the browser) bills once.
  * @returns {Promise<{billed:number, closed:boolean}>}
  */
-export async function closeSession(session, { status = 'COMPLETED', clientSeconds = null, summary = null, usage = null, now = new Date() } = {}) {
-  const billed = billedSeconds(session, { clientSeconds, now });
+export async function closeSession(session, { status = 'COMPLETED', clientSeconds = null, summary = null, usage = null, now = new Date(), reaped = false } = {}) {
+  const billed = billedSeconds(session, { clientSeconds, now, reaped });
   const draftCount = await prisma.okfDraftChange.count({ where: { sessionId: session.id } });
   const res = await prisma.voiceInterviewSession.updateMany({
     where: { id: session.id, status: 'ACTIVE' },
@@ -69,9 +91,8 @@ export async function closeActiveSessions(invite, { mode = null, status = 'ABAND
   });
   let billed = 0;
   for (const s of active) {
-    // An abandoned voice tab is billed up to its last heartbeat.
-    const until = s.mode === 'VOICE' && s.lastHeartbeatAt ? new Date(s.lastHeartbeatAt) : now;
-    const r = await closeSession(s, { status, now: until });
+    // Nobody reported this session's end: bill it like the reaper would.
+    const r = await closeSession(s, { status, now, reaped: true });
     billed += r.billed;
   }
   return { closed: active.length, billed };

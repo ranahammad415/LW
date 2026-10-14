@@ -247,7 +247,7 @@ export async function buildSummaryEmail({
     .map(([label, list]) => `<p style="margin:12px 0 4px;font-weight:600;">${escapeHtml(label)}</p>
 <ul style="margin:0 0 4px 18px;padding:0;">${list
       .slice(0, 20)
-      .map((c) => `<li style="margin:4px 0;"><strong>${escapeHtml(clip(c.title, 120))}</strong>${c.respondentRole === 'STAFF' && c.respondentName ? ` <span style="color:#64748b;">(from ${escapeHtml(c.respondentName)})</span>` : ''}<br/><span style="color:#475569;">${escapeHtml(clip(String(c.proposedBody || '').replace(/^#+\s*/gm, ''), c.respondentRole === 'STAFF' ? 600 : 220))}</span></li>`)
+      .map((c) => `<li style="margin:4px 0;"><strong>${escapeHtml(clip(c.title, 120))}</strong>${c.respondentRole === 'STAFF' && c.respondentName ? ` <span style="color:#64748b;">(from ${escapeHtml(c.respondentName)})</span>` : ''}<br/><span style="color:#475569;">${escapeHtml(clip(captureText(c).replace(/^#+\s*/gm, ''), c.respondentRole === 'STAFF' ? 600 : 220))}</span></li>`)
       .join('')}</ul>`)
     .join('');
 
@@ -296,7 +296,7 @@ ${openHtml}
     '',
     `Thank you for your time. Here is a summary of what we captured. ${agencyName} will review everything before it is used.`,
     '',
-    ...[...byFolder.entries()].map(([label, list]) => `${label}:\n${list.slice(0, 20).map((c) => `  - ${clip(c.title, 120)}${c.respondentRole === 'STAFF' && c.respondentName ? ` (from ${c.respondentName})` : ''}: ${clip(String(c.proposedBody || '').replace(/^#+\s*/gm, ''), 220)}`).join('\n')}`),
+    ...[...byFolder.entries()].map(([label, list]) => `${label}:\n${list.slice(0, 20).map((c) => `  - ${clip(c.title, 120)}${c.respondentRole === 'STAFF' && c.respondentName ? ` (from ${c.respondentName})` : ''}: ${clip(captureText(c).replace(/^#+\s*/gm, ''), 220)}`).join('\n')}`),
     changes.length ? `\nChanges you confirmed:\n${changes.map((c) => `  - ${c.proposedMetadata.change.field}: ${c.proposedMetadata.change.old_value} -> ${c.proposedMetadata.change.new_value}`).join('\n')}` : null,
     children.length ? `\nHanded to colleagues:\n${children.map((c) => `  - ${c.recipientName || 'A colleague'} — ${childStatusLabel(c.status)}`).join('\n')}` : null,
     openQuestions.length ? `\nStill open:\n${openQuestions.slice(0, 8).map((q) => `  - ${clip(q.topic || q.prompt, 110)}`).join('\n')}` : null,
@@ -307,6 +307,11 @@ ${openHtml}
     .join('\n');
 
   return { subject, html, text };
+}
+
+/** What a capture says, never the whole merged file (review fix M3). */
+function captureText(c) {
+  return String(c.proposedMetadata?.capture_fragment || c.proposedBody || '');
 }
 
 export function childStatusLabel(status) {

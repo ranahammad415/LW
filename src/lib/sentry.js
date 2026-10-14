@@ -14,6 +14,8 @@
  *   set SENTRY_DSN in .env
  */
 
+import { redactSentryEvent, redactSentryBreadcrumb, redactSensitiveUrl } from './logRedaction.js';
+
 let sentry = null;
 let initialized = false;
 let warnedMissingPackage = false;
@@ -34,6 +36,9 @@ async function loadSentry(logger) {
       environment: process.env.NODE_ENV || 'development',
       release: process.env.SENTRY_RELEASE,
       tracesSampleRate: Number(process.env.SENTRY_TRACES_SAMPLE_RATE) || 0,
+      // Interview link tokens live in URL paths; never ship them to Sentry.
+      beforeSend: (event) => redactSentryEvent(event),
+      beforeBreadcrumb: (crumb) => redactSentryBreadcrumb(crumb),
     });
     logger?.info?.('Sentry initialized');
     return sentry;
@@ -98,7 +103,7 @@ export function registerOmniSearchSentryHook(app) {
     // best-effort — never block the response
     const source = request.routeOptions?.url?.split('/')[1] || 'unknown';
     captureOmniSearchError(source, error, {
-      url: request.url,
+      url: redactSensitiveUrl(request.url),
       method: request.method,
       userId: request.user?.id,
     }).catch(() => {});
