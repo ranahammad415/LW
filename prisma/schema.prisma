@@ -1923,7 +1923,7 @@ model KnowledgeInterviewInvite {
   questionCluster      Json?
   delegationCount      Int       @default(0)
   declinedAt           DateTime?
-  /// NONE | PENDING | SENT | FAILED
+  /// NONE | PENDING | SENT | FAILED | SKIPPED (nothing captured / no email)
   summaryStatus        String    @default("NONE") @db.VarChar(20)
   rootCompletedAt      DateTime?
   summarySentAt        DateTime?
@@ -1942,8 +1942,8 @@ model InterviewDispatchLog {
   id         String   @id @default(uuid())
   inviteId   String?  @db.VarChar(191)
   campaignId String?  @db.VarChar(191)
-  /// SEND | REMINDER | RESEND | EXPIRE | REVOKE | CONSOLIDATE | AUTO_APPROVE | REAP |
-  /// DELEGATE | CONFIRM_DELEGATION | DECLINE | SUMMARY | PURGE
+  /// SEND | REMINDER | RESEND | EXPIRE | EXTEND | REVOKE | CONSOLIDATE | AUTO_APPROVE | REAP |
+  /// DELEGATE | CONFIRM_DELEGATION | DECLINE | FINISH | SUMMARY | PURGE
   kind       String   @db.VarChar(30)
   ok         Boolean  @default(true)
   detail     String?  @db.VarChar(1000)
