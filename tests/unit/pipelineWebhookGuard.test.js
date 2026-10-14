@@ -114,3 +114,84 @@ describe('shouldClearClientDecision', () => {
     ).toBe(false);
   });
 });
+
+describe('new review round after client requested changes', () => {
+  const CLIENT_AT = '2026-09-28 20:56:00';
+
+  it('applies pipeline_changes_updated (worker finished client changes)', () => {
+    expect(
+      shouldIgnoreStaleClientRewind({
+        existingStatus: 'changes_requested_by_client',
+        eventType: 'pipeline_changes_updated',
+        incomingStatus: 'pending_client_review',
+      })
+    ).toBe(false);
+    expect(
+      shouldClearClientDecision({
+        resolvedStatus: 'pending_client_review',
+        eventType: 'pipeline_changes_updated',
+        existingStatus: 'changes_requested_by_client',
+      })
+    ).toBe(true);
+  });
+
+  it('applies a PM approval made after the client decision', () => {
+    for (const [eventType, incomingStatus] of [
+      ['pipeline_pm_approved', 'pm_approved'],
+      ['pipeline_sent_to_client', 'pending_client_review'],
+    ]) {
+      expect(
+        shouldIgnoreStaleClientRewind({
+          existingStatus: 'changes_requested_by_client',
+          eventType,
+          incomingStatus,
+          existingClientReviewedAt: CLIENT_AT,
+          incomingPmReviewedAt: '2026-10-14 09:00:00',
+        })
+      ).toBe(false);
+    }
+    expect(
+      shouldClearClientDecision({
+        resolvedStatus: 'pending_client_review',
+        eventType: 'pipeline_sent_to_client',
+        existingStatus: 'changes_requested_by_client',
+        existingClientReviewedAt: CLIENT_AT,
+        incomingPmReviewedAt: '2026-10-14 09:00:00',
+      })
+    ).toBe(true);
+  });
+
+  it('still ignores a stale event whose PM review predates the client decision', () => {
+    expect(
+      shouldIgnoreStaleClientRewind({
+        existingStatus: 'changes_requested_by_client',
+        eventType: 'pipeline_sent_to_client',
+        incomingStatus: 'pending_client_review',
+        existingClientReviewedAt: CLIENT_AT,
+        incomingPmReviewedAt: '2026-09-19 01:29:00',
+      })
+    ).toBe(true);
+  });
+
+  it('never reopens a published or client-approved row via the PM timestamp rule', () => {
+    expect(
+      shouldIgnoreStaleClientRewind({
+        existingStatus: 'client_approved',
+        eventType: 'pipeline_sent_to_client',
+        incomingStatus: 'pending_client_review',
+        existingClientReviewedAt: CLIENT_AT,
+        incomingPmReviewedAt: '2026-10-14 09:00:00',
+      })
+    ).toBe(true);
+    expect(
+      shouldIgnoreStaleClientRewind({
+        existingStatus: 'changes_requested_by_client',
+        existingIsPublished: true,
+        eventType: 'pipeline_pm_approved',
+        incomingStatus: 'pm_approved',
+        existingClientReviewedAt: CLIENT_AT,
+        incomingPmReviewedAt: '2026-10-14 09:00:00',
+      })
+    ).toBe(true);
+  });
+});

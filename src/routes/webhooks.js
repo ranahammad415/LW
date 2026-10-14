@@ -349,14 +349,16 @@ export async function wpWebhookRoutes(app) {
     let alreadyPublished = false;
     let existingAssigneeId = null;
     let existingStatus = null;
+    let existingClientReviewedAt = null;
     try {
       const existingReview = await prisma.wpContentReview.findUnique({
         where: {
           projectId_wpPipelineId: { projectId: project.id, wpPipelineId },
         },
-        select: { isPublished: true, assignedWorkerId: true, status: true },
+        select: { isPublished: true, assignedWorkerId: true, status: true, clientReviewedAt: true },
       });
       alreadyPublished = existingReview?.isPublished || false;
+      existingClientReviewedAt = existingReview?.clientReviewedAt || null;
       existingAssigneeId = existingReview?.assignedWorkerId || null;
       existingStatus = existingReview?.status || null;
     } catch { /* fail-safe */ }
@@ -367,6 +369,8 @@ export async function wpWebhookRoutes(app) {
         existingIsPublished: alreadyPublished,
         eventType,
         incomingStatus: status,
+        existingClientReviewedAt,
+        incomingPmReviewedAt: pmReviewedAt,
       })
     ) {
       return reply.send({ success: true, skipped: 'stale_client_rewind' });
@@ -381,6 +385,8 @@ export async function wpWebhookRoutes(app) {
       eventType,
       existingStatus,
       existingIsPublished: alreadyPublished,
+      existingClientReviewedAt,
+      incomingPmReviewedAt: pmReviewedAt,
     });
     const shouldClearPm =
       resolvedStatus === 'pending_pm_review' ||

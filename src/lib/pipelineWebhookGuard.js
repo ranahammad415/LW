@@ -16,6 +16,9 @@ const CLIENT_LOCK_STATUSES = new Set([
 
 /** Legitimate moves that may leave a client-lock status. */
 const EXPLICIT_BACKWARD_EVENTS = new Set([
+  // Worker marked the client's requested changes as done (WP only fires this
+  // from changes_requested_by_client) -> back to pending_client_review.
+  'pipeline_changes_updated',
   'pipeline_resubmitted',
   'pipeline_submitted',
   'pipeline_cancelled',
@@ -33,6 +36,26 @@ export function isClientLockStatus(status, isPublished = false) {
 }
 
 /**
+ * True when the incoming webhook carries a PM decision made AFTER the client
+ * requested changes, i.e. a new review round (PM approves the revised page and
+ * sends it back to the client) rather than a stale event from the old round.
+ * Both timestamps come from the same WP clock ('Y-m-d H:i:s'), so a plain
+ * string comparison orders them.
+ */
+export function isFreshPmDecisionAfterClient({
+  existingStatus = null,
+  existingIsPublished = false,
+  existingClientReviewedAt = null,
+  incomingPmReviewedAt = null,
+} = {}) {
+  if (existingIsPublished || existingStatus !== 'changes_requested_by_client') return false;
+  const pm = String(incomingPmReviewedAt || '').trim();
+  const client = String(existingClientReviewedAt || '').trim();
+  if (!pm || !client) return false;
+  return pm > client;
+}
+
+/**
  * True when this webhook must not be applied to the existing OS row.
  *
  * @param {object} opts
@@ -46,11 +69,16 @@ export function shouldIgnoreStaleClientRewind({
   existingIsPublished = false,
   eventType = '',
   incomingStatus = '',
+  existingClientReviewedAt = null,
+  incomingPmReviewedAt = null,
 } = {}) {
   if (!isClientLockStatus(existingStatus, existingIsPublished)) return false;
 
   const type = String(eventType || '').trim();
   if (EXPLICIT_BACKWARD_EVENTS.has(type)) return false;
+  if (isFreshPmDecisionAfterClient({
+    existingStatus, existingIsPublished, existingClientReviewedAt, incomingPmReviewedAt,
+  })) return false;
 
   if (type === 'pipeline_sent_to_client') return true;
 
@@ -70,9 +98,15 @@ export function shouldClearClientDecision({
   eventType = '',
   existingStatus = null,
   existingIsPublished = false,
+  existingClientReviewedAt = null,
+  incomingPmReviewedAt = null,
 } = {}) {
+  const freshRound = isFreshPmDecisionAfterClient({
+    existingStatus, existingIsPublished, existingClientReviewedAt, incomingPmReviewedAt,
+  });
   if (isClientLockStatus(existingStatus, existingIsPublished)
-    && !EXPLICIT_BACKWARD_EVENTS.has(String(eventType || '').trim())) {
+    && !EXPLICIT_BACKWARD_EVENTS.has(String(eventType || '').trim())
+    && !freshRound) {
     return false;
   }
   return (
