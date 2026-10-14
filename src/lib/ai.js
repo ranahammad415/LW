@@ -118,6 +118,10 @@ export async function generateChat(opts) {
   if (messagesOpt && messagesOpt.length > 0) {
     const sysMsg = messagesOpt.find((m) => m.role === 'system');
     if (sysMsg) systemPrompt = sysMsg.content;
+    // Previously `system` was silently dropped whenever `messages` was passed,
+    // so multi-turn callers (public interview chat, expert interview) ran
+    // without their system prompt. Fall back to it.
+    else if (system) systemPrompt = system;
   } else if (system) {
     systemPrompt = system;
   }

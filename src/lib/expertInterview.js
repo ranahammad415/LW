@@ -14,15 +14,24 @@ import { prisma } from './prisma.js';
 import { generateChat } from './ai.js';
 import { renderBriefingForPrompt } from './interviewBriefing.js';
 
-/** Folders a capture may target. Mirrors the voice agent's save_business_fact. */
+/**
+ * Folders a capture may target. Must stay identical to the folder enum of
+ * save_business_fact in realtimeVoice.js (REALTIME_FOLDERS re-exports this) and
+ * to the folders used in interviewQuestionBank.js.
+ */
 export const CAPTURE_FOLDERS = [
   'company',
   'services',
+  'products',
   'locations',
   'competitors',
   'faq',
   'proof',
+  'proof/case-studies',
+  'proof/testimonials',
+  'proof/reviews',
   'voice',
+  'seo/local',
   'seo/strategy',
 ];
 
@@ -175,12 +184,35 @@ export async function runInterviewTurn({
  * fragments of the same page — later captures are appended as sections to the
  * pending draft already targeting that file.
  *
- * @returns {Promise<Array<{folder:string,filename:string,title:string,confidence:number|null,isNew:boolean}>>}
+ * @returns {Promise<Array<{id:string,folder:string,filename:string,title:string,confidence:number|null,isNew:boolean}>>}
  */
-export async function upsertInterviewDrafts({ clientId, sessionId, captures }) {
+export async function upsertInterviewDrafts({
+  clientId,
+  sessionId,
+  captures,
+  sourceType = INTERVIEW_SOURCE_TYPE,
+  metadataType = 'expert-interview',
+  provenance = null,
+}) {
   const results = [];
+  // Interview-link provenance (plan §5): invite, tree root and respondent are
+  // stamped on every draft so the PM queue can group and attribute them.
+  const prov = provenance
+    ? {
+      inviteId: provenance.inviteId || null,
+      rootInviteId: provenance.rootInviteId || null,
+      respondentRole: provenance.respondentRole || null,
+      respondentName: provenance.respondentName ? String(provenance.respondentName).slice(0, 255) : null,
+    }
+    : {};
 
   for (const capture of captures) {
+    const extra = {
+      ...(capture.factType ? { factType: String(capture.factType).slice(0, 30) } : {}),
+      ...(capture.sourceQuote ? { sourceQuote: String(capture.sourceQuote).slice(0, 4000) } : {}),
+      ...(capture.transcriptRef ? { transcriptRef: capture.transcriptRef } : {}),
+    };
+
     const existing = await prisma.okfDraftChange.findFirst({
       where: {
         clientId,
@@ -211,10 +243,17 @@ export async function upsertInterviewDrafts({ clientId, sessionId, captures }) {
             ...(existing.proposedMetadata || {}),
             updated_at: new Date().toISOString(),
           },
+          ...extra,
+          ...(extra.sourceQuote && existing.sourceQuote
+            ? { sourceQuote: `${existing.sourceQuote}
+---
+${extra.sourceQuote}`.slice(0, 8000) }
+            : {}),
         },
       });
 
       results.push({
+        id: updated.id,
         folder: updated.folder,
         filename: updated.filename,
         title: updated.title,
@@ -232,19 +271,23 @@ export async function upsertInterviewDrafts({ clientId, sessionId, captures }) {
         filename: capture.filename,
         title: capture.title,
         proposedMetadata: {
-          type: 'expert-interview',
+          type: metadataType,
           title: capture.title,
-          source: INTERVIEW_SOURCE_TYPE,
+          source: sourceType,
           captured_at: new Date().toISOString(),
+          ...(capture.metadata || {}),
         },
         proposedBody: capture.content,
-        sourceType: INTERVIEW_SOURCE_TYPE,
+        sourceType,
         confidence: capture.confidence,
         status: 'PENDING',
+        ...(provenance ? { changeKind: 'NEW', ...prov } : {}),
+        ...extra,
       },
     });
 
     results.push({
+      id: created.id,
       folder: created.folder,
       filename: created.filename,
       title: created.title,

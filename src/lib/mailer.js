@@ -20,12 +20,19 @@ if (smtpConfigured) {
   });
 }
 
+/** Strips characters that would break the quoted From display name. */
+function safeDisplayName(name) {
+  return String(name || '').replace(/["<>\r\n]/g, '').slice(0, 120);
+}
+
 /**
  * Send an email. No-ops gracefully if SMTP is not configured.
- * @param {{ to: string, subject: string, html: string, text?: string }} opts
+ * `fromName` overrides the display name only (the address stays SMTP_FROM_EMAIL
+ * so SPF/DKIM keep passing); interview emails pass the agency name (D9).
+ * @param {{ to: string, subject: string, html: string, text?: string, fromName?: string, headers?: Record<string,string> }} opts
  * @returns {Promise<{ success: boolean, messageId?: string, error?: string }>}
  */
-export async function sendEmail({ to, subject, html, text }) {
+export async function sendEmail({ to, subject, html, text, fromName: fromNameOverride, headers: extraHeaders }) {
   if (!smtpConfigured || !transporter) {
     // Silently skip — log only in development
     if (process.env.NODE_ENV === 'development') {
@@ -41,7 +48,7 @@ export async function sendEmail({ to, subject, html, text }) {
     // so unauthenticated recipients land on the right page). Setting these custom
     // headers tells Mailgun to skip click tracking for this message. Open tracking
     // (pixel) is left on — disable with MAILGUN_TRACK_OPENS=no if you want it off.
-    const headers = {};
+    const headers = { ...(extraHeaders || {}) };
     if ((process.env.MAILGUN_TRACK_CLICKS || 'no').toLowerCase() === 'no') {
       headers['X-Mailgun-Track-Clicks'] = 'no';
     }
@@ -50,7 +57,7 @@ export async function sendEmail({ to, subject, html, text }) {
     }
 
     const info = await transporter.sendMail({
-      from: `"${fromName}" <${fromEmail}>`,
+      from: `"${safeDisplayName(fromNameOverride || fromName)}" <${fromEmail}>`,
       to,
       subject,
       html,

@@ -242,7 +242,7 @@ export async function siteReviewStatus(clientId, { projectId = null } = {}) {
  * is one we write ourselves, so parsing it is stable enough to avoid paying for
  * a fresh analysis on every interview start.
  */
-function latestSavedGapReport(clientId) {
+export function latestSavedGapReport(clientId) {
   const reports = safeListFiles(clientId)
     .filter((f) => f.folder === 'knowledge-gaps' && f.type === 'gap-analysis')
     .sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));

@@ -28,7 +28,7 @@ let _cachedSettings = null;
 let _cacheExpiry = 0;
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
-async function getAgencySettings() {
+export async function getAgencySettings() {
   if (_cachedSettings && Date.now() < _cacheExpiry) return _cachedSettings;
   try {
     const settings = await prisma.agencySetting.findFirst();
@@ -61,6 +61,7 @@ const FOOTER_MESSAGES = {
   meeting:      "Don't want emails about meetings?",
   report:       "Don't want emails about reports?",
   standup:      "Don't want emails about standups?",
+  interview:    "You received this because your account team asked for your input.",
 };
 
 /**
