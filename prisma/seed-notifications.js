@@ -450,6 +450,42 @@ const templates = [
     bodyText: 'All {{itemCount}} link(s) in backlink order {{orderNumber}} are now live.',
     inAppMessage: 'Backlink order {{orderNumber}} completed — all {{itemCount}} links live',
     variables: ['orderNumber', 'itemCount', 'actionUrl'] },
+
+  // ── Interview scheduler (staff alerts; client emails go through lib/interviewEmail.js) ──
+  { slug: 'interview_completed_staff', name: 'Interview Completed', description: 'A respondent finished a knowledge interview', category: 'interview',
+    subject: 'Interview completed: {{clientName}}',
+    bodyHtml: '<p><strong>{{respondentName}}</strong> finished the knowledge interview for <strong>{{clientName}}</strong>. {{draftCount}} item(s) were captured and are waiting in the review queue.</p>',
+    bodyText: '{{respondentName}} finished the knowledge interview for {{clientName}}. {{draftCount}} item(s) are waiting in the review queue.',
+    inAppMessage: 'Interview completed: {{clientName}} ({{draftCount}} items)',
+    variables: ['clientName', 'respondentName', 'draftCount', 'actionUrl'] },
+
+  { slug: 'interview_drafts_ready', name: 'Interview Drafts Ready', description: 'Interview captures were consolidated and are ready for review', category: 'interview',
+    subject: 'Interview drafts ready for review: {{clientName}}',
+    bodyHtml: '<p>The interview for <strong>{{clientName}}</strong> has been consolidated: {{draftCount}} draft(s) ({{highCount}} high risk, {{mediumCount}} medium, {{lowCount}} low).</p>',
+    bodyText: 'Interview drafts ready for {{clientName}}: {{draftCount}} ({{highCount}} high, {{mediumCount}} medium, {{lowCount}} low).',
+    inAppMessage: 'Interview drafts ready: {{clientName}} ({{draftCount}})',
+    variables: ['clientName', 'draftCount', 'highCount', 'mediumCount', 'lowCount', 'actionUrl'] },
+
+  { slug: 'interview_send_failed', name: 'Interview Email Failed', description: 'An interview invite email could not be sent', category: 'interview',
+    subject: 'Interview email failed: {{clientName}}',
+    bodyHtml: '<p>The interview email to <strong>{{recipient}}</strong> for <strong>{{clientName}}</strong> could not be sent: {{error}}</p>',
+    bodyText: 'The interview email to {{recipient}} for {{clientName}} could not be sent: {{error}}',
+    inAppMessage: 'Interview email failed for {{clientName}}',
+    variables: ['clientName', 'recipient', 'error', 'actionUrl'] },
+
+  { slug: 'interview_delegated_staff', name: 'Interview Delegated', description: 'A client handed interview questions to a colleague', category: 'interview',
+    subject: 'Interview questions delegated: {{clientName}}',
+    bodyHtml: '<p><strong>{{delegatorName}}</strong> at <strong>{{clientName}}</strong> handed {{questionCount}} question(s) to <strong>{{workerName}}</strong> ({{workerDomain}}). {{domainNote}}</p>',
+    bodyText: '{{delegatorName}} at {{clientName}} handed {{questionCount}} question(s) to {{workerName}} ({{workerDomain}}). {{domainNote}}',
+    inAppMessage: 'Interview delegated to {{workerName}} ({{clientName}})',
+    variables: ['clientName', 'delegatorName', 'workerName', 'workerDomain', 'questionCount', 'domainNote', 'actionUrl'] },
+
+  { slug: 'interview_delegation_declined', name: 'Interview Delegation Declined', description: 'A colleague declined delegated interview questions', category: 'interview',
+    subject: 'Delegated interview declined: {{clientName}}',
+    bodyHtml: '<p><strong>{{workerName}}</strong> declined the interview questions delegated by {{delegatorName}} for <strong>{{clientName}}</strong>.</p>',
+    bodyText: '{{workerName}} declined the interview questions delegated by {{delegatorName}} for {{clientName}}.',
+    inAppMessage: 'Delegation declined by {{workerName}} ({{clientName}})',
+    variables: ['clientName', 'delegatorName', 'workerName', 'actionUrl'] },
 ];
 
 async function seedNotificationTemplates() {

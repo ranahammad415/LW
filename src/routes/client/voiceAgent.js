@@ -14,42 +14,12 @@ import {
   REALTIME_TOOLS,
   REALTIME_MODEL,
   MAX_SESSION_SECONDS,
-  MONTHLY_MINUTES_PER_CLIENT,
 } from '../../lib/realtimeVoice.js';
+// The monthly limit is an admin setting (D5). getUsage lives in a shared lib so
+// public interview links and the portal agent bill against the same cap.
+import { getUsage } from '../../lib/voiceUsage.js';
 
 const MAX_CONCURRENT_SESSIONS_PER_CLIENT = 2;
-// Sessions older than this that never reported completion are treated as dead
-// so a crashed tab can't permanently occupy a concurrency slot.
-const STALE_SESSION_MS = 60 * 60 * 1000;
-
-function startOfMonth() {
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth(), 1);
-}
-
-async function getUsage(clientId) {
-  const [monthAgg, activeSessions] = await Promise.all([
-    prisma.voiceInterviewSession.aggregate({
-      where: { clientId, startedAt: { gte: startOfMonth() } },
-      _sum: { durationSeconds: true },
-    }),
-    prisma.voiceInterviewSession.count({
-      where: {
-        clientId,
-        status: 'ACTIVE',
-        startedAt: { gte: new Date(Date.now() - STALE_SESSION_MS) },
-      },
-    }),
-  ]);
-
-  const usedSeconds = monthAgg._sum.durationSeconds || 0;
-  return {
-    usedMinutes: Math.round(usedSeconds / 60),
-    remainingMinutes: Math.max(0, MONTHLY_MINUTES_PER_CLIENT - Math.round(usedSeconds / 60)),
-    monthlyLimitMinutes: MONTHLY_MINUTES_PER_CLIENT,
-    activeSessions,
-  };
-}
 
 export async function clientVoiceAgentRoutes(app) {
   // ── Usage + availability, for the UI to render before starting ────────────
@@ -95,7 +65,7 @@ export async function clientVoiceAgentRoutes(app) {
       const usage = await getUsage(clientId);
       if (usage.remainingMinutes <= 0) {
         return reply.status(429).send({
-          message: `You have used all ${MONTHLY_MINUTES_PER_CLIENT} live voice minutes for this month. Please use the text or recorded voice interview instead.`,
+          message: `You have used all ${usage.monthlyLimitMinutes} live voice minutes for this month. Please use the text or recorded voice interview instead.`,
           code: 'VOICE_MONTHLY_LIMIT',
           ...usage,
         });

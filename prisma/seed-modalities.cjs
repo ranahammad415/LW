@@ -27,6 +27,8 @@ const FEATURES = [
   { key: 'knowledgeEngine', scopes: ['OWNER', 'PM', 'CLIENT'] },
   { key: 'voiceAgent', scopes: ['OWNER', 'PM', 'CLIENT'] },
   { key: 'backlinksHub', scopes: ['OWNER', 'CLIENT'] },
+  // Off by default (rollout step 1). Enable for OWNER in Modality Settings.
+  { key: 'interviewScheduler', scopes: [] },
 ];
 
 const ROLES = ['OWNER', 'PM', 'TEAM_MEMBER', 'CONTRACTOR', 'CLIENT'];

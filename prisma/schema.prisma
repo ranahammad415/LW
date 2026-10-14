@@ -1765,12 +1765,23 @@ model VoiceInterviewSession {
   summary         String?   @db.Text
   model           String?   @db.VarChar(100)
   createdAt       DateTime  @default(now())
+  /// Set for sessions opened from a public interview link (userId is then the invite's creator).
+  inviteId            String?   @db.VarChar(191)
+  lastHeartbeatAt     DateTime?
+  language            String?   @db.VarChar(10)
+  /// NONE | PENDING | RUNNING | DONE | FAILED
+  consolidationStatus String    @default("NONE") @db.VarChar(20)
+  consolidatedAt      DateTime?
+  /// Realtime token usage from response.done (best-effort, client reported).
+  usage               Json?
 
   drafts OkfDraftChange[]
 
   @@index([clientId, startedAt])
   @@index([userId])
   @@index([clientId, mode, status])
+  @@index([inviteId])
+  @@index([consolidationStatus])
   @@map("voiceinterviewsession")
 }
 
@@ -1793,11 +1804,32 @@ model OkfDraftChange {
   reviewedAt       DateTime?
   reviewNote       String?   @db.VarChar(1000)
   createdAt        DateTime  @default(now())
+  // ── Interview provenance + consolidation (20261015_interview_scheduler) ──
+  inviteId            String?  @db.VarChar(191)
+  rootInviteId        String?  @db.VarChar(191)
+  respondentRole      String?  @db.VarChar(10)
+  respondentName      String?  @db.VarChar(255)
+  sourceQuote         String?  @db.Text
+  transcriptRef       Json?
+  factType            String?  @db.VarChar(30)
+  /// NEW | UPDATE | CONFIRM | CONFLICT
+  changeKind          String?  @db.VarChar(20)
+  /// LOW | MEDIUM | HIGH
+  riskLevel           String?  @db.VarChar(10)
+  changeSummary       String?  @db.VarChar(500)
+  dedupeHash          String?  @db.VarChar(64)
+  currentBodyHash     String?  @db.VarChar(64)
+  autoApproved        Boolean  @default(false)
+  clientCorrected     Boolean  @default(false)
+  conflictWithDraftId String?  @db.VarChar(191)
 
   session VoiceInterviewSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
 
   @@index([clientId, status])
   @@index([sessionId])
+  @@index([clientId, dedupeHash])
+  @@index([inviteId])
+  @@index([rootInviteId])
   @@map("okfdraftchange")
 }
 
@@ -1844,9 +1876,101 @@ model KnowledgeInterviewInvite {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @default(now()) @updatedAt
 
+  // ── Interview scheduler (Phase 1, migration 20261015_interview_scheduler) ──
+  // Statuses: SCHEDULED | PENDING | SENT | SEND_FAILED | OPENED | IN_PROGRESS |
+  // COMPLETED | ABANDONED | EXPIRED | REVOKED | PENDING_CONFIRM | DECLINED
+  campaignId           String?   @db.VarChar(191)
+  templateKey          String    @default("CUSTOM") @db.VarChar(40)
+  /// {version, templateKey, goals[], questions[{id,folder,factType,prompt,topic,kind,answeredBy?,delegatedTo?}], doNotAsk[], gaps[], knowledgeDigest?, digestAt?}
+  agenda               Json?
+  mode                 String    @default("VOICE") @db.VarChar(10)
+  language             String    @default("en") @db.VarChar(10)
+  emailSubject         String?   @db.VarChar(255)
+  emailIntro           String?   @db.Text
+  /// Random nonce. The link token is HMAC(secret, id:nonce) so reminders and the
+  /// summary email can re-send the same link; only tokenHash is used for lookup.
+  tokenNonce           String?   @db.VarChar(64)
+  scheduledSendAt      DateTime?
+  sentAt               DateTime?
+  sendError            String?   @db.VarChar(500)
+  reminderDays         Json?
+  reminderCount        Int       @default(0)
+  lastReminderAt       DateTime?
+  startedAt            DateTime?
+  abandonedAt          DateTime?
+  statusReason         String?   @db.VarChar(255)
+  consentAt            DateTime?
+  consentVersion       String?   @db.VarChar(20)
+  consentIp            String?   @db.VarChar(64)
+  consentUserAgent     String?   @db.VarChar(500)
+  minutesBudget        Int       @default(20)
+  totalVoiceSeconds    Int       @default(0)
+  sessionCount         Int       @default(0)
+  dispatchKey          String?   @unique @db.VarChar(191)
+  lockedAt             DateTime?
+  lockedBy             String?   @db.VarChar(100)
+  /// null = inherit the client/agency InterviewSetting (owner decision D6).
+  autoApproveLowRisk   Boolean?
+  parentInviteId       String?   @db.VarChar(191)
+  /// A root invite points to itself.
+  rootInviteId         String?   @db.VarChar(191)
+  delegationDepth      Int       @default(0)
+  delegatedBySessionId String?   @db.VarChar(191)
+  delegationReason     String?   @db.VarChar(500)
+  /// CLIENT (root respondent) | STAFF (a delegated colleague)
+  respondentRole       String    @default("CLIENT") @db.VarChar(10)
+  respondentJobRole    String?   @db.VarChar(255)
+  questionCluster      Json?
+  delegationCount      Int       @default(0)
+  declinedAt           DateTime?
+  /// NONE | PENDING | SENT | FAILED
+  summaryStatus        String    @default("NONE") @db.VarChar(20)
+  rootCompletedAt      DateTime?
+  summarySentAt        DateTime?
+
   @@index([clientId, createdAt])
   @@index([expiresAt])
+  @@index([status, scheduledSendAt])
+  @@index([campaignId])
+  @@index([parentInviteId])
+  @@index([rootInviteId])
   @@map("knowledgeinterviewinvite")
+}
+
+/// Audit trail for the interview scheduler: sends, reminders, expiry, delegation, summaries.
+model InterviewDispatchLog {
+  id         String   @id @default(uuid())
+  inviteId   String?  @db.VarChar(191)
+  campaignId String?  @db.VarChar(191)
+  /// SEND | REMINDER | RESEND | EXPIRE | REVOKE | CONSOLIDATE | AUTO_APPROVE | REAP |
+  /// DELEGATE | CONFIRM_DELEGATION | DECLINE | SUMMARY | PURGE
+  kind       String   @db.VarChar(30)
+  ok         Boolean  @default(true)
+  detail     String?  @db.VarChar(1000)
+  instance   String?  @db.VarChar(50)
+  createdAt  DateTime @default(now())
+
+  @@index([inviteId, createdAt])
+  @@map("interviewdispatchlog")
+}
+
+/// Interview settings (owner decisions D5/D6/D7). scope = 'AGENCY' holds the
+/// agency defaults; scope = <clientId> holds a per-client override. Null = inherit.
+model InterviewSetting {
+  id                             String   @id @default(uuid())
+  scope                          String   @unique @db.VarChar(191)
+  clientId                       String?  @db.VarChar(255)
+  monthlyMinutesPerClient        Int?
+  agencyMonthlyMinutes           Int?
+  autoApproveLowRisk             Boolean?
+  transcriptRetentionDays        Int?
+  clientCanViewOwnTranscripts    Boolean?
+  clientCanViewWorkerTranscripts Boolean?
+  updatedById                    String?  @db.VarChar(255)
+  createdAt                      DateTime @default(now())
+  updatedAt                      DateTime @default(now()) @updatedAt
+
+  @@map("interviewsetting")
 }
 
 // ============================================

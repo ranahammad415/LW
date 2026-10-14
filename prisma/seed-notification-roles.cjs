@@ -75,6 +75,13 @@ const MATRIX = {
   content_map_site_drift:          { active: true, owner: 1, pm: 1, mgr: 0, viewer: 0 },
   content_map_node_overdue:        { active: true, owner: 1, pm: 1, mgr: 0, viewer: 0 },
 
+  // Interview scheduler (staff only; client emails use direct sendEmail)
+  interview_completed_staff:       { active: true, owner: 1, pm: 1, mgr: 0, viewer: 0 },
+  interview_drafts_ready:          { active: true, owner: 1, pm: 1, mgr: 0, viewer: 0 },
+  interview_send_failed:           { active: true, owner: 1, pm: 0, mgr: 0, viewer: 0 },
+  interview_delegated_staff:       { active: true, owner: 1, pm: 1, mgr: 0, viewer: 0 },
+  interview_delegation_declined:   { active: true, owner: 1, pm: 1, mgr: 0, viewer: 0 },
+
   // Projects
   project_created:               { active: true,  owner: 1, pm: 1, mgr: 0, viewer: 0 },
 
