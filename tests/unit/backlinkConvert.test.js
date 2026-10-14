@@ -12,7 +12,8 @@ const SOURCE_XLSX = path.resolve(
 const hasSource = fs.existsSync(SOURCE_XLSX);
 
 describe.skipIf(!hasSource)('convert-backlinks-xlsx against the real workbook', () => {
-  const { catalog, report } = convert(SOURCE_XLSX, { rate: 200 });
+  // Vitest still runs a skipped describe's body while collecting, so guard the read.
+  const { catalog, report } = hasSource ? convert(SOURCE_XLSX, { rate: 200 }) : {};
 
   it('finds the header row and maps the columns it needs', () => {
     expect(report.headerRow).toBe(5);
