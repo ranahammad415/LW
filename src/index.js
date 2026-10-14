@@ -30,6 +30,7 @@ import { adminAgencyImportRoutes } from './routes/admin/agencyImport.js';
 import { adminBacklinkRoutes } from './routes/admin/backlinks.js';
 import { adminWorkCycleRoutes } from './routes/admin/workCycles.js';
 import { adminNextMonthRoutes } from './routes/admin/nextMonth.js';
+import { adminInterviewRoutes } from './routes/admin/interviews.js';
 import { workCycleRoutes } from './routes/workCycles.js';
 import { projectRoutes } from './routes/projects.js';
 import { taskRoutes } from './routes/tasks.js';
@@ -91,6 +92,7 @@ import { runNativeAnalyticsSync } from './lib/analytics/runNativeSync.js';
 import { initSentry } from './lib/sentry.js';
 import { runWeeklyClientDigest } from './lib/weeklyDigest.js';
 import { runScheduledTaskSync } from './lib/dataImport/scheduledSync.js';
+import { runInterviewSchedulerTick, isSchedulerEnabled, isLeader } from './lib/interviewScheduler.js';
 
 // ── Startup secret validation (fail-fast) ─────────────────────────────────
 const REQUIRED_SECRETS = ['JWT_ACCESS_SECRET', 'JWT_REFRESH_SECRET', 'COOKIE_SECRET'];
@@ -194,6 +196,7 @@ app.register(adminAgencyImportRoutes, { prefix: '/api/admin' });
 app.register(adminBacklinkRoutes, { prefix: '/api/admin' });
 app.register(adminWorkCycleRoutes, { prefix: '/api/admin' });
 app.register(adminNextMonthRoutes, { prefix: '/api/admin' });
+app.register(adminInterviewRoutes, { prefix: '/api/admin' });
 app.register(adminAiUsageRoutes, { prefix: '/api/admin' });
 app.register(adminIntegrationsRoutes, { prefix: '/api/admin' });
 app.register(adminAnalyticsRoutes, { prefix: '/api/admin' });
@@ -347,6 +350,24 @@ try {
       app.log.error({ err }, 'Weekly AI client digest failed');
     }
   });
+
+  // Interview scheduler (sends, reminders, expiry, reaper, consolidation,
+  // summaries). Runs only on the PM2 leader (NODE_APP_INSTANCE 0 / unset);
+  // every step also uses row-level CAS claims, so a second instance is safe.
+  // Disable with INTERVIEW_SCHEDULER_ENABLED=false (e.g. until the
+  // 20261015_interview_scheduler migration is applied).
+  if (isSchedulerEnabled()) {
+    cron.schedule('*/5 * * * *', async () => {
+      if (!isLeader()) return;
+      try {
+        const summary = await runInterviewSchedulerTick({ log: app.log });
+        app.log.info({ summary }, 'Interview scheduler tick complete');
+      } catch (err) {
+        app.log.error({ err }, 'Interview scheduler tick failed');
+      }
+    });
+    app.log.info({ leader: isLeader() }, 'Interview scheduler enabled');
+  }
 
   // Daily notification digest ("You have N unread notifications" email) —
   // DISABLED per request. These digest emails are no longer sent. The in-app

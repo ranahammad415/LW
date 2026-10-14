@@ -1,31 +1,28 @@
 /**
- * Admin management of login-free knowledge interview links.
+ * Admin management of login-free knowledge interview links (the KB page's
+ * "quick invite"). The full scheduler lives in routes/admin/interviews.js.
  *
  * Creating an invite is an Owner action: the resulting URL grants access to a
  * client's project details and knowledge base summary without a password, so
  * it is deliberately narrower than the read-only PM scope used elsewhere.
+ *
+ * Invite creation goes through lib/interviewInvites.createInvites() so quick
+ * invites get an agenda, the branded agenda email and SEND_FAILED tracking.
  */
-import crypto from 'crypto';
+import { z } from 'zod';
 import { prisma } from '../../lib/prisma.js';
 import { requireStaffKnowledgeWrite } from '../../lib/knowledgeScope.js';
-import { sendEmail } from '../../lib/mailer.js';
+import { createInvites, publicShape, logDispatch, DEFAULT_TTL_DAYS, MAX_TTL_DAYS } from '../../lib/interviewInvites.js';
+import { TEMPLATE_KEYS } from '../../lib/interviewQuestionBank.js';
 
-const DEFAULT_TTL_DAYS = 14;
-
-function hashToken(token) {
-  return crypto.createHash('sha256').update(token).digest('hex');
-}
-
-function inviteUrl(token) {
-  const base = process.env.FRONTEND_URL || 'https://app.localwaves.ai';
-  return `${base.replace(/\/$/, '')}/knowledge-interview/${token}`;
-}
-
-/** Never leak the hash to the browser. */
-function publicShape(invite) {
-  const { tokenHash: _hash, ...rest } = invite;
-  return rest;
-}
+const createSchema = z.object({
+  projectId: z.string().max(191).optional().nullable(),
+  recipientName: z.string().max(255).optional().nullable(),
+  email: z.string().trim().email().max(255).optional().nullable().or(z.literal('')),
+  expiresInDays: z.number().int().min(1).max(MAX_TTL_DAYS).optional(),
+  templateKey: z.enum(TEMPLATE_KEYS).optional(),
+  scheduledSendAt: z.string().datetime({ offset: true }).optional().nullable(),
+});
 
 export async function staffKnowledgeInviteRoutes(app) {
   app.get(
@@ -33,38 +30,31 @@ export async function staffKnowledgeInviteRoutes(app) {
     { onRequest: [app.verifyJwt, requireStaffKnowledgeWrite] },
     async (request, reply) => {
       const invites = await prisma.knowledgeInterviewInvite.findMany({
-        where: { clientId: request.knowledgeClientId },
+        where: { clientId: request.knowledgeClientId, delegationDepth: 0 },
         orderBy: { createdAt: 'desc' },
         take: 50,
       });
-      return reply.send({ invites: invites.map(publicShape) });
+      return reply.send({ invites: invites.map((i) => ({ ...publicShape(i), agenda: undefined })) });
     }
   );
 
   app.post(
     '/clients/:clientId/knowledge/invites',
-    {
-      onRequest: [app.verifyJwt, requireStaffKnowledgeWrite],
-      schema: {
-        body: {
-          type: 'object',
-          properties: {
-            projectId: { type: 'string', nullable: true },
-            recipientName: { type: 'string' },
-            email: { type: 'string' },
-            expiresInDays: { type: 'integer', minimum: 1, maximum: 90 },
-          },
-        },
-      },
-    },
+    { onRequest: [app.verifyJwt, requireStaffKnowledgeWrite] },
     async (request, reply) => {
       const clientId = request.knowledgeClientId;
+      const parsed = createSchema.safeParse(request.body || {});
+      if (!parsed.success) {
+        return reply.status(400).send({ message: parsed.error.issues?.[0]?.message || 'Invalid request' });
+      }
       const {
         projectId = null,
         recipientName = null,
         email = null,
         expiresInDays = DEFAULT_TTL_DAYS,
-      } = request.body || {};
+        templateKey = 'CUSTOM',
+        scheduledSendAt = null,
+      } = parsed.data;
 
       if (projectId) {
         const project = await prisma.project.findFirst({
@@ -74,41 +64,24 @@ export async function staffKnowledgeInviteRoutes(app) {
         if (!project) return reply.status(404).send({ message: 'Project not found' });
       }
 
-      const token = crypto.randomBytes(32).toString('base64url');
-      const expiresAt = new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000);
-
-      const invite = await prisma.knowledgeInterviewInvite.create({
-        data: {
-          clientId,
-          projectId,
-          tokenHash: hashToken(token),
-          createdById: request.user.id,
-          recipientName: recipientName ? String(recipientName).slice(0, 255) : null,
-          sentToEmail: email ? String(email).slice(0, 255) : null,
-          expiresAt,
-        },
+      const { invites, urls } = await createInvites({
+        clientId,
+        projectId,
+        createdById: request.user.id,
+        templateKey,
+        recipients: [{ name: recipientName || null, email: email || null }],
+        scheduledSendAt,
+        expiresInDays,
+        sendEmail: Boolean(email),
       });
 
-      const url = inviteUrl(token);
-
-      if (email) {
-        const client = await prisma.clientAccount.findUnique({
-          where: { id: clientId },
-          select: { agencyName: true },
-        });
-        await sendEmail({
-          to: email,
-          subject: `Tell us about ${client?.agencyName || 'your business'}`,
-          text: `Hi${recipientName ? ` ${recipientName}` : ''},\n\nWe would like to capture a bit more about your business so everything we write for you is accurate.\n\nOpen this link to get started — no login needed:\n${url}\n\nThe link expires on ${expiresAt.toDateString()}.`,
-          html: `<p>Hi${recipientName ? ` ${recipientName}` : ''},</p>
-<p>We would like to capture a bit more about your business so everything we write for you is accurate.</p>
-<p><a href="${url}">Start the interview</a> — no login needed.</p>
-<p style="color:#666;font-size:12px">The link expires on ${expiresAt.toDateString()}.</p>`,
-        }).catch((err) => request.log.error({ err }, 'Failed to email knowledge interview invite'));
-      }
-
-      // The plaintext token is returned exactly once, here.
-      return reply.status(201).send({ invite: publicShape(invite), url });
+      // The plaintext link is returned exactly once, here (null when scheduled).
+      return reply.status(201).send({
+        invite: publicShape(invites[0]),
+        url: urls[0]?.url || null,
+        emailed: urls[0]?.emailed ?? false,
+        emailError: urls[0]?.error || null,
+      });
     }
   );
 
@@ -125,8 +98,9 @@ export async function staffKnowledgeInviteRoutes(app) {
 
       const updated = await prisma.knowledgeInterviewInvite.update({
         where: { id: invite.id },
-        data: { status: 'REVOKED', revokedAt: new Date() },
+        data: { status: 'REVOKED', revokedAt: new Date(), statusReason: 'revoked by owner' },
       });
+      await logDispatch({ inviteId: invite.id, kind: 'REVOKE', detail: `by ${request.user.id}` });
       return reply.send({ invite: publicShape(updated) });
     }
   );

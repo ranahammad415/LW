@@ -47,6 +47,9 @@ import { pmKeywordSuggestionRoutes } from '../../src/routes/pm/keywordSuggestion
 import { pmPipelineRoutes } from '../../src/routes/pm/pipeline.js';
 
 import { wpWebhookRoutes } from '../../src/routes/webhooks.js';
+import { publicKnowledgeInterviewRoutes } from '../../src/routes/publicKnowledgeInterview.js';
+import { adminInterviewRoutes } from '../../src/routes/admin/interviews.js';
+import { pmOkfReviewRoutes } from '../../src/routes/pm/okfReview.js';
 
 export async function buildApp() {
   const app = Fastify({ logger: false });
@@ -114,6 +117,11 @@ export async function buildApp() {
   app.register(pmPipelineRoutes, { prefix: '/api/pm' });
 
   app.register(wpWebhookRoutes, { prefix: '/api/webhooks' });
+
+  // Interview scheduler (plan §14 integration tests)
+  app.register(publicKnowledgeInterviewRoutes, { prefix: '/api/public' });
+  app.register(adminInterviewRoutes, { prefix: '/api/admin' });
+  app.register(pmOkfReviewRoutes, { prefix: '/api/pm' });
 
   // Health check
   app.get('/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }));

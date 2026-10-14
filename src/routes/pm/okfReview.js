@@ -6,8 +6,43 @@
  * an OkfVersion) and then reindexes the client's assets.
  */
 import { prisma } from '../../lib/prisma.js';
-import { writeOkfFile, setOkfContext, clearOkfContext } from '../../lib/knowledgeEngine.js';
+import crypto from 'crypto';
+import { z } from 'zod';
+import { writeOkfFile, readOkfFile, setOkfContext, clearOkfContext } from '../../lib/knowledgeEngine.js';
 import { reindexOkfAssets } from '../../lib/okfIndexingService.js';
+
+/** Optional interview filters on the queue (plan §6, §9, §23). */
+const draftFilterSchema = z.object({
+  status: z.enum(['PENDING', 'APPROVED', 'REJECTED']).default('PENDING'),
+  clientId: z.string().max(191).optional(),
+  sourceType: z.string().max(40).optional(),
+  factType: z.string().max(30).optional(),
+  riskLevel: z.enum(['LOW', 'MEDIUM', 'HIGH']).optional(),
+  changeKind: z.enum(['NEW', 'UPDATE', 'CONFIRM', 'CONFLICT']).optional(),
+  inviteId: z.string().max(191).optional(),
+  rootInviteId: z.string().max(191).optional(),
+  sessionId: z.string().max(191).optional(),
+  respondentRole: z.enum(['CLIENT', 'STAFF']).optional(),
+});
+
+function bodyHash(body) {
+  return crypto.createHash('sha256').update(String(body ?? '')).digest('hex');
+}
+
+function safeReadOkf(clientId, folder, filename) {
+  try {
+    return readOkfFile(clientId, folder, filename);
+  } catch {
+    return null;
+  }
+}
+
+/** True when the target file changed since consolidation hashed it. */
+function isStale(draft, current) {
+  if (!draft.currentBodyHash) return false;
+  if (!current) return true;
+  return bodyHash(current.body) !== draft.currentBodyHash;
+}
 
 const PM_ROLES = ['PM', 'OWNER'];
 
@@ -62,7 +97,12 @@ export async function pmOkfReviewRoutes(app) {
       },
     },
     async (request, reply) => {
-      const { status = 'PENDING', clientId } = request.query || {};
+      const parsedQuery = draftFilterSchema.safeParse(request.query || {});
+      if (!parsedQuery.success) {
+        return reply.status(400).send({ message: parsedQuery.error.issues?.[0]?.message || 'Invalid filter' });
+      }
+      const { status, clientId, ...filters } = parsedQuery.data;
+      const extraWhere = Object.fromEntries(Object.entries(filters).filter(([, v]) => v));
       const allowedIds = await scopedClientIds(request);
 
       if (allowedIds && allowedIds.length === 0) {
@@ -80,7 +120,7 @@ export async function pmOkfReviewRoutes(app) {
 
       const [drafts, grouped] = await Promise.all([
         prisma.okfDraftChange.findMany({
-          where: { ...clientFilter, status },
+          where: { ...clientFilter, ...extraWhere, status },
           orderBy: { createdAt: 'desc' },
           take: 200,
           include: {
@@ -91,7 +131,7 @@ export async function pmOkfReviewRoutes(app) {
         }),
         prisma.okfDraftChange.groupBy({
           by: ['status'],
-          where: clientFilter,
+          where: { ...clientFilter, ...extraWhere },
           _count: { _all: true },
         }),
       ]);
@@ -139,6 +179,8 @@ export async function pmOkfReviewRoutes(app) {
       const finalFilename = (filename || draft.filename).replace(/\.md$/, '');
       const finalTitle = title || draft.title;
       const finalBody = body ?? draft.proposedBody;
+      // Approval never blocks on staleness, but the reviewer is told (plan §6).
+      const staleAtApproval = isStale(draft, safeReadOkf(draft.clientId, draft.folder, draft.filename));
 
       setOkfContext({
         userId: request.user.id,
@@ -185,7 +227,7 @@ export async function pmOkfReviewRoutes(app) {
 
       await reindexOkfAssets(draft.clientId);
 
-      return reply.send({ success: true, path: filePath });
+      return reply.send({ success: true, path: filePath, wasStale: staleAtApproval });
     }
   );
 
@@ -293,6 +335,103 @@ export async function pmOkfReviewRoutes(app) {
       }
 
       return reply.send({ success: true, approved, skipped: request.body.ids.length - approved });
+    }
+  );
+
+  // ── Diff: current file vs proposed (plan §6 "Diff") ───────────────────────
+  app.get(
+    '/okf-review/drafts/:id/diff',
+    { onRequest: [app.verifyJwt, requirePmOrOwner] },
+    async (request, reply) => {
+      const draft = await prisma.okfDraftChange.findUnique({ where: { id: request.params.id } });
+      if (!draft) return reply.status(404).send({ message: 'Draft not found' });
+      const allowedIds = await scopedClientIds(request);
+      if (allowedIds && !allowedIds.includes(draft.clientId)) {
+        return reply.status(403).send({ message: 'You do not manage this client' });
+      }
+      const current = safeReadOkf(draft.clientId, draft.folder, draft.filename);
+      return reply.send({
+        current: current ? { metadata: current.metadata, body: current.body } : null,
+        proposed: { metadata: draft.proposedMetadata, body: draft.proposedBody },
+        stale: isStale(draft, current),
+        change: draft.proposedMetadata?.change || null,
+        sourceQuote: draft.sourceQuote,
+        transcriptRef: draft.transcriptRef,
+      });
+    }
+  );
+
+  // ── Bulk reject ───────────────────────────────────────────────────────────
+  app.post(
+    '/okf-review/drafts/bulk-reject',
+    { onRequest: [app.verifyJwt, requirePmOrOwner] },
+    async (request, reply) => {
+      const parsed = z.object({
+        ids: z.array(z.string().max(191)).min(1).max(100),
+        reviewNote: z.string().max(1000).optional(),
+      }).safeParse(request.body || {});
+      if (!parsed.success) return reply.status(400).send({ message: 'ids is required (max 100)' });
+      const allowedIds = await scopedClientIds(request);
+      const result = await prisma.okfDraftChange.updateMany({
+        where: {
+          id: { in: parsed.data.ids },
+          status: 'PENDING',
+          ...(allowedIds ? { clientId: { in: allowedIds } } : {}),
+        },
+        data: {
+          status: 'REJECTED',
+          reviewerId: request.user.id,
+          reviewedAt: new Date(),
+          reviewNote: parsed.data.reviewNote ? parsed.data.reviewNote.slice(0, 1000) : null,
+        },
+      });
+      return reply.send({ success: true, rejected: result.count, skipped: parsed.data.ids.length - result.count });
+    }
+  );
+
+  // ── Interviews (read-only for PMs: no tokens, no transcripts) ─────────────
+  app.get(
+    '/okf-review/interviews',
+    { onRequest: [app.verifyJwt, requirePmOrOwner] },
+    async (request, reply) => {
+      const allowedIds = await scopedClientIds(request);
+      if (allowedIds && allowedIds.length === 0) return reply.send({ interviews: [] });
+      const invites = await prisma.knowledgeInterviewInvite.findMany({
+        where: allowedIds ? { clientId: { in: allowedIds } } : {},
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+        select: {
+          id: true,
+          clientId: true,
+          rootInviteId: true,
+          parentInviteId: true,
+          recipientName: true,
+          respondentRole: true,
+          respondentJobRole: true,
+          templateKey: true,
+          status: true,
+          createdAt: true,
+          sentAt: true,
+          completedAt: true,
+          expiresAt: true,
+          totalVoiceSeconds: true,
+          summaryStatus: true,
+        },
+      });
+      const ids = invites.map((i) => i.id);
+      const counts = ids.length
+        ? await prisma.okfDraftChange.groupBy({ by: ['inviteId', 'status'], where: { inviteId: { in: ids } }, _count: { _all: true } })
+        : [];
+      const byInvite = new Map();
+      for (const c of counts) {
+        const cur = byInvite.get(c.inviteId) || { PENDING: 0, APPROVED: 0, REJECTED: 0 };
+        cur[c.status] = c._count._all;
+        byInvite.set(c.inviteId, cur);
+      }
+      const withNames = await attachClientNames(invites);
+      return reply.send({
+        interviews: withNames.map((i) => ({ ...i, drafts: byInvite.get(i.id) || { PENDING: 0, APPROVED: 0, REJECTED: 0 } })),
+      });
     }
   );
 
