@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/handshake-disconnect.response.json",
+  "title": "Disconnect acknowledgement (v1.0.4)",
+  "description": "Signed (X-AOS-Response-*) with the inbound key of the same generation as the request. After it, the OS holds no keys for the site.",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
+    "siteId": {
+      "$ref": "common.json#/$defs/siteId"
+    },
+    "disconnected": {
+      "const": true
+    },
+    "serverTime": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "ok",
+    "siteId",
+    "disconnected",
+    "serverTime"
+  ]
+}

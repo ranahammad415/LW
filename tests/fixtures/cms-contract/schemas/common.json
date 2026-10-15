@@ -911,6 +911,11 @@
     "blockSchema": {
       "type": "object",
       "properties": {
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "v1.0.4: current block schema version; the site stamps it as _version on draft-upsert. The OS may send _version only if it equals this, else 422 SCHEMA_INVALID"
+        },
         "fields": {
           "type": "array",
           "items": {
@@ -1172,6 +1177,10 @@
         "health": {
           "$ref": "common.json#/$defs/health"
         },
+        "previewConfigured": {
+          "type": "boolean",
+          "description": "v1.0.4: the site has a preview secret (EMDASH_PREVIEW_SECRET or the plugin setting); review links work only when true"
+        },
         "contractRevision": {
           "type": "string",
           "pattern": "^1\\.\\d+\\.\\d+$",
@@ -1212,6 +1221,10 @@
       "properties": {
         "eventId": {
           "$ref": "common.json#/$defs/id"
+        },
+        "siteId": {
+          "$ref": "common.json#/$defs/siteId",
+          "description": "v1.0.4: the siteId current when the site CREATED the event (stamped by the site). Must equal the batch siteId; events-replay returns only events of the requesting siteId"
         },
         "type": {
           "$ref": "common.json#/$defs/eventType"

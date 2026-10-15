@@ -15,6 +15,10 @@
     "paired": {
       "type": "boolean"
     },
+    "previewConfigured": {
+      "type": "boolean",
+      "description": "v1.0.4: see siteInfo.previewConfigured"
+    },
     "contract": {
       "type": "integer",
       "minimum": 1

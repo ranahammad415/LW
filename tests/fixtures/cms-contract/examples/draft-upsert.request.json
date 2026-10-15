@@ -8,7 +8,8 @@
       "_type": "page_hero",
       "_key": "page_hero_a1",
       "heading": "Hot Tub Repair for Most Brands",
-      "intro": "Not heating or tripping the breaker? We diagnose and fix most spa brands."
+      "intro": "Not heating or tripping the breaker? We diagnose and fix most spa brands.",
+      "_version": 1
     },
     {
       "_type": "faq",

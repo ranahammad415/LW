@@ -16,5 +16,6 @@
     "emdash": "1.2.0",
     "astro": "7.3.8",
     "framework": "1.0.0"
-  }
+  },
+  "previewConfigured": true
 }

@@ -3,21 +3,49 @@
   "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/handshake.request.json",
   "title": "Handshake (site -> OS)",
   "description": "POST /api/webhooks/emdash/handshake. mode=pair is signed with the pairing code (X-AOS-Key-Id: pairing); mode=heartbeat is signed with the outbound key.",
-  "allOf": [
-    {
-      "$ref": "common.json#/$defs/siteInfo"
-    }
-  ],
   "type": "object",
   "properties": {
     "mode": {
       "enum": [
         "pair",
-        "heartbeat"
+        "heartbeat",
+        "disconnect"
+      ]
+    },
+    "siteId": {
+      "$ref": "common.json#/$defs/siteId"
+    },
+    "reason": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 500,
+          "description": "disconnect only: why (e.g. admin_disconnect)"
+        },
+        {
+          "type": "null"
+        }
       ]
     }
   },
   "required": [
-    "mode"
-  ]
+    "mode",
+    "siteId"
+  ],
+  "if": {
+    "properties": {
+      "mode": {
+        "const": "disconnect"
+      }
+    },
+    "required": [
+      "mode"
+    ]
+  },
+  "then": {
+    "description": "v1.0.4 mode=disconnect: signed with the CURRENT outbound key; only mode, siteId, reason? needed"
+  },
+  "else": {
+    "$ref": "common.json#/$defs/siteInfo"
+  }
 }

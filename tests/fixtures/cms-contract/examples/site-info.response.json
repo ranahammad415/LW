@@ -80,6 +80,7 @@
     ],
     "blockSchemas": {
       "page_hero": {
+        "version": 1,
         "fields": [
           {
             "slug": "variant",
@@ -136,6 +137,7 @@
         ]
       },
       "content_section": {
+        "version": 1,
         "fields": [
           {
             "slug": "eyebrow",
@@ -203,6 +205,7 @@
         ]
       },
       "card_grid": {
+        "version": 1,
         "fields": [
           {
             "slug": "eyebrow",
@@ -269,6 +272,7 @@
         ]
       },
       "faq": {
+        "version": 1,
         "fields": [
           {
             "slug": "eyebrow",
@@ -316,6 +320,7 @@
         ]
       },
       "cta_banner": {
+        "version": 1,
         "fields": [
           {
             "slug": "eyebrow",
@@ -335,6 +340,7 @@
         ]
       },
       "related_links": {
+        "version": 1,
         "fields": [
           {
             "slug": "heading",
@@ -389,5 +395,6 @@
       "scheduled": 1
     }
   },
-  "contractRevision": "1.0.1"
+  "contractRevision": "1.0.4",
+  "previewConfigured": true
 }

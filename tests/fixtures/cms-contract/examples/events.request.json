@@ -5,6 +5,7 @@
   "events": [
     {
       "eventId": "01JAC8A0B1C2D3E4F5G6H7J8K9",
+      "siteId": "site_9f3c2a7b41d0",
       "type": "pipeline_pm_approved",
       "at": "2026-10-15T11:59:58Z",
       "cursor": 56,
@@ -84,6 +85,7 @@
     },
     {
       "eventId": "01JAC8A0B1C2D3E4F5G6H7J8KA",
+      "siteId": "site_9f3c2a7b41d0",
       "type": "pipeline_sent_to_client",
       "at": "2026-10-15T12:00:00Z",
       "cursor": 57,
@@ -160,6 +162,7 @@
     },
     {
       "eventId": "01JAC8A0B1C2D3E4F5G6H7J8KB",
+      "siteId": "site_9f3c2a7b41d0",
       "type": "content.saved",
       "at": "2026-10-15T12:01:00Z",
       "cursor": 58,

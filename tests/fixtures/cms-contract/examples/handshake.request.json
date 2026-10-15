@@ -68,5 +68,6 @@
     "lastEventAt": "2026-10-15T12:00:00Z",
     "lastCursor": 57
   },
-  "contractRevision": "1.0.1"
+  "contractRevision": "1.0.4",
+  "previewConfigured": true
 }

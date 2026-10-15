@@ -138,6 +138,24 @@
       "canonical": "v1\nPOST\n/_emdash/api/plugins/agency-os-bridge/site-info\n1792065604\n22222222-3333-4444-8555-666666666666\n44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
     },
     {
+      "name": "disconnect handshake (v1.0.4) signed with the current outbound key",
+      "direction": "site->os",
+      "secret": "outbound key 1",
+      "headers": {
+        "x-aos-contract": "1",
+        "x-aos-site": "site_9f3c2a7b41d0",
+        "x-aos-key-id": "1",
+        "x-aos-timestamp": "1792065606",
+        "x-aos-nonce": "66666666-7777-4888-8999-aaaaaaaaaaaa",
+        "x-aos-signature": "v1=c987e69f30c8d06efbd63765a2918e6c508e053b8d4a299db32c0fefc10c0a4f"
+      },
+      "method": "POST",
+      "path": "/api/webhooks/emdash/handshake",
+      "body": "{\"mode\":\"disconnect\",\"siteId\":\"site_9f3c2a7b41d0\",\"reason\":\"admin_disconnect\"}",
+      "bodySha256": "2efbccf044bd2089c7aa6994a2b71ed7737a6875de90ea26657d4d8378997542",
+      "canonical": "v1\nPOST\n/api/webhooks/emdash/handshake\n1792065606\n66666666-7777-4888-8999-aaaaaaaaaaaa\n2efbccf044bd2089c7aa6994a2b71ed7737a6875de90ea26657d4d8378997542"
+    },
+    {
       "name": "pairing handshake signed with pairingSigningKey(code)",
       "direction": "site->os",
       "secret": "pairing signing key",
