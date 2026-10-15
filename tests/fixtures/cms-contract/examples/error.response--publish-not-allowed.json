@@ -1,0 +1,11 @@
+{
+  "ok": false,
+  "error": {
+    "code": "PUBLISH_NOT_ALLOWED",
+    "message": "Approved. Publish in the site admin.",
+    "retryable": false,
+    "details": {
+      "editUrl": "https://oasispoolspas.com/_emdash/admin/content/pages/01JAB4M9ZQ7X3K2V8N5T6R1W0C"
+    }
+  }
+}

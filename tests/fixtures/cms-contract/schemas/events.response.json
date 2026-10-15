@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/events.response.json",
+  "title": "Event batch result",
+  "description": "HTTP 200 even when some events are rejected. The site re-sends only rejected events with retryable=true; accepted and duplicate are final.",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "accepted": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/id"
+      }
+    },
+    "duplicate": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/id"
+      }
+    },
+    "rejected": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "$ref": "common.json#/$defs/id"
+          },
+          "code": {
+            "enum": [
+              "VALIDATION",
+              "TOO_MANY_SNAPSHOTS",
+              "INTERNAL"
+            ]
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "eventId",
+          "code",
+          "retryable"
+        ]
+      }
+    },
+    "lastCursor": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "ok",
+    "accepted",
+    "duplicate",
+    "rejected"
+  ]
+}

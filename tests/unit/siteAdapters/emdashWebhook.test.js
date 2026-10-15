@@ -1,0 +1,554 @@
+/**
+ * Route tests for /api/webhooks/emdash/{handshake,events} with an in-memory store
+ * (routes/webhooks/emdash.js takes the store by injection; the Prisma store needs MySQL).
+ * Covers: pairing (signed response, single use, expiry, 5-attempt burn), heartbeat,
+ * rotation (+ re-delivery to a lagging site), bad signature, stale timestamp, replayed
+ * nonce, duplicate eventId, per-review seq ordering + gap heal, content ordering,
+ * TOO_MANY_SNAPSHOTS, oversized body (413 envelope), unknown site, not paired.
+ */
+import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from 'vitest';
+import Fastify from 'fastify';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import { emdashWebhookRoutes } from '../../../src/routes/webhooks/emdash.js';
+import {
+  createPairingCode,
+  pairingSigningKey,
+  pairingVerifier,
+  signRequest,
+  verifyResponse,
+  generateKey,
+} from '../../../src/lib/siteAdapters/signing.js';
+import { encryptCmsSecret, decryptCmsSecret } from '../../../src/lib/cmsKeyCrypto.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const ex = (name) =>
+  JSON.parse(readFileSync(path.join(here, '../../fixtures/cms-contract/examples', `${name}.json`), 'utf8'));
+
+const SITE = 'site_9f3c2a7b41d0';
+const PROJECT_ID = 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d';
+const HS = '/api/webhooks/emdash/handshake';
+const EV = '/api/webhooks/emdash/events';
+
+function createMemoryStore() {
+  const s = {
+    projects: new Map(),
+    creds: new Map(),
+    codes: [],
+    receipts: new Map(),
+    reviewSeq: new Map(),
+    entryUpdated: new Map(),
+    applied: [],
+    contentApplied: [],
+    heartbeats: 0,
+    nonces: new Map(),
+    failApplyFor: null,
+  };
+  Object.assign(s, {
+    async findProjectBySiteId(siteId) {
+      return [...s.projects.values()].find((p) => p.cmsSiteId === siteId) || null;
+    },
+    async getCredential(pid) {
+      return s.creds.get(pid) || null;
+    },
+    async getActivePairingCode(siteId, now) {
+      return (
+        [...s.codes].reverse().find((c) => c.siteId === siteId && !c.usedAt && !c.burnedAt && c.signingKeyEnc && c.expiresAt > now) || null
+      );
+    },
+    decryptSigningKey(code) {
+      return decryptCmsSecret(code.signingKeyEnc);
+    },
+    async recordPairingFailure(id) {
+      const c = s.codes.find((x) => x.id === id);
+      c.failedAttempts += 1;
+      if (c.failedAttempts >= 5) {
+        c.burnedAt = new Date();
+        c.signingKeyEnc = null;
+      }
+      return { attemptsLeft: Math.max(0, 5 - c.failedAttempts) };
+    },
+    async consumePairingCode(id, now) {
+      const c = s.codes.find((x) => x.id === id);
+      if (!c || c.usedAt || c.burnedAt || c.expiresAt <= now) return false;
+      c.usedAt = now;
+      c.signingKeyEnc = null;
+      return true;
+    },
+    async completePairing({ projectId, contract, inbound, outbound, now }) {
+      s.creds.set(projectId, {
+        keyId: 1,
+        inboundKeyEnc: encryptCmsSecret(inbound),
+        outboundKeyEnc: encryptCmsSecret(outbound),
+        prevKeyId: null,
+        pendingKeyId: null,
+      });
+      Object.assign(s.projects.get(projectId), { cmsPairedAt: now, cmsContractVersion: contract, cmsKeyId: 1 });
+    },
+    async recordHeartbeat({ projectId }) {
+      s.heartbeats += 1;
+      s.projects.get(projectId).cmsLastSeenAt = new Date();
+    },
+    async applyRotation({ projectId, fromKeyId, now }) {
+      const c = s.creds.get(projectId);
+      if (!c || c.keyId !== fromKeyId || c.pendingKeyId == null) return null;
+      const next = {
+        keyId: c.pendingKeyId,
+        inbound: decryptCmsSecret(c.inboundKeyPendingEnc),
+        outbound: decryptCmsSecret(c.outboundKeyPendingEnc),
+      };
+      s.creds.set(projectId, {
+        keyId: c.pendingKeyId,
+        inboundKeyEnc: c.inboundKeyPendingEnc,
+        outboundKeyEnc: c.outboundKeyPendingEnc,
+        prevKeyId: c.keyId,
+        inboundKeyPrevEnc: c.inboundKeyEnc,
+        outboundKeyPrevEnc: c.outboundKeyEnc,
+        prevExpiresAt: new Date(now.getTime() + 86_400_000),
+        pendingKeyId: null,
+      });
+      return next;
+    },
+    nonceCache: {
+      async checkAndStore(key, exp) {
+        if (s.nonces.has(key)) return false;
+        s.nonces.set(key, exp);
+        return true;
+      },
+    },
+    async claimReceipt(pid, ev) {
+      const k = `${pid}:${ev.eventId}`;
+      if (s.receipts.has(k)) return 'duplicate';
+      s.receipts.set(k, 'pending');
+      return 'new';
+    },
+    async finalizeReceipt(pid, eid, outcome) {
+      s.receipts.set(`${pid}:${eid}`, outcome);
+    },
+    async releaseReceipt(pid, eid) {
+      s.receipts.delete(`${pid}:${eid}`);
+    },
+    async getReviewSeq(pid, reviewId) {
+      return s.reviewSeq.get(reviewId) || 0;
+    },
+    async getEntryUpdatedAt(pid, entryId) {
+      return s.entryUpdated.get(entryId) || null;
+    },
+    async setLastCursor(pid, c) {
+      const p = s.projects.get(pid);
+      p.cmsLastCursor = Math.max(p.cmsLastCursor || 0, c);
+    },
+    async touchLastSeen() {},
+    async isTombstoned() {
+      return false;
+    },
+    async listPms() {
+      return [{ memberId: '8f14e45f-ceea-467a-9575-5f3c1b2a7d90', name: 'Jane PM' }];
+    },
+    async applyPipelineEvent(project, n) {
+      if (s.failApplyFor === n.eventType) throw new Error('db down');
+      s.applied.push(n);
+      s.reviewSeq.set(n.cms.reviewId, n.cms.seq);
+    },
+    async applyContentEvent(project, ev) {
+      s.contentApplied.push(ev);
+      s.entryUpdated.set(ev.entry.entryId, ev.entry.updatedAt);
+    },
+    afterContentBatch() {},
+  });
+  return s;
+}
+
+let app;
+let store;
+let nowMs;
+const onHeal = vi.fn(async () => {});
+
+function addProject(overrides = {}) {
+  store.projects.set(PROJECT_ID, {
+    id: PROJECT_ID,
+    name: 'Oasis',
+    cmsType: 'EMDASH',
+    wpUrl: 'https://oasispoolspas.com',
+    cmsSiteId: SITE,
+    cmsPairedAt: null,
+    cmsLastCursor: null,
+    ...overrides,
+  });
+}
+
+function addCode({ expiresInMs = 900_000 } = {}) {
+  const code = createPairingCode(SITE);
+  store.codes.push({
+    id: `code-${store.codes.length + 1}`,
+    projectId: PROJECT_ID,
+    siteId: SITE,
+    verifier: pairingVerifier(code),
+    signingKeyEnc: encryptCmsSecret(pairingSigningKey(code)),
+    expiresAt: new Date(nowMs + expiresInMs),
+    failedAttempts: 0,
+    usedAt: null,
+    burnedAt: null,
+  });
+  return code;
+}
+
+function pairKeys() {
+  const inbound = generateKey();
+  const outbound = generateKey();
+  store.creds.set(PROJECT_ID, {
+    keyId: 1,
+    inboundKeyEnc: encryptCmsSecret(inbound),
+    outboundKeyEnc: encryptCmsSecret(outbound),
+    prevKeyId: null,
+    pendingKeyId: null,
+  });
+  store.projects.get(PROJECT_ID).cmsPairedAt = new Date(nowMs);
+  return { inbound, outbound };
+}
+
+function post(url, rawBody, { secret, keyId, siteId = SITE, timestamp, nonce, headers = {} } = {}) {
+  const signed = signRequest({
+    secret,
+    keyId,
+    siteId,
+    path: url,
+    body: rawBody,
+    timestamp: timestamp ?? Math.floor(nowMs / 1000),
+    ...(nonce ? { nonce } : {}),
+  });
+  return app.inject({ method: 'POST', url, payload: rawBody, headers: { ...signed, ...headers } });
+}
+
+function handshakeBody(mode, extra = {}) {
+  const base = ex(mode === 'pair' ? 'handshake.request' : 'handshake.request--heartbeat');
+  return JSON.stringify({ ...base, siteId: SITE, ...extra });
+}
+
+function eventsBody(events) {
+  return JSON.stringify({ contract: 1, siteId: SITE, sentAt: '2026-10-15T12:01:01Z', events });
+}
+
+beforeAll(() => {
+  process.env.CMS_KEY_ENCRYPTION_KEY = 'test-cms-key-0123456789-abcdefghijklmnop';
+});
+
+beforeEach(async () => {
+  store = createMemoryStore();
+  nowMs = Date.UTC(2026, 9, 15, 12, 0, 0);
+  onHeal.mockClear();
+  app = Fastify();
+  app.setValidatorCompiler(() => (data) => ({ value: data }));
+  await app.register(emdashWebhookRoutes, { prefix: '/api/webhooks/emdash', store, now: () => nowMs, onHeal });
+  await app.ready();
+});
+
+afterAll(async () => {
+  await app?.close();
+});
+
+describe('POST /handshake — pairing', () => {
+  it('pairs with the pairing signing key and returns keys in a response signed with the same key', async () => {
+    addProject();
+    const code = addCode();
+    const body = handshakeBody('pair');
+    const res = await post(HS, body, { secret: pairingSigningKey(code), keyId: 'pairing', nonce: '33333333-4444-4555-8666-777777777777' });
+    expect(res.statusCode).toBe(200);
+    const json = res.json();
+    expect(json).toMatchObject({ ok: true, contract: 1, siteId: SITE, projectId: PROJECT_ID, keys: { keyId: 1 } });
+    expect(json.keys.inbound).toMatch(/^aosk1_[A-Za-z0-9_-]{43}$/);
+    expect(json.pms[0].memberId).toBe('8f14e45f-ceea-467a-9575-5f3c1b2a7d90');
+    const sig = verifyResponse({
+      status: 200,
+      path: HS,
+      requestNonce: '33333333-4444-4555-8666-777777777777',
+      body: res.body,
+      headers: res.headers,
+      resolveSecret: (kid) => (kid === 'pairing' ? pairingSigningKey(code) : null),
+      now: nowMs,
+    });
+    expect(sig.ok).toBe(true);
+    // Stored keys equal the issued ones; the code is used and its signing key deleted.
+    const cred = store.creds.get(PROJECT_ID);
+    expect(decryptCmsSecret(cred.inboundKeyEnc)).toBe(json.keys.inbound);
+    expect(decryptCmsSecret(cred.outboundKeyEnc)).toBe(json.keys.outbound);
+    expect(store.codes[0].usedAt).toBeTruthy();
+    expect(store.codes[0].signingKeyEnc).toBeNull();
+  });
+
+  it('is single use: a second pairing with the same code fails with PAIRING_CODE_INVALID', async () => {
+    addProject();
+    const code = addCode();
+    const first = await post(HS, handshakeBody('pair'), { secret: pairingSigningKey(code), keyId: 'pairing' });
+    expect(first.statusCode).toBe(200);
+    const again = await post(HS, handshakeBody('pair'), { secret: pairingSigningKey(code), keyId: 'pairing' });
+    expect(again.statusCode).toBe(401);
+    expect(again.json().error.code).toBe('PAIRING_CODE_INVALID');
+  });
+
+  it('rejects an expired code', async () => {
+    addProject();
+    const code = addCode({ expiresInMs: -1000 });
+    const res = await post(HS, handshakeBody('pair'), { secret: pairingSigningKey(code), keyId: 'pairing' });
+    expect(res.statusCode).toBe(401);
+    expect(res.json().error.code).toBe('PAIRING_CODE_INVALID');
+  });
+
+  it('burns the code after 5 failed attempts (attemptsLeft counts down) and refuses the right signature afterwards', async () => {
+    addProject();
+    const code = addCode();
+    const wrong = pairingSigningKey(createPairingCode(SITE));
+    const left = [];
+    for (let i = 0; i < 5; i += 1) {
+      const r = await post(HS, handshakeBody('pair'), { secret: wrong, keyId: 'pairing' });
+      expect(r.statusCode).toBe(401);
+      expect(r.json().error.code).toBe('PAIRING_CODE_INVALID');
+      left.push(r.json().error.details?.attemptsLeft);
+    }
+    expect(left).toEqual([4, 3, 2, 1, 0]);
+    expect(store.codes[0].burnedAt).toBeTruthy();
+    expect(store.codes[0].signingKeyEnc).toBeNull();
+    const right = await post(HS, handshakeBody('pair'), { secret: pairingSigningKey(code), keyId: 'pairing' });
+    expect(right.statusCode).toBe(401);
+    expect(store.creds.size).toBe(0);
+  });
+
+  it('counts a stale-timestamp pairing attempt as a failure', async () => {
+    addProject();
+    const code = addCode();
+    const r = await post(HS, handshakeBody('pair'), {
+      secret: pairingSigningKey(code),
+      keyId: 'pairing',
+      timestamp: Math.floor(nowMs / 1000) - 600,
+    });
+    expect(r.statusCode).toBe(401);
+    expect(store.codes[0].failedAttempts).toBe(1);
+  });
+
+  it('refuses mode=heartbeat signed with the pairing key and a body siteId that differs from X-AOS-Site', async () => {
+    addProject();
+    const code = addCode();
+    const r1 = await post(HS, handshakeBody('heartbeat'), { secret: pairingSigningKey(code), keyId: 'pairing' });
+    expect(r1.json().error.code).toBe('VALIDATION');
+    const code2 = addCode();
+    const r2 = await post(HS, handshakeBody('pair', { siteId: 'site_other00000' }), { secret: pairingSigningKey(code2), keyId: 'pairing' });
+    expect(r2.json().error.code).toBe('VALIDATION');
+  });
+
+  it('answers 426 when there is no common contract', async () => {
+    addProject();
+    const code = addCode();
+    const r = await post(HS, handshakeBody('pair', { supportedContracts: [2] }), { secret: pairingSigningKey(code), keyId: 'pairing' });
+    expect(r.statusCode).toBe(426);
+    expect(r.json().error.details.supported).toEqual([1]);
+  });
+});
+
+describe('POST /handshake — heartbeat and rotation', () => {
+  it('records the heartbeat and signs the response with the current inbound key', async () => {
+    addProject();
+    const { inbound, outbound } = pairKeys();
+    const r = await post(HS, handshakeBody('heartbeat'), { secret: outbound, keyId: 1, nonce: '44444444-5555-4666-8777-888888888888' });
+    expect(r.statusCode).toBe(200);
+    expect(r.json().rotate).toBeUndefined();
+    expect(store.heartbeats).toBe(1);
+    const sig = verifyResponse({
+      status: 200,
+      path: HS,
+      requestNonce: '44444444-5555-4666-8777-888888888888',
+      body: r.body,
+      headers: r.headers,
+      resolveSecret: (kid) => (kid === '1' ? inbound : null),
+      now: nowMs,
+    });
+    expect(sig.ok).toBe(true);
+  });
+
+  it('delivers staged keys, keeps the previous keys valid (24 h overlap) and re-delivers to a lagging site', async () => {
+    addProject();
+    const { inbound, outbound } = pairKeys();
+    const nextIn = generateKey();
+    const nextOut = generateKey();
+    Object.assign(store.creds.get(PROJECT_ID), {
+      pendingKeyId: 2,
+      inboundKeyPendingEnc: encryptCmsSecret(nextIn),
+      outboundKeyPendingEnc: encryptCmsSecret(nextOut),
+    });
+    const r = await post(HS, handshakeBody('heartbeat'), { secret: outbound, keyId: 1 });
+    expect(r.statusCode).toBe(200);
+    expect(r.json().rotate).toEqual({ keyId: 2, inbound: nextIn, outbound: nextOut });
+    // Response signed with the CURRENT (pre-rotation) inbound key 1.
+    expect(r.headers['x-aos-response-key-id']).toBe('1');
+    expect(store.creds.get(PROJECT_ID).keyId).toBe(2);
+
+    // New outbound key works; old outbound key still works during the overlap…
+    const ev = ex('events.request').events[2];
+    const ok2 = await post(EV, eventsBody([ev]), { secret: nextOut, keyId: 2 });
+    expect(ok2.statusCode).toBe(200);
+    // …and a heartbeat still signed with key 1 (response lost) gets the current pair again.
+    const lagNonce = '55555555-6666-4777-8888-999999999999';
+    const lag = await post(HS, handshakeBody('heartbeat'), { secret: outbound, keyId: 1, nonce: lagNonce });
+    expect(lag.statusCode).toBe(200);
+    expect(lag.json().rotate).toEqual({ keyId: 2, inbound: nextIn, outbound: nextOut });
+    // Signed with the key generation the site still holds (inbound key 1), so it can verify it.
+    expect(
+      verifyResponse({
+        status: 200,
+        path: HS,
+        requestNonce: lagNonce,
+        body: lag.body,
+        headers: lag.headers,
+        resolveSecret: (kid) => (kid === '1' ? inbound : null),
+        now: nowMs,
+      }).ok
+    ).toBe(true);
+
+    // After 24 h the previous key is refused.
+    nowMs += 86_400_000 + 1000;
+    const late = await post(HS, handshakeBody('heartbeat'), { secret: outbound, keyId: 1 });
+    expect(late.statusCode).toBe(401);
+    expect(late.json().error.code).toBe('UNKNOWN_KEY');
+  });
+
+  it('answers 503 NOT_PAIRED for a known site without keys and 401 UNKNOWN_SITE for an unknown one', async () => {
+    addProject();
+    const r = await post(HS, handshakeBody('heartbeat'), { secret: generateKey(), keyId: 1 });
+    expect(r.statusCode).toBe(503);
+    expect(r.json().error).toMatchObject({ code: 'NOT_PAIRED', retryable: true });
+    const u = await post(HS, handshakeBody('heartbeat'), { secret: generateKey(), keyId: 1, siteId: 'site_unknown00001' });
+    expect(u.statusCode).toBe(401);
+    expect(u.json().error.code).toBe('UNKNOWN_SITE');
+  });
+});
+
+describe('POST /events', () => {
+  let keys;
+  beforeEach(() => {
+    addProject();
+    keys = pairKeys();
+  });
+  const send = (events, opts = {}) => post(EV, eventsBody(events), { secret: keys.outbound, keyId: 1, ...opts });
+
+  it('accepts the contract example batch in cursor order and reports lastCursor', async () => {
+    const events = ex('events.request').events;
+    const res = await send([...events].reverse());
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, accepted: events.map((e) => e.eventId), duplicate: [], rejected: [], lastCursor: 58 });
+    expect(store.applied.map((n) => n.eventType)).toEqual(['pipeline_pm_approved', 'pipeline_sent_to_client']);
+    expect(store.applied[0]).toMatchObject({ source: 'EMDASH', wpPipelineId: 42, wpPostId: 118, cms: { seq: 3 } });
+    expect(store.contentApplied).toHaveLength(1);
+    expect(store.projects.get(PROJECT_ID).cmsLastCursor).toBe(58);
+    // seq 3 on a review the OS has never seen (stored 0) is a gap → heal via pipeline-get.
+    await new Promise((r) => setImmediate(r));
+    expect(onHeal).toHaveBeenCalledWith(PROJECT_ID, ['01JAC7Q2HV5M8N3P4R6S9T0W1X'], expect.anything());
+  });
+
+  it('is idempotent on eventId: a re-sent batch is all duplicate and nothing is re-applied', async () => {
+    const events = ex('events.request').events;
+    await send(events);
+    const again = await send(events);
+    expect(again.json()).toMatchObject({ accepted: [], duplicate: events.map((e) => e.eventId), rejected: [] });
+    expect(store.applied).toHaveLength(2);
+  });
+
+  it('ignores stale per-review seq (keeps the receipt) and applies seq = stored + 1 without healing', async () => {
+    const [e1, e2] = ex('events.request').events;
+    store.reviewSeq.set(e1.review.reviewId, 3);
+    const res = await send([e1, e2]);
+    expect(res.json().accepted).toEqual([e1.eventId, e2.eventId]);
+    expect(store.applied.map((n) => n.cms.seq)).toEqual([4]);
+    expect(store.receipts.get(`${PROJECT_ID}:${e1.eventId}`)).toBe('stale');
+    await new Promise((r) => setImmediate(r));
+    expect(onHeal).not.toHaveBeenCalled();
+  });
+
+  it('orders content.* by entry.updatedAt (older → stale)', async () => {
+    const ev = ex('events.request').events[2];
+    store.entryUpdated.set(ev.entry.entryId, '2026-10-15T13:00:00Z');
+    const res = await send([ev]);
+    expect(res.json().accepted).toEqual([ev.eventId]);
+    expect(store.contentApplied).toHaveLength(0);
+    expect(store.receipts.get(`${PROJECT_ID}:${ev.eventId}`)).toBe('stale');
+  });
+
+  it('rejects a second snapshotText in one batch as TOO_MANY_SNAPSHOTS (retryable) and stores unknown types', async () => {
+    const base = ex('events.request').events[2];
+    const second = { ...base, eventId: '01JAC8A0B1C2D3E4F5G6H7J8KC', cursor: 59, snapshotText: 'again' };
+    const unknown = { eventId: '01JAC8A0B1C2D3E4F5G6H7J8KD', type: 'seo.check_run', at: '2026-10-15T12:02:00Z', cursor: 60, actor: { kind: 'system', source: 'plugin' }, data: {} };
+    const res = await send([base, second, unknown]);
+    const json = res.json();
+    expect(json.accepted).toEqual([base.eventId, unknown.eventId]);
+    expect(json.rejected).toEqual([
+      { eventId: second.eventId, code: 'TOO_MANY_SNAPSHOTS', retryable: true, message: 'At most one snapshotText per batch' },
+    ]);
+    expect(store.receipts.get(`${PROJECT_ID}:${unknown.eventId}`)).toBe('stored');
+  });
+
+  it('rejects an invalid event (VALIDATION, not retryable) and an apply failure (INTERNAL, retryable, receipt released)', async () => {
+    const [e1] = ex('events.request').events;
+    const bad = { ...e1, eventId: '01JAC8A0B1C2D3E4F5G6H7J8ZZ', cursor: 61, seq: undefined };
+    store.failApplyFor = 'pipeline_pm_approved';
+    const res = await send([e1, bad]);
+    const json = res.json();
+    expect(json.accepted).toEqual([]);
+    expect(json.rejected).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ eventId: e1.eventId, code: 'INTERNAL', retryable: true }),
+        expect.objectContaining({ eventId: bad.eventId, code: 'VALIDATION', retryable: false }),
+      ])
+    );
+    expect(store.receipts.has(`${PROJECT_ID}:${e1.eventId}`)).toBe(false);
+  });
+
+  it('bad signature → 401 BAD_SIGNATURE envelope', async () => {
+    const res = await send(ex('events.request').events, { secret: generateKey() });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual({ ok: false, error: { code: 'BAD_SIGNATURE', message: 'Signature mismatch', retryable: false } });
+    expect(store.applied).toHaveLength(0);
+  });
+
+  it('stale timestamp → 401 STALE_TIMESTAMP with serverTime', async () => {
+    const res = await send(ex('events.request').events, { timestamp: Math.floor(nowMs / 1000) - 301 });
+    expect(res.statusCode).toBe(401);
+    expect(res.json().error).toMatchObject({ code: 'STALE_TIMESTAMP', details: { serverTime: Math.floor(nowMs / 1000) } });
+  });
+
+  it('replayed nonce → 409 REPLAY (stored only after a valid signature)', async () => {
+    const nonce = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    const events = [ex('events.request').events[2]];
+    const forged = await send(events, { nonce, secret: generateKey() });
+    expect(forged.statusCode).toBe(401);
+    const first = await send(events, { nonce });
+    expect(first.statusCode).toBe(200);
+    const replay = await send(events, { nonce });
+    expect(replay.statusCode).toBe(409);
+    expect(replay.json().error.code).toBe('REPLAY');
+  });
+
+  it('unknown site → 401 UNKNOWN_SITE', async () => {
+    const res = await send(ex('events.request').events, { siteId: 'site_unknown00001' });
+    expect(res.statusCode).toBe(401);
+    expect(res.json().error.code).toBe('UNKNOWN_SITE');
+  });
+
+  it('a body over 1 MiB → 413 PAYLOAD_TOO_LARGE (not retryable) in the contract envelope', async () => {
+    const big = eventsBody([{ ...ex('events.request').events[2], snapshotText: 'x'.repeat(1024 * 1024) }]);
+    const res = await post(EV, big, { secret: keys.outbound, keyId: 1 });
+    expect(res.statusCode).toBe(413);
+    expect(res.json()).toMatchObject({ ok: false, error: { code: 'PAYLOAD_TOO_LARGE', retryable: false } });
+  });
+
+  it('a query string → 400 VALIDATION; body siteId mismatch → 400', async () => {
+    const body = eventsBody(ex('events.request').events);
+    const signed = signRequest({ secret: keys.outbound, keyId: 1, siteId: SITE, path: EV, body, timestamp: Math.floor(nowMs / 1000) });
+    const q = await app.inject({ method: 'POST', url: `${EV}?x=1`, payload: body, headers: signed });
+    expect(q.statusCode).toBe(400);
+    expect(q.json().error.code).toBe('VALIDATION');
+    const mismatch = await post(EV, JSON.stringify({ contract: 1, siteId: 'site_other00000', sentAt: 'x', events: [] }), {
+      secret: keys.outbound,
+      keyId: 1,
+    });
+    expect(mismatch.statusCode).toBe(400);
+  });
+});

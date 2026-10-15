@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/pipeline-rotate-links.response.json",
+  "title": "pipeline-rotate-links response",
+  "description": "Links are capability URLs; treat as secrets (never log).",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "reviewId": {
+      "$ref": "common.json#/$defs/id"
+    },
+    "pmPreviewUrl": {
+      "anyOf": [
+        {
+          "$ref": "common.json#/$defs/url"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "clientPreviewUrl": {
+      "anyOf": [
+        {
+          "$ref": "common.json#/$defs/url"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "expiresAt": {
+      "type": "object",
+      "properties": {
+        "pm": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "client": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "pm",
+        "client"
+      ]
+    },
+    "review": {
+      "$ref": "common.json#/$defs/review"
+    }
+  },
+  "required": [
+    "ok",
+    "reviewId",
+    "pmPreviewUrl",
+    "clientPreviewUrl",
+    "expiresAt"
+  ]
+}

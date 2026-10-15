@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/draft-upsert.response.json",
+  "title": "draft-upsert response",
+  "description": "warnings may include SLUG_MISMATCH {wanted, got} (Phase 1 cannot set a slug on create).",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "entryId": {
+      "$ref": "common.json#/$defs/id"
+    },
+    "entryNo": {
+      "$ref": "common.json#/$defs/surrogateNo"
+    },
+    "created": {
+      "type": "boolean"
+    },
+    "draftRevisionId": {
+      "$ref": "common.json#/$defs/id"
+    },
+    "rev": {
+      "$ref": "common.json#/$defs/id"
+    },
+    "path": {
+      "$ref": "common.json#/$defs/path"
+    },
+    "editUrl": {
+      "$ref": "common.json#/$defs/url"
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/warning"
+      }
+    },
+    "review": {
+      "anyOf": [
+        {
+          "$ref": "common.json#/$defs/review"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "ok",
+    "entryId",
+    "entryNo",
+    "created",
+    "draftRevisionId",
+    "rev",
+    "path",
+    "editUrl",
+    "warnings"
+  ]
+}

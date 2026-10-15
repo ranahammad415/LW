@@ -1,0 +1,205 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/draft-upsert.request.json",
+  "title": "draft-upsert",
+  "description": "Write a DRAFT (never publishes). Requires X-AOS-Idempotency-Key. A live entry gets a pending draft revision. Exactly one of layout / body / portableText.",
+  "type": "object",
+  "properties": {
+    "target": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "entryId": {
+              "$ref": "common.json#/$defs/id"
+            }
+          },
+          "required": [
+            "entryId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "collection": {
+              "$ref": "common.json#/$defs/collection"
+            },
+            "slug": {
+              "$ref": "common.json#/$defs/slug"
+            },
+            "parent": {
+              "anyOf": [
+                {
+                  "$ref": "common.json#/$defs/id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "collection",
+            "slug"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "layout": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/block"
+      },
+      "maxItems": 24
+    },
+    "body": {
+      "type": "object",
+      "properties": {
+        "markdown": {
+          "type": "string",
+          "maxLength": 200000
+        }
+      },
+      "required": [
+        "markdown"
+      ]
+    },
+    "portableText": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "excerpt": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 1000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "seo": {
+      "$ref": "common.json#/$defs/seo"
+    },
+    "fields": {
+      "type": "object",
+      "description": "Other collection fields by name (validated by the site)"
+    },
+    "seoExtras": {
+      "type": "object",
+      "description": "Opaque WP SEO extras (focus keyword, robots, OG) kept for the OS; not written by the bridge"
+    },
+    "baseRev": {
+      "anyOf": [
+        {
+          "$ref": "common.json#/$defs/id"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "actor": {
+      "$ref": "common.json#/$defs/osActor"
+    },
+    "reviewAfter": {
+      "type": "object",
+      "properties": {
+        "pm": {
+          "$ref": "common.json#/$defs/member"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 10000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "contentType": {
+          "$ref": "common.json#/$defs/contentType"
+        }
+      },
+      "required": [
+        "pm"
+      ]
+    }
+  },
+  "required": [
+    "target",
+    "title",
+    "actor"
+  ],
+  "oneOf": [
+    {
+      "required": [
+        "layout"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "body"
+            ]
+          },
+          {
+            "required": [
+              "portableText"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "required": [
+        "body"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "layout"
+            ]
+          },
+          {
+            "required": [
+              "portableText"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "required": [
+        "portableText"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "layout"
+            ]
+          },
+          {
+            "required": [
+              "body"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

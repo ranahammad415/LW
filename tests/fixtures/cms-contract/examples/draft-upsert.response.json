@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "entryId": "01JAD0P3Q4R5S6T7V8W9X0Y1Z2",
+  "entryNo": 131,
+  "created": true,
+  "draftRevisionId": "01JAD0P3Q4R5S6T7V8W9X0Y1Z3",
+  "rev": "01JAD0P3Q4R5S6T7V8W9X0Y1Z3",
+  "path": "/blog/how-to-winterize-a-hot-tub/",
+  "editUrl": "https://oasispoolspas.com/_emdash/admin/content/posts/01JAD0P3Q4R5S6T7V8W9X0Y1Z2",
+  "warnings": [
+    {
+      "code": "SLUG_MISMATCH",
+      "message": "Wanted winterize-hot-tub, got how-to-winterize-a-hot-tub; rename in the admin",
+      "wanted": "winterize-hot-tub",
+      "got": "how-to-winterize-a-hot-tub"
+    }
+  ],
+  "review": null
+}

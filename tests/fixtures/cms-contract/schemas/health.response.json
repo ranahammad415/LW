@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/health.response.json",
+  "title": "health response",
+  "description": "",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "paired": {
+      "type": "boolean"
+    },
+    "contract": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "siteId": {
+      "$ref": "common.json#/$defs/siteId"
+    },
+    "keyId": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "outbox": {
+      "type": "object",
+      "properties": {
+        "pending": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "pending",
+        "failed"
+      ]
+    },
+    "schedulerLastRunAgoMin": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "lastEventAt": {
+      "anyOf": [
+        {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "lastCursor": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "versions": {
+      "type": "object",
+      "properties": {
+        "plugin": {
+          "type": "string"
+        },
+        "emdash": {
+          "type": "string"
+        },
+        "astro": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "framework": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "plugin",
+        "emdash"
+      ]
+    }
+  },
+  "required": [
+    "ok",
+    "paired",
+    "contract",
+    "outbox",
+    "lastCursor",
+    "versions"
+  ]
+}

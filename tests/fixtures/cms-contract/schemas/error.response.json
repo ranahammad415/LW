@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/error.response.json",
+  "title": "Error response",
+  "description": "Every non-2xx response, both directions.",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": false
+    },
+    "error": {
+      "$ref": "common.json#/$defs/error"
+    }
+  },
+  "required": [
+    "ok",
+    "error"
+  ]
+}

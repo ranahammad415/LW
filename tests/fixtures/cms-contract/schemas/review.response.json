@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/review.response.json",
+  "title": "Review response",
+  "description": "Response of pipeline-get/submit/review/send-to-client/cancel/change-type.",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "review": {
+      "$ref": "common.json#/$defs/review"
+    }
+  },
+  "required": [
+    "ok",
+    "review"
+  ]
+}

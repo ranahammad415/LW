@@ -1,0 +1,114 @@
+{
+  "ok": true,
+  "items": [
+    {
+      "reviewId": "01JAC7Q2HV5M8N3P4R6S9T0W1X",
+      "reviewNo": 42,
+      "entryId": "01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+      "entryNo": 118,
+      "collection": "pages",
+      "slug": "hot-tub-repair",
+      "path": "/spa-services/hot-tub-repair/",
+      "title": "Hot Tub Repair for Most Brands",
+      "status": "pending_client_review",
+      "statusLabel": "Pending Client Review",
+      "stage": "review",
+      "readyToPublish": false,
+      "entryStatus": "published",
+      "updateMode": true,
+      "parentEntryId": "01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+      "round": 1,
+      "seq": 4,
+      "rev": 4,
+      "contentType": "service_page",
+      "submittedBy": {
+        "memberId": "c9f0f895-fb98-4b91-a5b3-0e1d2c3b4a59",
+        "name": "Sam Worker"
+      },
+      "pmAssigned": {
+        "memberId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90",
+        "name": "Jane PM"
+      },
+      "pmDecision": "approved",
+      "pmComment": "Good to go",
+      "pmReviewedAt": "2026-10-15T11:59:58Z",
+      "clientDecision": null,
+      "clientComment": null,
+      "clientReviewedAt": null,
+      "workerNote": "Refreshed FAQ",
+      "draftRevisionId": "01JAC6ZK3D4F5G6H7J8K9M0N1P",
+      "liveRevisionId": "01JA9Y1B2C3D4E5F6G7H8J9K0M",
+      "pmPreviewUrl": "https://oasispoolspas.com/_emdash/api/plugins/agency-os-bridge/review?t=3f1c9e7a5b2d4c6e8f0a1b3c5d7e9f1a3b5c7d9e1f2a4b6c8d0e2f4a6b8c0d2e",
+      "clientPreviewUrl": "https://oasispoolspas.com/_emdash/api/plugins/agency-os-bridge/review?t=a7c9e1f3b5d7092a4c6e8f1b3d5f7a9c1e3b5d7f9a2c4e6b8d0f1a3c5e7b9d1f",
+      "linksExpireAt": {
+        "pm": "2026-10-22T11:00:00Z",
+        "client": "2026-10-29T12:00:00Z"
+      },
+      "editUrl": "https://oasispoolspas.com/_emdash/admin/content/pages/01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+      "seoGate": null,
+      "publishedAt": null,
+      "scheduledAt": null,
+      "cancelledReason": null,
+      "createdAt": "2026-10-15T11:00:00Z",
+      "updatedAt": "2026-10-15T12:00:00Z",
+      "history": [
+        {
+          "seq": 1,
+          "type": "pipeline_submitted",
+          "at": "2026-10-15T11:00:00Z",
+          "actor": {
+            "kind": "human",
+            "id": "usr_5",
+            "name": "Sam Worker",
+            "role": "contributor",
+            "source": "admin-panel"
+          },
+          "status": "pending_pm_review",
+          "round": 1,
+          "comment": "Refreshed FAQ"
+        },
+        {
+          "seq": 2,
+          "type": "pipeline_draft_updated",
+          "at": "2026-10-15T11:58:02Z",
+          "actor": {
+            "kind": "agent",
+            "id": "usr_agent",
+            "source": "mcp"
+          },
+          "status": "pending_pm_review",
+          "round": 1,
+          "comment": null
+        },
+        {
+          "seq": 3,
+          "type": "pipeline_pm_approved",
+          "at": "2026-10-15T11:59:58Z",
+          "actor": {
+            "kind": "human",
+            "name": "Jane PM",
+            "osUserId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90",
+            "role": "PM",
+            "source": "os"
+          },
+          "status": "pm_approved",
+          "round": 1,
+          "comment": "Good to go"
+        },
+        {
+          "seq": 4,
+          "type": "pipeline_sent_to_client",
+          "at": "2026-10-15T12:00:00Z",
+          "actor": {
+            "kind": "system",
+            "source": "plugin"
+          },
+          "status": "pending_client_review",
+          "round": 1,
+          "comment": null
+        }
+      ]
+    }
+  ],
+  "next": null
+}

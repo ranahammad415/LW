@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/pipeline-review.request.json",
+  "title": "pipeline-review (PM decision)",
+  "description": "pending_pm_review -> pm_approved (then automatically pending_client_review, two events) | changes_requested_by_pm. Also PM 'approve for client' from changes_requested_by_client. override (OWNER only) bypasses the map and is audited.",
+  "type": "object",
+  "properties": {
+    "reviewId": {
+      "$ref": "common.json#/$defs/id"
+    },
+    "decision": {
+      "$ref": "common.json#/$defs/pmDecision"
+    },
+    "comment": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 10000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "actor": {
+      "$ref": "common.json#/$defs/osActor"
+    },
+    "override": {
+      "type": "boolean"
+    },
+    "expectedRev": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "required": [
+    "reviewId",
+    "decision",
+    "actor"
+  ]
+}

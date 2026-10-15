@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/media-import.request.json",
+  "title": "media-import (reserved, Phase 2)",
+  "description": "",
+  "type": "object",
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "$ref": "common.json#/$defs/url"
+          },
+          "alt": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "filename": {
+            "type": "string",
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "url",
+          "alt"
+        ]
+      },
+      "minItems": 1,
+      "maxItems": 50
+    },
+    "dedupe": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "items"
+  ]
+}

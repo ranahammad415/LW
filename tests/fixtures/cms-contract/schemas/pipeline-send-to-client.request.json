@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/pipeline-send-to-client.request.json",
+  "title": "pipeline-send-to-client",
+  "description": "pm_approved -> pending_client_review; mints the client link.",
+  "type": "object",
+  "properties": {
+    "reviewId": {
+      "$ref": "common.json#/$defs/id"
+    },
+    "note": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 10000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "actor": {
+      "$ref": "common.json#/$defs/osActor"
+    },
+    "expectedRev": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "required": [
+    "reviewId",
+    "actor"
+  ]
+}

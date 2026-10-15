@@ -1,0 +1,16 @@
+{
+  "ok": true,
+  "accepted": [
+    "01JAC8A0B1C2D3E4F5G6H7J8K9"
+  ],
+  "duplicate": [],
+  "rejected": [
+    {
+      "eventId": "01JAC8A0B1C2D3E4F5G6H7J8KB",
+      "code": "TOO_MANY_SNAPSHOTS",
+      "retryable": true,
+      "message": "At most one snapshotText per batch"
+    }
+  ],
+  "lastCursor": 58
+}

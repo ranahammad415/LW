@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/pipeline-publish.request.json",
+  "title": "pipeline-publish (reserved, Phase 2, allowOsPublish)",
+  "description": "v1 sites always answer 403 PUBLISH_NOT_ALLOWED: approval marks ready-to-publish; a human publishes in EmDash.",
+  "type": "object",
+  "properties": {
+    "reviewId": {
+      "$ref": "common.json#/$defs/id"
+    },
+    "actor": {
+      "$ref": "common.json#/$defs/osActor"
+    },
+    "override": {
+      "type": "boolean"
+    },
+    "expectedRev": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "required": [
+    "reviewId",
+    "actor"
+  ]
+}

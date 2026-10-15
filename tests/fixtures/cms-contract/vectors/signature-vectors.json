@@ -1,0 +1,191 @@
+{
+  "description": "Contract v1 HMAC-SHA256 test vectors. HMAC key = UTF-8 bytes of the secret string. Bodies are the exact UTF-8 strings below.",
+  "keys": {
+    "inbound1": "aosk1_fp_X5pa6uAaNxcPnJsvZkCaJQv4tX5T0j3UoZzndQLE",
+    "outbound1": "aosk1_O9FJkHcJu47W4g1qqob6gmxImoTv7uIB8dn3aHnBS3g",
+    "inbound2": "aosk1_4BYxe-cphW-kcpUgR73l4hoCCzw9nGMa8fLVxE-teP4",
+    "pairingCode": "aos1.site_9f3c2a7b41d0.MVli7oj-bdIY7iRz-KvxOf6VEAe6yuqCNb1G6Ggmey0",
+    "pairingSigningKey": "1ff8b9ba711d160c4d08a55092af6111dd04ac462c605716f918baf17b51a8b8",
+    "pairingVerifier": "ceb52cc76fa86703c70f51a9bfd4e6734374d21def2eee9c6cfb4a6b0868b392",
+    "siteId": "site_9f3c2a7b41d0"
+  },
+  "requests": [
+    {
+      "name": "os-to-site pipeline-review",
+      "direction": "os->site",
+      "secret": "inbound key 1",
+      "headers": {
+        "x-aos-contract": "1",
+        "x-aos-site": "site_9f3c2a7b41d0",
+        "x-aos-key-id": "1",
+        "x-aos-timestamp": "1792065600",
+        "x-aos-nonce": "5f0c8a2e-3b1d-4e6f-9a7b-1c2d3e4f5a6b",
+        "x-aos-idempotency-key": "0b8e7d6c-5a4f-4e3d-8c2b-1a0f9e8d7c6b",
+        "x-aos-signature": "v1=300d13e412fb12a822cd47401a948f94716097c3f7690a9d2007b3585e623bc7"
+      },
+      "method": "POST",
+      "path": "/_emdash/api/plugins/agency-os-bridge/pipeline-review",
+      "body": "{\"reviewId\":\"01JAC7Q2HV5M8N3P4R6S9T0W1X\",\"decision\":\"approved\",\"comment\":\"Good to go\",\"actor\":{\"kind\":\"human\",\"osUserId\":\"8f14e45f-ceea-467a-9575-5f3c1b2a7d90\",\"name\":\"Jane PM\",\"role\":\"PM\"}}",
+      "bodySha256": "77784f050d1cea505c404ac68df95b35fac7c7134a946e7f3f4f32670345d46e",
+      "canonical": "v1\nPOST\n/_emdash/api/plugins/agency-os-bridge/pipeline-review\n1792065600\n5f0c8a2e-3b1d-4e6f-9a7b-1c2d3e4f5a6b\n77784f050d1cea505c404ac68df95b35fac7c7134a946e7f3f4f32670345d46e"
+    },
+    {
+      "name": "site-to-os events, non-ASCII body (Café)",
+      "direction": "site->os",
+      "secret": "outbound key 1",
+      "headers": {
+        "x-aos-contract": "1",
+        "x-aos-site": "site_9f3c2a7b41d0",
+        "x-aos-key-id": "1",
+        "x-aos-timestamp": "1792065601",
+        "x-aos-nonce": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+        "x-aos-signature": "v1=5e84546d06af7b07cf835640da185bd5bc2ff5050543eaddf7d171f54e1baa26"
+      },
+      "method": "POST",
+      "path": "/api/webhooks/emdash/events",
+      "body": "{\"contract\":1,\"siteId\":\"site_9f3c2a7b41d0\",\"sentAt\":\"2026-10-15T12:00:00Z\",\"events\":[{\"eventId\":\"01JAC8A0B1C2D3E4F5G6H7J8KB\",\"type\":\"content.saved\",\"at\":\"2026-10-15T12:00:00Z\",\"cursor\":1,\"actor\":{\"kind\":\"human\",\"source\":\"api\"},\"entry\":{\"title\":\"Café hot tubs\",\"path\":\"/café/\"}}]}",
+      "bodySha256": "05c7a0f2eff28a38f12f6103145e270243969f22db96c73d815a4f42c561a8ea",
+      "canonical": "v1\nPOST\n/api/webhooks/emdash/events\n1792065601\na1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d\n05c7a0f2eff28a38f12f6103145e270243969f22db96c73d815a4f42c561a8ea"
+    },
+    {
+      "name": "same events body, trailing slash path (different signature: no normalisation)",
+      "direction": "site->os",
+      "secret": "outbound key 1",
+      "headers": {
+        "x-aos-contract": "1",
+        "x-aos-site": "site_9f3c2a7b41d0",
+        "x-aos-key-id": "1",
+        "x-aos-timestamp": "1792065601",
+        "x-aos-nonce": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+        "x-aos-signature": "v1=5d92dcb6cd6d13fa1cba8b9f468b15071c5fbbeebae95d5ee524329199233182"
+      },
+      "method": "POST",
+      "path": "/api/webhooks/emdash/events/",
+      "body": "{\"contract\":1,\"siteId\":\"site_9f3c2a7b41d0\",\"sentAt\":\"2026-10-15T12:00:00Z\",\"events\":[{\"eventId\":\"01JAC8A0B1C2D3E4F5G6H7J8KB\",\"type\":\"content.saved\",\"at\":\"2026-10-15T12:00:00Z\",\"cursor\":1,\"actor\":{\"kind\":\"human\",\"source\":\"api\"},\"entry\":{\"title\":\"Café hot tubs\",\"path\":\"/café/\"}}]}",
+      "bodySha256": "05c7a0f2eff28a38f12f6103145e270243969f22db96c73d815a4f42c561a8ea",
+      "canonical": "v1\nPOST\n/api/webhooks/emdash/events/\n1792065601\na1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d\n05c7a0f2eff28a38f12f6103145e270243969f22db96c73d815a4f42c561a8ea"
+    },
+    {
+      "name": "empty body (sha256 of the empty string)",
+      "direction": "os->site",
+      "secret": "inbound key 1",
+      "headers": {
+        "x-aos-contract": "1",
+        "x-aos-site": "site_9f3c2a7b41d0",
+        "x-aos-key-id": "1",
+        "x-aos-timestamp": "1792065602",
+        "x-aos-nonce": "0f1e2d3c-4b5a-4968-8776-655443322110",
+        "x-aos-signature": "v1=e3b07574b20a10cf067324a5ebbe4b3708a75da44283f3602ebe8a83e13e52d8"
+      },
+      "method": "POST",
+      "path": "/_emdash/api/plugins/agency-os-bridge/health",
+      "body": "",
+      "bodySha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "canonical": "v1\nPOST\n/_emdash/api/plugins/agency-os-bridge/health\n1792065602\n0f1e2d3c-4b5a-4968-8776-655443322110\ne3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "literal {} body",
+      "direction": "os->site",
+      "secret": "inbound key 1",
+      "headers": {
+        "x-aos-contract": "1",
+        "x-aos-site": "site_9f3c2a7b41d0",
+        "x-aos-key-id": "1",
+        "x-aos-timestamp": "1792065603",
+        "x-aos-nonce": "11111111-2222-4333-8444-555555555555",
+        "x-aos-signature": "v1=91d84bde5f61c3c38def8f5dce10d6ea40ad0838fc895dd89ffbd5877dd3ff94"
+      },
+      "method": "POST",
+      "path": "/_emdash/api/plugins/agency-os-bridge/site-info",
+      "body": "{}",
+      "bodySha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "canonical": "v1\nPOST\n/_emdash/api/plugins/agency-os-bridge/site-info\n1792065603\n11111111-2222-4333-8444-555555555555\n44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "name": "percent-encoded prefix kept as sent",
+      "direction": "os->site",
+      "secret": "inbound key 1",
+      "headers": {
+        "x-aos-contract": "1",
+        "x-aos-site": "site_9f3c2a7b41d0",
+        "x-aos-key-id": "1",
+        "x-aos-timestamp": "1792065603",
+        "x-aos-nonce": "11111111-2222-4333-8444-555555555555",
+        "x-aos-signature": "v1=7a84ec7d3920f6fc4f5921ba7d2dd09a8cb704e5b58a1a8727f469d992c7cf32"
+      },
+      "method": "POST",
+      "path": "/staging%20site/_emdash/api/plugins/agency-os-bridge/site-info",
+      "body": "{}",
+      "bodySha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "canonical": "v1\nPOST\n/staging%20site/_emdash/api/plugins/agency-os-bridge/site-info\n1792065603\n11111111-2222-4333-8444-555555555555\n44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "name": "rotated inbound key 2 (prev key 1 still valid 24 h)",
+      "direction": "os->site",
+      "secret": "inbound key 2",
+      "headers": {
+        "x-aos-contract": "1",
+        "x-aos-site": "site_9f3c2a7b41d0",
+        "x-aos-key-id": "2",
+        "x-aos-timestamp": "1792065604",
+        "x-aos-nonce": "22222222-3333-4444-8555-666666666666",
+        "x-aos-signature": "v1=0f8dc849435528ee0ab48f6a41350075c35dc224ce332f66247a787927477baf"
+      },
+      "method": "POST",
+      "path": "/_emdash/api/plugins/agency-os-bridge/site-info",
+      "body": "{}",
+      "bodySha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "canonical": "v1\nPOST\n/_emdash/api/plugins/agency-os-bridge/site-info\n1792065604\n22222222-3333-4444-8555-666666666666\n44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "name": "pairing handshake signed with pairingSigningKey(code)",
+      "direction": "site->os",
+      "secret": "pairing signing key",
+      "headers": {
+        "x-aos-contract": "1",
+        "x-aos-site": "site_9f3c2a7b41d0",
+        "x-aos-key-id": "pairing",
+        "x-aos-timestamp": "1792065605",
+        "x-aos-nonce": "33333333-4444-4555-8666-777777777777",
+        "x-aos-signature": "v1=a07a12c2412bf2325741ebe4258d69af491c1b8b7b93ed5f934fb7d058b357d3"
+      },
+      "method": "POST",
+      "path": "/api/webhooks/emdash/handshake",
+      "body": "{\"mode\":\"pair\",\"contract\":1,\"supportedContracts\":[1],\"siteId\":\"site_9f3c2a7b41d0\"}",
+      "bodySha256": "8735750f74b3746efdb1d7cf998e0d6103f0ac26f502c0679e782f028270076a",
+      "canonical": "v1\nPOST\n/api/webhooks/emdash/handshake\n1792065605\n33333333-4444-4555-8666-777777777777\n8735750f74b3746efdb1d7cf998e0d6103f0ac26f502c0679e782f028270076a"
+    }
+  ],
+  "responses": [
+    {
+      "name": "pairing handshake response signed with pairingSigningKey(code)",
+      "secret": "pairing signing key",
+      "status": 200,
+      "requestPath": "/api/webhooks/emdash/handshake",
+      "requestNonce": "33333333-4444-4555-8666-777777777777",
+      "body": "{\"ok\":true,\"contract\":1,\"siteId\":\"site_9f3c2a7b41d0\",\"keys\":{\"keyId\":1,\"inbound\":\"aosk1_fp_X5pa6uAaNxcPnJsvZkCaJQv4tX5T0j3UoZzndQLE\",\"outbound\":\"aosk1_O9FJkHcJu47W4g1qqob6gmxImoTv7uIB8dn3aHnBS3g\"}}",
+      "bodySha256": "6f9f1294a89879a73117e47e0a62dc14919778645a1c3692e1b199a5dabbf439",
+      "canonical": "v1-response\n200\n/api/webhooks/emdash/handshake\n33333333-4444-4555-8666-777777777777\n1792065605\n6f9f1294a89879a73117e47e0a62dc14919778645a1c3692e1b199a5dabbf439",
+      "headers": {
+        "x-aos-response-key-id": "pairing",
+        "x-aos-response-timestamp": "1792065605",
+        "x-aos-response-signature": "v1=e0a273133f746e5e72d90a08a8e8af2aaf10acda845dc825999c89bf06d08725"
+      }
+    },
+    {
+      "name": "heartbeat response with rotate, signed with current inbound key 1",
+      "secret": "inbound key 1",
+      "status": 200,
+      "requestPath": "/api/webhooks/emdash/handshake",
+      "requestNonce": "44444444-5555-4666-8777-888888888888",
+      "body": "{\"ok\":true,\"contract\":1,\"siteId\":\"site_9f3c2a7b41d0\",\"rotate\":{\"keyId\":2,\"inbound\":\"aosk1_4BYxe-cphW-kcpUgR73l4hoCCzw9nGMa8fLVxE-teP4\",\"outbound\":\"aosk1_NFpp9fGaSJtQtAotaEhnbchF-O3BDYj7k6HmhP2O3-4\"}}",
+      "bodySha256": "fe2eb21a62aa5bfbc0d709fa5865e289fe7e87350290a033905317a91631a64c",
+      "canonical": "v1-response\n200\n/api/webhooks/emdash/handshake\n44444444-5555-4666-8777-888888888888\n1792065660\nfe2eb21a62aa5bfbc0d709fa5865e289fe7e87350290a033905317a91631a64c",
+      "headers": {
+        "x-aos-response-key-id": "1",
+        "x-aos-response-timestamp": "1792065660",
+        "x-aos-response-signature": "v1=8f0db6d3903300d7ccd92afe373d9d7f1ad902ea6ffa980042733605a22f0eba"
+      }
+    }
+  ]
+}

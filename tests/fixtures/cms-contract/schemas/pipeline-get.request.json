@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/pipeline-get.request.json",
+  "title": "pipeline-get",
+  "description": "By reviewId, or the active (else latest) review of an entry.",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "reviewId": {
+          "$ref": "common.json#/$defs/id"
+        }
+      },
+      "required": [
+        "reviewId"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "entryId": {
+          "$ref": "common.json#/$defs/id"
+        }
+      },
+      "required": [
+        "entryId"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

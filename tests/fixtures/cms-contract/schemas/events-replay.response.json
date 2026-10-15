@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/events-replay.response.json",
+  "title": "events-replay response",
+  "description": "",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/event"
+      }
+    },
+    "lastCursor": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "more": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "ok",
+    "events",
+    "lastCursor",
+    "more"
+  ]
+}

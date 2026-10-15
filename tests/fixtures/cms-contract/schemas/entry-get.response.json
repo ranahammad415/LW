@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/entry-get.response.json",
+  "title": "entry-get response",
+  "description": "",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "entry": {
+      "allOf": [
+        {
+          "$ref": "common.json#/$defs/entry"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "variant": {
+          "enum": [
+            "draft",
+            "live"
+          ]
+        },
+        "h1": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 500
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "plainText": {
+          "type": "string",
+          "maxLength": 100000
+        },
+        "links": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "href": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "internal": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "href"
+            ]
+          }
+        },
+        "images": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "src": {
+                "type": "string"
+              },
+              "alt": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "src"
+            ]
+          }
+        },
+        "blocks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          }
+        }
+      },
+      "required": [
+        "variant",
+        "plainText",
+        "blocks"
+      ]
+    }
+  },
+  "required": [
+    "ok",
+    "entry"
+  ]
+}

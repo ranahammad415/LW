@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/handshake.response.json",
+  "title": "Handshake response (OS -> site)",
+  "description": "Signed response (X-AOS-Response-* headers). keys only on mode=pair; rotate only when the OS has staged new keys.",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "contract": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "siteId": {
+      "$ref": "common.json#/$defs/siteId"
+    },
+    "projectId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "projectName": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "serverTime": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "unix seconds, lets the site detect clock skew"
+    },
+    "os": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string"
+        },
+        "capabilities": {
+          "type": "object",
+          "properties": {
+            "clientReviewFromOs": {
+              "type": "boolean"
+            },
+            "seoProfiles": {
+              "type": "boolean"
+            }
+          },
+          "required": []
+        }
+      },
+      "required": [
+        "version"
+      ]
+    },
+    "pms": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/member"
+      }
+    },
+    "keys": {
+      "type": "object",
+      "properties": {
+        "keyId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "inbound": {
+          "type": "string",
+          "pattern": "^aosk1_[A-Za-z0-9_-]{43}$"
+        },
+        "outbound": {
+          "type": "string",
+          "pattern": "^aosk1_[A-Za-z0-9_-]{43}$"
+        }
+      },
+      "required": [
+        "keyId",
+        "inbound",
+        "outbound"
+      ]
+    },
+    "rotate": {
+      "type": "object",
+      "properties": {
+        "keyId": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "inbound": {
+          "type": "string",
+          "pattern": "^aosk1_[A-Za-z0-9_-]{43}$"
+        },
+        "outbound": {
+          "type": "string",
+          "pattern": "^aosk1_[A-Za-z0-9_-]{43}$"
+        }
+      },
+      "required": [
+        "keyId",
+        "inbound",
+        "outbound"
+      ],
+      "description": "New keys; the response is signed with the current inbound key and travels over TLS only. Previous keys stay valid 24 h."
+    }
+  },
+  "required": [
+    "ok",
+    "contract",
+    "siteId",
+    "projectId",
+    "serverTime",
+    "os",
+    "pms"
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/not-implemented.response.json",
+  "title": "Reserved route on a v1 site",
+  "description": "Phase 2 routes answer 501 with this body.",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": false
+    },
+    "error": {
+      "allOf": [
+        {
+          "$ref": "common.json#/$defs/error"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "code": {
+          "const": "NOT_IMPLEMENTED"
+        }
+      }
+    }
+  },
+  "required": [
+    "ok",
+    "error"
+  ]
+}

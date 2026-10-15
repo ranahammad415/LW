@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/site-info.response.json",
+  "title": "site-info response",
+  "description": "Handshake body without keys, plus enabled blocks, installed plugins and counts.",
+  "allOf": [
+    {
+      "$ref": "common.json#/$defs/siteInfo"
+    }
+  ],
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "framework": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "blocks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$"
+          }
+        }
+      },
+      "required": [
+        "blocks"
+      ]
+    },
+    "plugins": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ]
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "draft": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "published": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "scheduled": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": []
+      }
+    }
+  },
+  "required": [
+    "ok",
+    "framework",
+    "plugins",
+    "counts"
+  ]
+}

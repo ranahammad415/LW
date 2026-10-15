@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/profile-upsert.request.json",
+  "title": "profile-upsert (reserved, Phase 2)",
+  "description": "SEO page profile push (plan §4.4.7). profile uses emdash-seo snake_case field names; contract applied only while unlocked.",
+  "type": "object",
+  "properties": {
+    "actor": {
+      "$ref": "common.json#/$defs/osActor"
+    },
+    "profile": {
+      "type": "object",
+      "properties": {
+        "page_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}$"
+        },
+        "target": {
+          "type": "string"
+        },
+        "collection": {
+          "$ref": "common.json#/$defs/collection"
+        },
+        "path": {
+          "$ref": "common.json#/$defs/path"
+        }
+      },
+      "required": [
+        "page_id"
+      ]
+    },
+    "brief": {
+      "type": "object",
+      "properties": {
+        "markdown": {
+          "type": "string",
+          "maxLength": 65536
+        },
+        "front_matter": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "markdown"
+      ]
+    }
+  },
+  "required": [
+    "actor",
+    "profile"
+  ]
+}

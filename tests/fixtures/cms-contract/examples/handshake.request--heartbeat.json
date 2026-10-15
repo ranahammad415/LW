@@ -1,0 +1,71 @@
+{
+  "mode": "heartbeat",
+  "contract": 1,
+  "supportedContracts": [
+    1
+  ],
+  "siteId": "site_9f3c2a7b41d0",
+  "siteUrl": "https://oasispoolspas.com",
+  "siteName": "Oasis Pool and Spa",
+  "plugin": {
+    "id": "agency-os-bridge",
+    "version": "1.0.0"
+  },
+  "platform": {
+    "emdash": "1.2.0",
+    "astro": "7.3.8",
+    "framework": "1.0.0",
+    "node": "24.19.0"
+  },
+  "collections": [
+    {
+      "name": "pages",
+      "hasSeo": true,
+      "routed": true
+    },
+    {
+      "name": "posts",
+      "hasSeo": true,
+      "routed": true
+    }
+  ],
+  "contentTypes": [
+    "landing_page",
+    "pillar_page",
+    "cluster_page",
+    "article",
+    "service_page",
+    "location_page",
+    "home_page",
+    "product_page"
+  ],
+  "capabilities": {
+    "pushDrafts": true,
+    "createEntries": true,
+    "mediaImport": false,
+    "seoPanel": true,
+    "seoProfiles": false,
+    "publishFromOs": false,
+    "scheduleFromOs": false,
+    "previewLinks": true,
+    "rotateLinks": true,
+    "clientReviewFromOs": false,
+    "nativeDraftRevisions": true,
+    "autoLogin": false,
+    "leads": false,
+    "timeline": true
+  },
+  "health": {
+    "schedulerLastRunAgoMin": 3,
+    "outbox": {
+      "pending": 0,
+      "failed": 0,
+      "oldestPendingAt": null
+    },
+    "reviews": {
+      "active": 4
+    },
+    "lastEventAt": "2026-10-15T12:00:00Z",
+    "lastCursor": 57
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/pipeline-list.request.json",
+  "title": "pipeline-list",
+  "description": "",
+  "type": "object",
+  "properties": {
+    "status": {
+      "anyOf": [
+        {
+          "$ref": "common.json#/$defs/reviewStatus"
+        },
+        {
+          "const": "active"
+        },
+        {
+          "const": "any"
+        }
+      ]
+    },
+    "closedWithinDays": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Without a status filter, cancelled/published reviews older than this are excluded (default 30)"
+    },
+    "cursor": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 512
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100
+    }
+  },
+  "required": []
+}

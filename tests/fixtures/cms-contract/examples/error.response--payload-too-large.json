@@ -1,0 +1,8 @@
+{
+  "ok": false,
+  "error": {
+    "code": "PAYLOAD_TOO_LARGE",
+    "message": "Event batch exceeds 1048576 bytes; split the batch",
+    "retryable": false
+  }
+}

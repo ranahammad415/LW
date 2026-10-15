@@ -1,0 +1,26 @@
+{
+  "ok": true,
+  "contract": 1,
+  "siteId": "site_9f3c2a7b41d0",
+  "projectId": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+  "projectName": "Oasis",
+  "serverTime": 1792152000,
+  "os": {
+    "version": "2026.10.15",
+    "capabilities": {
+      "clientReviewFromOs": false,
+      "seoProfiles": false
+    }
+  },
+  "pms": [
+    {
+      "memberId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90",
+      "name": "Jane PM"
+    }
+  ],
+  "rotate": {
+    "keyId": 2,
+    "inbound": "aosk1_nhndr7r5XtNWMQ2BhoZ2EW7iJ3qNn1E066pDPzr8qY8",
+    "outbound": "aosk1_GDQ4q-wSeXXmi1409VYnN1mxOGhkrxuRJYDWtE0VhMw"
+  }
+}

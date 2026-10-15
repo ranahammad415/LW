@@ -1,0 +1,12 @@
+{
+  "ok": false,
+  "error": {
+    "code": "INVALID_TRANSITION",
+    "message": "Cannot move review from pending_pm_review to pending_client_review",
+    "retryable": false,
+    "details": {
+      "from": "pending_pm_review",
+      "to": "pending_client_review"
+    }
+  }
+}

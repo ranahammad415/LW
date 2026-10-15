@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/health.request.json",
+  "title": "health",
+  "description": "No parameters.",
+  "type": "object",
+  "properties": {},
+  "required": []
+}

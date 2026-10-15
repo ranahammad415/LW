@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/handshake.request.json",
+  "title": "Handshake (site -> OS)",
+  "description": "POST /api/webhooks/emdash/handshake. mode=pair is signed with the pairing code (X-AOS-Key-Id: pairing); mode=heartbeat is signed with the outbound key.",
+  "allOf": [
+    {
+      "$ref": "common.json#/$defs/siteInfo"
+    }
+  ],
+  "type": "object",
+  "properties": {
+    "mode": {
+      "enum": [
+        "pair",
+        "heartbeat"
+      ]
+    }
+  },
+  "required": [
+    "mode"
+  ]
+}

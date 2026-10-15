@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/pipeline-change-type.request.json",
+  "title": "pipeline-change-type",
+  "description": "Allowed in every active status.",
+  "type": "object",
+  "properties": {
+    "reviewId": {
+      "$ref": "common.json#/$defs/id"
+    },
+    "contentType": {
+      "$ref": "common.json#/$defs/contentType"
+    },
+    "actor": {
+      "$ref": "common.json#/$defs/osActor"
+    }
+  },
+  "required": [
+    "reviewId",
+    "contentType",
+    "actor"
+  ]
+}

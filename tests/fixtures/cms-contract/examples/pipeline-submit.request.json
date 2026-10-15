@@ -1,0 +1,19 @@
+{
+  "entryId": "01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+  "pm": {
+    "memberId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90",
+    "name": "Jane PM"
+  },
+  "submittedBy": {
+    "memberId": "c9f0f895-fb98-4b91-a5b3-0e1d2c3b4a59",
+    "name": "Sam Worker"
+  },
+  "note": "Refreshed FAQ",
+  "contentType": "service_page",
+  "actor": {
+    "kind": "human",
+    "osUserId": "c9f0f895-fb98-4b91-a5b3-0e1d2c3b4a59",
+    "name": "Sam Worker",
+    "role": "TEAM_MEMBER"
+  }
+}

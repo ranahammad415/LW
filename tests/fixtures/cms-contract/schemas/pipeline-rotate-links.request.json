@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/pipeline-rotate-links.request.json",
+  "title": "pipeline-rotate-links (issue preview links)",
+  "description": "Issues fresh review links for the given roles (default both that apply to the status) and revokes older ones.",
+  "type": "object",
+  "properties": {
+    "reviewId": {
+      "$ref": "common.json#/$defs/id"
+    },
+    "roles": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "pm",
+          "client"
+        ]
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "actor": {
+      "$ref": "common.json#/$defs/osActor"
+    }
+  },
+  "required": [
+    "reviewId",
+    "actor"
+  ]
+}

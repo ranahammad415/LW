@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/entry-get.request.json",
+  "title": "entry-get",
+  "description": "",
+  "type": "object",
+  "properties": {
+    "entryId": {
+      "$ref": "common.json#/$defs/id"
+    },
+    "variant": {
+      "enum": [
+        "draft",
+        "live"
+      ]
+    }
+  },
+  "required": [
+    "entryId"
+  ]
+}

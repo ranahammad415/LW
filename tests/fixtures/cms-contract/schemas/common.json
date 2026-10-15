@@ -1,0 +1,1246 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/common.json",
+  "title": "Shared definitions",
+  "description": "Types shared by every v1 message.",
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,64}$",
+      "description": "Opaque id (EmDash ULID, review ULID, eventId ULID)"
+    },
+    "siteId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{8,64}$"
+    },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+      "description": "Agency OS User.id"
+    },
+    "surrogateNo": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Surrogate integer issued by the plugin (D3): unique per site, starts at 1, never reused; reviewNo is stable across review rounds. Maps to WpPage.wpPostId / WpContentReview.wpPipelineId"
+    },
+    "dateTime": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "url": {
+      "type": "string",
+      "format": "uri",
+      "maxLength": 2048
+    },
+    "path": {
+      "type": "string",
+      "pattern": "^/",
+      "maxLength": 2048
+    },
+    "collection": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]{0,63}$"
+    },
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "maxLength": 200
+    },
+    "reviewStatus": {
+      "enum": [
+        "pending_pm_review",
+        "pm_approved",
+        "changes_requested_by_pm",
+        "pending_client_review",
+        "changes_requested_by_client",
+        "client_approved",
+        "published",
+        "scheduled",
+        "cancelled"
+      ]
+    },
+    "stage": {
+      "enum": [
+        "draft",
+        "review",
+        "ready",
+        "published",
+        "scheduled"
+      ]
+    },
+    "entryStatus": {
+      "enum": [
+        "draft",
+        "published",
+        "scheduled"
+      ]
+    },
+    "contentType": {
+      "enum": [
+        "landing_page",
+        "pillar_page",
+        "cluster_page",
+        "article",
+        "service_page",
+        "location_page",
+        "home_page",
+        "product_page"
+      ]
+    },
+    "osRole": {
+      "enum": [
+        "OWNER",
+        "PM",
+        "TEAM_MEMBER",
+        "CONTRACTOR",
+        "CLIENT"
+      ]
+    },
+    "pmDecision": {
+      "enum": [
+        "approved",
+        "changes_requested"
+      ]
+    },
+    "clientDecision": {
+      "enum": [
+        "approved",
+        "changes_requested",
+        "changes_publish"
+      ]
+    },
+    "eventType": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)?$",
+      "description": "Known types are listed in contract.md §6.2. Unknown types MUST be stored as plain events, not rejected."
+    },
+    "member": {
+      "type": "object",
+      "properties": {
+        "memberId": {
+          "$ref": "common.json#/$defs/uuid"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "memberId",
+        "name"
+      ],
+      "description": "An Agency OS user (memberId = OS User.id UUID)"
+    },
+    "osActor": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "human",
+            "agent",
+            "system"
+          ]
+        },
+        "osUserId": {
+          "$ref": "common.json#/$defs/uuid"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "role": {
+          "$ref": "common.json#/$defs/osRole"
+        }
+      },
+      "required": [
+        "kind",
+        "osUserId",
+        "name"
+      ],
+      "description": "The Agency OS user (or OS automation) on whose behalf an OS -> site call is made"
+    },
+    "siteActor": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "human",
+            "agent",
+            "plugin",
+            "system",
+            "client"
+          ]
+        },
+        "id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "role": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 32,
+              "description": "EmDash role (contributor, author, editor, admin) or OS role when source=os"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "osUserId": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "enum": [
+            "api",
+            "mcp",
+            "visual-editor",
+            "plugin",
+            "scheduler",
+            "system",
+            "os",
+            "review-link",
+            "admin-panel"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "source"
+      ],
+      "description": "Who caused a site-side change. source=os when the change came from a signed OS call (osUserId set)."
+    },
+    "seo": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 500
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "canonical": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 2048
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "noIndex": {
+          "type": "boolean"
+        },
+        "image": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 2048
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": []
+    },
+    "warning": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code"
+      ]
+    },
+    "entry": {
+      "type": "object",
+      "properties": {
+        "entryId": {
+          "$ref": "common.json#/$defs/id"
+        },
+        "entryNo": {
+          "$ref": "common.json#/$defs/surrogateNo"
+        },
+        "collection": {
+          "$ref": "common.json#/$defs/collection"
+        },
+        "slug": {
+          "$ref": "common.json#/$defs/slug"
+        },
+        "path": {
+          "$ref": "common.json#/$defs/path"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "status": {
+          "$ref": "common.json#/$defs/entryStatus"
+        },
+        "hasPendingDraft": {
+          "type": "boolean"
+        },
+        "draftRevisionId": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "liveRevisionId": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "seo": {
+          "$ref": "common.json#/$defs/seo"
+        },
+        "contentHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "wordCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "excerpt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 1000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "updatedAt": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "publishedAt": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scheduledAt": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "editUrl": {
+          "$ref": "common.json#/$defs/url"
+        },
+        "template": {
+          "type": "null",
+          "description": "Always null on EmDash (WP template/isElementor have no equivalent)"
+        }
+      },
+      "required": [
+        "entryId",
+        "entryNo",
+        "collection",
+        "slug",
+        "path",
+        "title",
+        "status",
+        "hasPendingDraft",
+        "draftRevisionId",
+        "liveRevisionId",
+        "contentHash",
+        "updatedAt"
+      ]
+    },
+    "historyItem": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "type": {
+          "$ref": "common.json#/$defs/eventType"
+        },
+        "at": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "actor": {
+          "$ref": "common.json#/$defs/siteActor"
+        },
+        "status": {
+          "$ref": "common.json#/$defs/reviewStatus"
+        },
+        "round": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "comment": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 10000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "seq",
+        "type",
+        "at",
+        "status"
+      ]
+    },
+    "review": {
+      "type": "object",
+      "properties": {
+        "reviewId": {
+          "$ref": "common.json#/$defs/id"
+        },
+        "reviewNo": {
+          "$ref": "common.json#/$defs/surrogateNo"
+        },
+        "entryId": {
+          "$ref": "common.json#/$defs/id"
+        },
+        "entryNo": {
+          "$ref": "common.json#/$defs/surrogateNo"
+        },
+        "collection": {
+          "$ref": "common.json#/$defs/collection"
+        },
+        "slug": {
+          "$ref": "common.json#/$defs/slug"
+        },
+        "path": {
+          "$ref": "common.json#/$defs/path"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "status": {
+          "$ref": "common.json#/$defs/reviewStatus"
+        },
+        "statusLabel": {
+          "type": "string"
+        },
+        "stage": {
+          "$ref": "common.json#/$defs/stage"
+        },
+        "readyToPublish": {
+          "type": "boolean",
+          "description": "true exactly when status = client_approved"
+        },
+        "entryStatus": {
+          "$ref": "common.json#/$defs/entryStatus"
+        },
+        "updateMode": {
+          "type": "boolean",
+          "description": "true when the review is a pending draft revision of a live entry"
+        },
+        "parentEntryId": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "round": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "= WP revision_number"
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Per-review monotonic sequence (last event applied to this row)"
+        },
+        "rev": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Row revision for optimistic concurrency"
+        },
+        "contentType": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/contentType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "submittedBy": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/member"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pmAssigned": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/member"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pmDecision": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/pmDecision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pmComment": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 10000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pmReviewedAt": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "clientDecision": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/clientDecision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "clientComment": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 10000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "clientReviewedAt": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "workerNote": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 10000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "draftRevisionId": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "liveRevisionId": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pmPreviewUrl": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/url"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "clientPreviewUrl": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/url"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "linksExpireAt": {
+          "type": "object",
+          "properties": {
+            "pm": {
+              "anyOf": [
+                {
+                  "$ref": "common.json#/$defs/dateTime"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "client": {
+              "anyOf": [
+                {
+                  "$ref": "common.json#/$defs/dateTime"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": []
+        },
+        "editUrl": {
+          "$ref": "common.json#/$defs/url"
+        },
+        "seoGate": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "lastCheckAt": {
+                  "anyOf": [
+                    {
+                      "$ref": "common.json#/$defs/dateTime"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "blocking": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "warnings": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [],
+              "description": "Reserved: null in v1 until a read path into emdash-seo exists"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "publishedAt": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scheduledAt": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cancelledReason": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 500
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "createdAt": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "updatedAt": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "history": {
+          "type": "array",
+          "items": {
+            "$ref": "common.json#/$defs/historyItem"
+          }
+        }
+      },
+      "required": [
+        "reviewId",
+        "reviewNo",
+        "entryId",
+        "entryNo",
+        "collection",
+        "title",
+        "status",
+        "stage",
+        "readyToPublish",
+        "round",
+        "seq",
+        "rev",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "capabilities": {
+      "type": "object",
+      "properties": {
+        "pushDrafts": {
+          "type": "boolean"
+        },
+        "createEntries": {
+          "type": "boolean"
+        },
+        "mediaImport": {
+          "type": "boolean"
+        },
+        "seoPanel": {
+          "type": "boolean"
+        },
+        "seoProfiles": {
+          "type": "boolean"
+        },
+        "publishFromOs": {
+          "type": "boolean"
+        },
+        "scheduleFromOs": {
+          "type": "boolean"
+        },
+        "previewLinks": {
+          "type": "boolean"
+        },
+        "rotateLinks": {
+          "type": "boolean"
+        },
+        "clientReviewFromOs": {
+          "type": "boolean"
+        },
+        "nativeDraftRevisions": {
+          "type": "boolean"
+        },
+        "autoLogin": {
+          "type": "boolean"
+        },
+        "leads": {
+          "type": "boolean"
+        },
+        "timeline": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "pushDrafts",
+        "createEntries",
+        "mediaImport",
+        "seoPanel",
+        "seoProfiles",
+        "publishFromOs",
+        "scheduleFromOs",
+        "previewLinks",
+        "rotateLinks",
+        "clientReviewFromOs",
+        "nativeDraftRevisions",
+        "autoLogin",
+        "leads",
+        "timeline"
+      ],
+      "description": "Feature flags; the OS UI is driven by these, never by version strings"
+    },
+    "collectionInfo": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "$ref": "common.json#/$defs/collection"
+        },
+        "hasSeo": {
+          "type": "boolean"
+        },
+        "routed": {
+          "type": "boolean"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "hasSeo",
+        "routed"
+      ]
+    },
+    "health": {
+      "type": "object",
+      "properties": {
+        "schedulerLastRunAgoMin": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outbox": {
+          "type": "object",
+          "properties": {
+            "pending": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "failed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "oldestPendingAt": {
+              "anyOf": [
+                {
+                  "$ref": "common.json#/$defs/dateTime"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "pending",
+            "failed"
+          ]
+        },
+        "reviews": {
+          "type": "object",
+          "properties": {
+            "active": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": []
+        },
+        "lastEventAt": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lastCursor": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": []
+    },
+    "siteInfo": {
+      "type": "object",
+      "properties": {
+        "contract": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "supportedContracts": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "siteId": {
+          "$ref": "common.json#/$defs/siteId"
+        },
+        "siteUrl": {
+          "$ref": "common.json#/$defs/url"
+        },
+        "siteName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "plugin": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "const": "agency-os-bridge"
+            },
+            "version": {
+              "type": "string",
+              "maxLength": 32
+            }
+          },
+          "required": [
+            "id",
+            "version"
+          ]
+        },
+        "platform": {
+          "type": "object",
+          "properties": {
+            "emdash": {
+              "type": "string"
+            },
+            "astro": {
+              "type": "string"
+            },
+            "framework": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "node": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "emdash"
+          ]
+        },
+        "collections": {
+          "type": "array",
+          "items": {
+            "$ref": "common.json#/$defs/collectionInfo"
+          }
+        },
+        "contentTypes": {
+          "type": "array",
+          "items": {
+            "$ref": "common.json#/$defs/contentType"
+          },
+          "uniqueItems": true
+        },
+        "capabilities": {
+          "$ref": "common.json#/$defs/capabilities"
+        },
+        "health": {
+          "$ref": "common.json#/$defs/health"
+        }
+      },
+      "required": [
+        "contract",
+        "supportedContracts",
+        "siteId",
+        "siteUrl",
+        "plugin",
+        "platform",
+        "collections",
+        "contentTypes",
+        "capabilities"
+      ]
+    },
+    "block": {
+      "type": "object",
+      "properties": {
+        "_type": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "_key": {
+          "type": "string",
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "_type"
+      ],
+      "description": "One approved block (fields per the site's block schema). Raw HTML blocks are rejected with UNKNOWN_BLOCK."
+    },
+    "event": {
+      "type": "object",
+      "properties": {
+        "eventId": {
+          "$ref": "common.json#/$defs/id"
+        },
+        "type": {
+          "$ref": "common.json#/$defs/eventType"
+        },
+        "at": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "cursor": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Site-wide monotonic outbox number (one counter per site, never reused). Used for replay (sinceCursor)."
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Per-review monotonic sequence; required on pipeline_* events, absent on content.* (ordered by entry.updatedAt)"
+        },
+        "actor": {
+          "$ref": "common.json#/$defs/siteActor"
+        },
+        "review": {
+          "$ref": "common.json#/$defs/review"
+        },
+        "entry": {
+          "$ref": "common.json#/$defs/entry"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 2000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "snapshotText": {
+          "type": "string",
+          "maxLength": 100000,
+          "description": "At most one event per batch may carry it"
+        },
+        "override": {
+          "type": "boolean",
+          "description": "true when an admin bypassed the review state machine (audited)"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 500
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "health": {
+          "$ref": "common.json#/$defs/health"
+        },
+        "data": {
+          "type": "object",
+          "description": "Type-specific payload for site.* and reserved seo.* events"
+        }
+      },
+      "required": [
+        "eventId",
+        "type",
+        "at",
+        "cursor",
+        "actor"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "pattern": "^pipeline_"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "review",
+              "seq"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "pattern": "^content\\."
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "entry"
+            ],
+            "not": {
+              "required": [
+                "seq"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "enum": [
+            "VALIDATION",
+            "BAD_SIGNATURE",
+            "STALE_TIMESTAMP",
+            "UNKNOWN_SITE",
+            "UNKNOWN_KEY",
+            "PAIRING_CODE_INVALID",
+            "FORBIDDEN",
+            "PUBLISH_NOT_ALLOWED",
+            "HUMAN_ONLY",
+            "NOT_FOUND",
+            "REPLAY",
+            "IDEMPOTENCY_MISMATCH",
+            "IDEMPOTENCY_IN_PROGRESS",
+            "CONFLICT_REV",
+            "INVALID_TRANSITION",
+            "SLUG_MISMATCH",
+            "SLUG_CHANGE_FORBIDDEN",
+            "ALREADY_EXISTS",
+            "PAYLOAD_TOO_LARGE",
+            "UNKNOWN_BLOCK",
+            "SCHEMA_INVALID",
+            "PUBLISH_BLOCKED",
+            "CONTRACT_UNSUPPORTED",
+            "RATE_LIMITED",
+            "INTERNAL",
+            "NOT_IMPLEMENTED",
+            "NOT_PAIRED",
+            "UPSTREAM_UNAVAILABLE"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "details": {}
+      },
+      "required": [
+        "code",
+        "message",
+        "retryable"
+      ]
+    }
+  }
+}

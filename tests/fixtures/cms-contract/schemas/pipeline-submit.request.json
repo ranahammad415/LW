@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/pipeline-submit.request.json",
+  "title": "pipeline-submit",
+  "description": "Start (or resubmit after changes_requested_by_pm) a review -> pending_pm_review. Mints the PM link.",
+  "type": "object",
+  "properties": {
+    "entryId": {
+      "$ref": "common.json#/$defs/id"
+    },
+    "pm": {
+      "$ref": "common.json#/$defs/member"
+    },
+    "submittedBy": {
+      "$ref": "common.json#/$defs/member"
+    },
+    "note": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 10000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "contentType": {
+      "$ref": "common.json#/$defs/contentType"
+    },
+    "actor": {
+      "$ref": "common.json#/$defs/osActor"
+    }
+  },
+  "required": [
+    "entryId",
+    "pm",
+    "submittedBy",
+    "actor"
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/site-info.request.json",
+  "title": "site-info",
+  "description": "No parameters.",
+  "type": "object",
+  "properties": {},
+  "required": []
+}

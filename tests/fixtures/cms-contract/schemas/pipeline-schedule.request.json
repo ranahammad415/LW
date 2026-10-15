@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/pipeline-schedule.request.json",
+  "title": "pipeline-schedule (reserved, Phase 2, allowOsPublish)",
+  "description": "",
+  "type": "object",
+  "properties": {
+    "reviewId": {
+      "$ref": "common.json#/$defs/id"
+    },
+    "at": {
+      "$ref": "common.json#/$defs/dateTime"
+    },
+    "actor": {
+      "$ref": "common.json#/$defs/osActor"
+    }
+  },
+  "required": [
+    "reviewId",
+    "at",
+    "actor"
+  ]
+}

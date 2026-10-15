@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/events.request.json",
+  "title": "Event batch (site -> OS)",
+  "description": "POST /api/webhooks/emdash/events. Events in ascending seq; at most 50 per batch.",
+  "type": "object",
+  "properties": {
+    "contract": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "siteId": {
+      "$ref": "common.json#/$defs/siteId"
+    },
+    "sentAt": {
+      "$ref": "common.json#/$defs/dateTime"
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/event"
+      },
+      "minItems": 1,
+      "maxItems": 50
+    }
+  },
+  "required": [
+    "contract",
+    "siteId",
+    "sentAt",
+    "events"
+  ]
+}
