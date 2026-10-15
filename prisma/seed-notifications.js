@@ -153,6 +153,14 @@ const templates = [
     inAppMessage: '[{{projectName}}] "{{postTitle}}" ({{postType}}) has been published',
     variables: ['postTitle', 'projectName', 'postType', 'actionUrl'] },
 
+  // EmDash bridge (migration 20261016_emdash_bridge seeds the same row with INSERT IGNORE).
+  { slug: 'cms_connection_lost', name: 'Site Connection Lost', description: 'An EmDash site has not checked in with Agency OS for 24 hours', category: 'pipeline',
+    subject: 'Site connection lost: {{projectName}}',
+    bodyHtml: '<p>The EmDash site for <strong>{{projectName}}</strong> has not contacted Agency OS since {{lastSeenAt}}. Content review updates from that site are not arriving. Check that the site is up and that the Agency OS bridge plugin is active and paired.</p>',
+    bodyText: 'The EmDash site for {{projectName}} has not contacted Agency OS since {{lastSeenAt}}. Check that the site is up and the Agency OS bridge plugin is active and paired.',
+    inAppMessage: 'Site connection lost: {{projectName}} (last seen {{lastSeenAt}})',
+    variables: ['projectName', 'lastSeenAt', 'actionUrl'] },
+
   // ── Content Map Category ──
   { slug: 'content_map_submitted', name: 'Content Map Submitted', description: 'When a content map is submitted for client review', category: 'content_map',
     subject: '[Review Needed] Content map ready — {{projectName}}',

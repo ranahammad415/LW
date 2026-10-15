@@ -15,6 +15,13 @@ enum Role {
   CLIENT
 }
 
+/// Which CMS bridge a project's site speaks. WORDPRESS = Localwave Agent plugin (wpUrl + wpApiKey);
+/// EMDASH = agency-os-bridge EmDash plugin (contract agency-os-bridge/v1; HMAC keys live in CmsCredential).
+enum CmsType {
+  WORDPRESS
+  EMDASH
+}
+
 enum OnboardingStatus {
   PENDING
   IN_PROGRESS
@@ -467,6 +474,24 @@ model Project {
   dataforseoDomain   String?       @db.VarChar(255)
   /// Local market for AI Visibility query rewrites (e.g. "Milwaukee")
   targetMarket       String?       @db.VarChar(120)
+  /// CMS bridge for this project's site (docs/ledger/emdash-bridge.md). WORDPRESS keeps using the wp* fields.
+  /// EMDASH reuses wpUrl as the site URL; its HMAC keys live in CmsCredential (never on Project).
+  cmsType            CmsType       @default(WORDPRESS)
+  /// EmDash: site id issued by the OS when the pairing code is created (X-AOS-Site). Routes inbound webhooks.
+  cmsSiteId          String?       @unique @db.VarChar(64)
+  /// EmDash: current key generation (mirror of CmsCredential.keyId, for display only).
+  cmsKeyId           Int?
+  cmsContractVersion Int?
+  cmsPluginVersion   String?       @db.VarChar(32)
+  cmsCapabilities    Json?
+  /// EmDash: last handshake health + platform versions (no secrets).
+  cmsHealth          Json?
+  cmsPairedAt        DateTime?
+  cmsLastSeenAt      DateTime?
+  /// EmDash: highest outbox cursor accepted on /events (events-replay sinceCursor).
+  cmsLastCursor      Int?
+  /// EmDash: when cms_connection_lost was last sent (cleared by the next handshake).
+  cmsLostNotifiedAt  DateTime?
   createdAt          DateTime      @default(now())
   updatedAt          DateTime      @default(now()) @updatedAt
 
@@ -498,8 +523,92 @@ model Project {
   contentMaps          ContentMap[]
   backlinkCartItems    BacklinkCartItem[]
   backlinkOrderItems   BacklinkOrderItem[]
+  cmsCredential        CmsCredential?
+  cmsPairingCodes      CmsPairingCode[]
+  cmsEventReceipts     CmsEventReceipt[]
 
   @@map("project")
+}
+
+/// EmDash bridge HMAC keys for one project, AES-256-GCM encrypted with CMS_KEY_ENCRYPTION_KEY (lib/cmsKeyCrypto.js).
+/// Kept off Project on purpose: several routes spread whole Project rows into API responses.
+model CmsCredential {
+  id                    String    @id @default(uuid())
+  projectId             String    @unique
+  keyId                 Int
+  inboundKeyEnc         String    @db.Text
+  outboundKeyEnc        String    @db.Text
+  prevKeyId             Int?
+  inboundKeyPrevEnc     String?   @db.Text
+  outboundKeyPrevEnc    String?   @db.Text
+  prevExpiresAt         DateTime?
+  /// Staged by POST /api/projects/:id/cms/rotate-keys; delivered on the next heartbeat response.
+  pendingKeyId          Int?
+  inboundKeyPendingEnc  String?   @db.Text
+  outboundKeyPendingEnc String?   @db.Text
+  pendingCreatedAt      DateTime?
+  rotatedAt             DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @default(now()) @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("cmscredential")
+}
+
+/// One-time EmDash pairing codes (contract §4.1). The code itself is never stored: only the verifier
+/// sha256("aos-pair-store-v1:" + code) and, until used/burned/expired, the encrypted pairing signing key.
+model CmsPairingCode {
+  id             String    @id @default(uuid())
+  projectId      String
+  siteId         String    @db.VarChar(64)
+  verifier       String    @unique @db.VarChar(64)
+  signingKeyEnc  String?   @db.Text
+  expiresAt      DateTime
+  failedAttempts Int       @default(0)
+  usedAt         DateTime?
+  burnedAt       DateTime?
+  createdById    String?   @db.VarChar(191)
+  createdAt      DateTime  @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([siteId])
+  @@index([projectId])
+  @@map("cmspairingcode")
+}
+
+/// Idempotency receipts for EmDash /events: unique per (projectId, eventId), so N PM2 instances stay safe. 90-day retention.
+model CmsEventReceipt {
+  id          String   @id @default(uuid())
+  projectId   String
+  eventId     String   @db.VarChar(64)
+  type        String   @db.VarChar(64)
+  cursor      Int?
+  seq         Int?
+  cmsReviewId String?  @db.VarChar(64)
+  /// pending | applied | stale | stored | tombstoned
+  outcome     String   @default("pending") @db.VarChar(20)
+  receivedAt  DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, eventId])
+  @@index([projectId, receivedAt])
+  @@map("cmseventreceipt")
+}
+
+/// Seen request nonces for EmDash HMAC verification (contract §3.2 step 8). The unique index makes the
+/// check-and-store atomic across PM2 instances. Rows expire after 600 s and are swept lazily.
+model CmsNonce {
+  id        String   @id @default(uuid())
+  siteId    String   @db.VarChar(64)
+  nonce     String   @db.VarChar(128)
+  expiresAt DateTime
+
+  @@unique([siteId, nonce])
+  @@index([expiresAt])
+  @@map("cmsnonce")
 }
 
 model SitemapNode {
@@ -956,6 +1065,12 @@ model WpPage {
   modifiedAt       DateTime?
   syncedAt         DateTime  @default(now())
   createdAt        DateTime  @default(now())
+  /// EmDash entry id (ULID). On EmDash projects wpPostId holds the plugin's surrogate entryNo.
+  cmsEntryId         String?  @db.VarChar(64)
+  cmsCollection      String?  @db.VarChar(64)
+  cmsDraftRevisionId String?  @db.VarChar(64)
+  cmsLiveRevisionId  String?  @db.VarChar(64)
+  cmsEditUrl         String?  @db.VarChar(1000)
 
   project            Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
   task               Task?               @relation(fields: [taskId], references: [id], onDelete: SetNull)
@@ -967,6 +1082,7 @@ model WpPage {
   backlinkOrderItems BacklinkOrderItem[]
 
   @@unique([projectId, wpPostId])
+  @@index([projectId, cmsEntryId])
   @@map("wppage")
 }
 
@@ -990,6 +1106,8 @@ model WpPageSnapshot {
   userAgent        String?  @db.VarChar(500)
   isElementor      Boolean?
   syncedAt         DateTime @default(now())
+  /// EmDash revision id the snapshot was taken from.
+  cmsRevisionId    String?  @db.VarChar(64)
 
   wpPage WpPage @relation(fields: [wpPageId], references: [id], onDelete: Cascade)
 
@@ -1036,6 +1154,15 @@ model WpContentReview {
   wpUpdatedAt        DateTime?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @default(now()) @updatedAt
+  /// EmDash review id (ULID). On EmDash projects wpPipelineId holds the surrogate reviewNo, wpPostId the entryNo.
+  cmsReviewId        String?   @db.VarChar(64)
+  cmsEntryId         String?   @db.VarChar(64)
+  /// EmDash draft revision under review.
+  cmsRevisionId      String?   @db.VarChar(64)
+  /// Highest per-review event seq applied (contract §6.3 ordering).
+  cmsSeq             Int?
+  /// EmDash admin edit URL (the "Publish in site admin" link).
+  cmsEditUrl         String?   @db.VarChar(1000)
 
   project         Project                  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   events          WpContentReviewEvent[]
@@ -1044,6 +1171,7 @@ model WpContentReview {
 
   @@unique([projectId, wpPipelineId])
   @@index([assignedWorkerId])
+  @@index([projectId, cmsReviewId])
   @@map("wpcontentreview")
 }
 
@@ -1098,6 +1226,8 @@ model WpContentReviewEvent {
   pmReviewedAt     String?  @db.VarChar(50)
   clientReviewedAt String?  @db.VarChar(50)
   createdAt        DateTime @default(now())
+  /// EmDash per-review event seq (dedupes gap-heal history rows).
+  cmsSeq           Int?
 
   contentReview WpContentReview @relation(fields: [contentReviewId], references: [id], onDelete: Cascade)
 
