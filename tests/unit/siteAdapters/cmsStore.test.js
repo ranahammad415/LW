@@ -299,3 +299,15 @@ describe('review fixes in the Prisma store', () => {
     expect(notify.mock.calls[0][0]).toMatchObject({ slug: 'cms_repair_needed', recipientIds: ['o1'] });
   });
 });
+
+describe('contract v1.0.3 counterFloor (store)', () => {
+  it('is the highest wpPipelineId / wpPostId of the project, 0 when empty', async () => {
+    db.overrides['wpContentReview.aggregate'] = async () => ({ _max: { wpPipelineId: 42 } });
+    db.overrides['wpPage.aggregate'] = async () => ({ _max: { wpPostId: 118 } });
+    expect(await prismaCmsStore.getCounterFloor('p1')).toEqual({ reviewNo: 42, entryNo: 118 });
+    expect(calls('wpContentReview.aggregate')[0].args).toEqual({ where: { projectId: 'p1' }, _max: { wpPipelineId: true } });
+    db.overrides['wpContentReview.aggregate'] = async () => ({ _max: { wpPipelineId: null } });
+    db.overrides['wpPage.aggregate'] = async () => ({ _max: { wpPostId: null } });
+    expect(await prismaCmsStore.getCounterFloor('p1')).toEqual({ reviewNo: 0, entryNo: 0 });
+  });
+});

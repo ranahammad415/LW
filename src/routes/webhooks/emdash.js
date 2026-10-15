@@ -264,6 +264,8 @@ export async function emdashWebhookRoutes(app, opts = {}) {
       os: { version: OS_VERSION, capabilities: { clientReviewFromOs: false, seoProfiles: false } },
       pms: await store.listPms(project),
       keys: { keyId: 1, inbound, outbound },
+      // v1.0.3 (additive): the plugin seeds its surrogate counters to max(local, floor) + 1.
+      counterFloor: await store.getCounterFloor(project.id),
     });
     return sendSigned(reply, { secret: v.secret, keyId: PAIRING_KEY_ID, path, nonce: v.nonce, body: responseBody, now });
   }
@@ -318,6 +320,7 @@ export async function emdashWebhookRoutes(app, opts = {}) {
       serverTime: Math.floor(now / 1000),
       os: { version: OS_VERSION, capabilities: { clientReviewFromOs: false, seoProfiles: false } },
       pms: await store.listPms(project),
+      counterFloor: await store.getCounterFloor(project.id),
       ...(rotate ? { rotate } : {}),
     });
     return sendSigned(reply, { secret: signKey, keyId: v.keyId, path, nonce: v.nonce, body: responseBody, now });

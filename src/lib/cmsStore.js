@@ -102,6 +102,19 @@ function siteInfoProjectData(siteInfo, contract, now) {
 }
 
 export const prismaCmsStore = {
+  /**
+   * Contract v1.0.3 counterFloor: the highest surrogate ids the project already holds, so a site that
+   * pairs (e.g. as a new siteId after losing storage) seeds its counters to max(local, floor) + 1 and
+   * never reuses a reviewNo/entryNo the OS already maps. 0 when there are none.
+   */
+  async getCounterFloor(projectId) {
+    const [r, p] = await Promise.all([
+      prisma.wpContentReview.aggregate({ where: { projectId }, _max: { wpPipelineId: true } }),
+      prisma.wpPage.aggregate({ where: { projectId }, _max: { wpPostId: true } }),
+    ]);
+    return { reviewNo: r?._max?.wpPipelineId || 0, entryNo: p?._max?.wpPostId || 0 };
+  },
+
   async findProjectById(id) {
     return prisma.project.findUnique({ where: { id }, select: PROJECT_CMS_SELECT });
   },

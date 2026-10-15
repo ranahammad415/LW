@@ -54,6 +54,10 @@ function createMemoryStore() {
     repairNotices: 0,
   };
   Object.assign(s, {
+    counterFloor: { reviewNo: 0, entryNo: 0 },
+    async getCounterFloor() {
+      return s.counterFloor;
+    },
     async findProjectById(id) {
       return s.projects.get(id) || null;
     },
@@ -300,7 +304,8 @@ describe('POST /handshake — pairing', () => {
     const json = res.json();
     expect(json).toMatchObject({ ok: true, contract: 1, siteId: SITE, projectId: PROJECT_ID, keys: { keyId: 1 } });
     expect(json.keys.inbound).toMatch(/^aosk1_[A-Za-z0-9_-]{43}$/);
-    expect(json.contractRevision).toBe('1.0.2');
+    expect(json.contractRevision).toBe('1.0.3');
+    expect(json.counterFloor).toEqual({ reviewNo: 0, entryNo: 0 });
     expect(store.lastPairing).toEqual({ siteId: SITE, siteUrl: null, cursorBefore: null });
     expect(json.pms[0].memberId).toBe('8f14e45f-ceea-467a-9575-5f3c1b2a7d90');
     const sig = verifyResponse({
@@ -751,5 +756,26 @@ describe('review fixes (S3, S4, S5, S8, S9, v1.0.2 C1)', () => {
     expect(again.statusCode).toBe(200);
     expect(again.json().duplicate).toEqual(events.map((e) => e.eventId));
     expect(store.projects.get(PROJECT_ID).cmsRepairNeededAt).toBeFalsy();
+  });
+});
+
+describe('contract v1.0.3 counterFloor', () => {
+  it('is sent in the signed pairing response (new-site re-pair) and in heartbeat responses', async () => {
+    addProject({ cmsSiteId: 'site_oldsite001' });
+    store.counterFloor = { reviewNo: 57, entryNo: 212 };
+    const code = addCode(); // code for SITE (a new siteId for this project)
+    const nonce = '78787878-1212-4343-8565-909090909090';
+    const res = await post(HS, handshakeBody('pair'), { secret: pairingSigningKey(code), keyId: 'pairing', nonce });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().counterFloor).toEqual({ reviewNo: 57, entryNo: 212 });
+    expect(
+      verifyResponse({ status: 200, path: HS, requestNonce: nonce, body: res.body, headers: res.headers, resolveSecret: () => pairingSigningKey(code), now: nowMs }).ok
+    ).toBe(true);
+    expect(store.projects.get(PROJECT_ID).cmsSiteId).toBe(SITE);
+
+    const outbound = res.json().keys.outbound;
+    const hb = await post(HS, handshakeBody('heartbeat'), { secret: outbound, keyId: 1 });
+    expect(hb.statusCode).toBe(200);
+    expect(hb.json().counterFloor).toEqual({ reviewNo: 57, entryNo: 212 });
   });
 });
