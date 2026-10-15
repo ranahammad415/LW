@@ -40,6 +40,8 @@ const project = (o = {}) => ({ id: PID, name: 'Oasis', leadPmId: 'pm-1', clientI
 
 beforeAll(async () => {
   process.env.CMS_KEY_ENCRYPTION_KEY = 'test-cms-key-0123456789-abcdefghijklmnop';
+  // Route tests use example hosts without real DNS: opt into the dev mode (validated separately below).
+  process.env.EMDASH_BRIDGE_ALLOW_INSECURE_DEV = 'true';
   app = Fastify();
   app.setValidatorCompiler(() => (data) => ({ value: data }));
   app.decorate('verifyJwt', async (request) => {
@@ -48,7 +50,10 @@ beforeAll(async () => {
   await app.register(projectCmsRoutes, { prefix: '/api/projects' });
   await app.ready();
 });
-afterAll(async () => app.close());
+afterAll(async () => {
+  delete process.env.EMDASH_BRIDGE_ALLOW_INSECURE_DEV;
+  await app.close();
+});
 beforeEach(() => {
   db.calls = [];
   db.overrides = {};
@@ -57,12 +62,16 @@ beforeEach(() => {
 
 describe('validateSiteUrl', () => {
   it('requires https, allows http://localhost outside production, strips trailing slash', async () => {
-    expect(await validateSiteUrl('https://ex.com/', { env: {} })).toEqual({ ok: true, url: 'https://ex.com' });
-    expect((await validateSiteUrl('http://ex.com', { env: {} })).ok).toBe(false);
-    expect((await validateSiteUrl('http://localhost:4321', { env: {} })).ok).toBe(true);
-    expect((await validateSiteUrl('http://localhost:4321', { env: { NODE_ENV: 'production' } })).ok).toBe(false);
-    expect((await validateSiteUrl('https://ex.com/?a=1', { env: {} })).ok).toBe(false);
-    expect((await validateSiteUrl('not a url', { env: {} })).ok).toBe(false);
+    const dev = { NODE_ENV: 'development', EMDASH_BRIDGE_ALLOW_INSECURE_DEV: 'true' };
+    const publicDns = async () => [{ address: '93.184.216.34' }];
+    expect(await validateSiteUrl('https://ex.com/', { env: {}, lookup: publicDns })).toEqual({ ok: true, url: 'https://ex.com' });
+    expect((await validateSiteUrl('http://ex.com', { env: dev })).ok).toBe(false);
+    // http://localhost only with the explicit dev opt-in, never in production (even with the flag).
+    expect((await validateSiteUrl('http://localhost:4321', { env: dev })).ok).toBe(true);
+    expect((await validateSiteUrl('http://localhost:4321', { env: { NODE_ENV: 'development' } })).ok).toBe(false);
+    expect((await validateSiteUrl('http://localhost:4321', { env: { NODE_ENV: 'production', EMDASH_BRIDGE_ALLOW_INSECURE_DEV: 'true' } })).ok).toBe(false);
+    expect((await validateSiteUrl('https://ex.com/?a=1', { env: dev })).ok).toBe(false);
+    expect((await validateSiteUrl('not a url', { env: dev })).ok).toBe(false);
   });
 
   it('in production refuses hosts that resolve to private addresses', async () => {

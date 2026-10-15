@@ -61,8 +61,17 @@ export function isPrivateIp(address) {
   return true;
 }
 
+/**
+ * Insecure dev mode (http://localhost, loopback/private targets) is opt-in: only outside production AND
+ * with EMDASH_BRIDGE_ALLOW_INSECURE_DEV=true. Without the flag, development behaves like production
+ * (https + public addresses only). Production ignores the flag.
+ */
+export function allowInsecureDev(env = process.env) {
+  return env.NODE_ENV !== 'production' && env.EMDASH_BRIDGE_ALLOW_INSECURE_DEV === 'true';
+}
+
 function allowPrivate(env = process.env) {
-  return env.NODE_ENV !== 'production';
+  return allowInsecureDev(env);
 }
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -77,15 +86,15 @@ export async function validateSiteUrl(raw, { env = process.env, lookup = dns.pro
   } catch {
     return { ok: false, message: 'Enter the full site URL, e.g. https://example.com' };
   }
-  const isProd = env.NODE_ENV === 'production';
+  const strict = !allowInsecureDev(env);
   const localHost = LOCAL_HOSTS.has(u.hostname);
-  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && localHost && !isProd)) {
+  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && localHost && !strict)) {
     return { ok: false, message: 'The site URL must use https://' };
   }
   if (u.search || u.hash || u.username || u.password) {
     return { ok: false, message: 'The site URL must not carry a query string, fragment or credentials' };
   }
-  if (isProd) {
+  if (strict) {
     if (localHost) return { ok: false, message: 'The site URL must be a public https address' };
     // IP literals and hostnames both go through lookup (an IP literal resolves to itself).
     try {

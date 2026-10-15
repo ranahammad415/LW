@@ -11,6 +11,7 @@ import { computeSignature, signResponse, errorBody } from '../../../src/lib/site
 const ORIGINAL_ENV = process.env.NODE_ENV;
 afterEach(() => {
   process.env.NODE_ENV = ORIGINAL_ENV;
+  delete process.env.EMDASH_BRIDGE_ALLOW_INSECURE_DEV;
 });
 
 describe('isPrivateIp', () => {
@@ -37,19 +38,28 @@ describe('validateSiteUrl (pairing + cmsType switch)', () => {
 });
 
 describe('guardedLookup (connect time, DNS rebinding)', () => {
-  it('refuses a private address in production and allows it in development', async () => {
+  const lookupErr = () => new Promise((resolve) => guardedLookup('localhost', {}, (e) => resolve(e || null)));
+  it('dev without EMDASH_BRIDGE_ALLOW_INSECURE_DEV behaves like production: private refused', async () => {
+    process.env.NODE_ENV = 'development';
+    expect((await lookupErr())?.code).toBe('EAI_BLOCKED');
+  });
+  it('dev with the flag allows loopback', async () => {
+    process.env.NODE_ENV = 'development';
+    process.env.EMDASH_BRIDGE_ALLOW_INSECURE_DEV = 'true';
+    expect(await lookupErr()).toBeNull();
+  });
+  it('production ignores the flag', async () => {
     process.env.NODE_ENV = 'production';
-    const err = await new Promise((resolve) => guardedLookup('localhost', {}, (e) => resolve(e)));
-    expect(err?.code).toBe('EAI_BLOCKED');
-    process.env.NODE_ENV = 'test';
-    const ok = await new Promise((resolve) => guardedLookup('localhost', {}, (e, addr) => resolve(e ? null : addr)));
-    expect(typeof ok).toBe('string');
+    process.env.EMDASH_BRIDGE_ALLOW_INSECURE_DEV = 'true';
+    expect((await lookupErr())?.code).toBe('EAI_BLOCKED');
+    await expect(guardedFetch('http://localhost:1/x', { method: 'POST', body: '{}' })).rejects.toThrow(/https/);
   });
 });
 
 describe('no redirects (v1.0.2 C2)', () => {
   it('guardedFetch returns the 3xx instead of following it, and siteRequest turns it into UPSTREAM_UNAVAILABLE (final)', async () => {
     process.env.NODE_ENV = 'test';
+    process.env.EMDASH_BRIDGE_ALLOW_INSECURE_DEV = 'true'; // local http test server
     let hits = 0;
     const server = http.createServer((req, res) => {
       hits += 1;
