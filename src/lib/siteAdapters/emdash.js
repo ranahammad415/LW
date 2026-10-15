@@ -189,7 +189,10 @@ export async function siteRequest(conn, route, body = {}, opts = {}) {
       });
     }
 
-    if (res && res.ok && json && json.ok !== false) return json;
+    if (res && res.ok && json && json.ok !== false) {
+      Object.defineProperty(json, 'idempotentReplay', { value: isIdempotentReplay(res, json), enumerable: false, configurable: true });
+      return json;
+    }
     if (res && !err) {
       err = res.ok
         ? new CmsBridgeError({ status: 502, code: 'UPSTREAM_UNAVAILABLE', message: 'The EmDash site returned an unreadable response.', retryable: true })
@@ -211,6 +214,19 @@ export async function siteRequest(conn, route, body = {}, opts = {}) {
     }
     throw err;
   }
+}
+
+/**
+ * Was this mutation response a stored idempotent replay? Contract errata v1.0.1 moves the signal
+ * into the body (EmDash strips the X-AOS-Idempotent-Replay header); read the body first and fall
+ * back to the header. Informational only: the OS never depends on it.
+ */
+export function isIdempotentReplay(res, json) {
+  if (json && typeof json === 'object') {
+    if (json.idempotentReplay === true || json.replayed === true) return true;
+    if (json.idempotency && typeof json.idempotency === 'object' && json.idempotency.replay === true) return true;
+  }
+  return String(res?.headers?.get?.('x-aos-idempotent-replay') || '').toLowerCase() === 'true';
 }
 
 // ---------------------------------------------------------------- route helpers

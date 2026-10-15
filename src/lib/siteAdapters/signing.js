@@ -279,7 +279,10 @@ export async function verifyRequest({
   }
 
   const expected = computeSignature(secret, canonicalString({ method, path, timestamp: ts, nonce, body }));
-  if (!timingSafeEqualStr(expected, m[1])) return fail(401, 'BAD_SIGNATURE', 'Signature mismatch');
+  if (!timingSafeEqualStr(expected, m[1])) {
+    // signatureMismatch: well-formed, fresh request whose signature is wrong (pairing burn rule, errata v1.0.1).
+    return { ...fail(401, 'BAD_SIGNATURE', 'Signature mismatch'), signatureMismatch: true, siteId, nonceKey: siteId + ':' + nonce };
+  }
 
   const fresh = await nonceCache.checkAndStore(`${siteId}:${nonce}`, now + nonceTtlSec * 1000);
   if (!fresh) return fail(409, 'REPLAY', 'Nonce already used');

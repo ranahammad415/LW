@@ -322,3 +322,17 @@ describe('Review → WpContentReview normalisation (both adapters)', () => {
     expect(data.modifiedAt.toISOString()).toBe('2026-10-15T12:01:00.000Z');
   });
 });
+
+describe('idempotent replay signal (errata v1.0.1: body first, header fallback)', () => {
+  it('reads the body flag, then the header', async () => {
+    const { isIdempotentReplay } = await import('../../../src/lib/siteAdapters/emdash.js');
+    const h = (v) => ({ headers: new Headers(v ? { 'x-aos-idempotent-replay': v } : {}) });
+    expect(isIdempotentReplay(h(), { ok: true, idempotentReplay: true })).toBe(true);
+    expect(isIdempotentReplay(h('true'), { ok: true })).toBe(true);
+    expect(isIdempotentReplay(h(), { ok: true })).toBe(false);
+    const fetchImpl = vi.fn(async () => jsonResponse(ex('review.response'), 200, { 'x-aos-idempotent-replay': 'true' }));
+    const res = await siteRequest(conn, 'pipeline-cancel', { reviewId: 'r', actor: osActor({ id: 'u', name: 'n' }) }, { fetchImpl, sleep: noSleep });
+    expect(res.idempotentReplay).toBe(true);
+    expect(Object.keys(res)).not.toContain('idempotentReplay');
+  });
+});

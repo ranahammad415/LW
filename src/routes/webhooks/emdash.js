@@ -28,6 +28,7 @@ import {
   resolveKey,
   signResponse,
   verifyRequest,
+  sha256Hex,
 } from '../../lib/siteAdapters/signing.js';
 import { CmsKeyConfigError } from '../../lib/cmsKeyCrypto.js';
 import { credentialToRings, normalizeReviewEvent } from '../../lib/siteAdapters/emdash.js';
@@ -178,15 +179,19 @@ export async function emdashWebhookRoutes(app, opts = {}) {
     if (!v.ok) {
       if (v.status === 401) {
         let details;
-        // Every 401 on a pairing-signed request for that site counts (contract §4 step 1),
-        // also when verification stopped before the code was looked up.
-        const siteHeader = String(request.headers[HEADERS.site] || '');
-        if (!code && /^[A-Za-z0-9_-]{8,64}$/.test(siteHeader)) {
-          code = await store.getActivePairingCode(siteHeader, new Date(now));
-        }
-        if (code) {
-          const { attemptsLeft } = await store.recordPairingFailure(code.id);
-          if (v.code === 'BAD_SIGNATURE') details = { attemptsLeft };
+        // Burn rule (contract errata v1.0.1): only a well-formed request with a fresh timestamp and
+        // an unseen nonce whose signature is wrong counts toward the 5 attempts. Malformed, stale or
+        // replayed requests get the same 401 but do not burn the code.
+        if (code && v.signatureMismatch) {
+          // Seen = used by an accepted request, or already counted as a failed pairing attempt
+          // (kept under a separate 'pairfail:' key so real nonces are never burned by forgeries).
+          const usedOk = store.nonceCache.peek ? await store.nonceCache.peek(v.nonceKey, now) : false;
+          const failKey = `${v.siteId}:pf-${sha256Hex(v.nonceKey).slice(0, 40)}`;
+          const firstFailure = usedOk ? false : await store.nonceCache.checkAndStore(failKey, now + 600_000);
+          if (firstFailure) {
+            const { attemptsLeft } = await store.recordPairingFailure(code.id);
+            details = { attemptsLeft };
+          }
         }
         return sendError(reply, 'PAIRING_CODE_INVALID', 'Pairing code is invalid, expired or already used', details);
       }
@@ -468,7 +473,8 @@ export async function processEventBatch({ store, project, events, log }) {
   }
 
   if (contentApplied) store.afterContentBatch?.(project.id, log);
-  const lastCursor = Math.max(0, ...events.map((e) => (Number.isInteger(e?.cursor) ? e.cursor : 0)));
+  // Contract errata v1.0.1: lastCursor = highest cursor among accepted + duplicate events.
+  const lastCursor = storedCursor;
   return { accepted, duplicate, rejected, heal: [...heal], lastCursor, storedCursor };
 }
 

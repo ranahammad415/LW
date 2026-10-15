@@ -111,6 +111,9 @@ function createMemoryStore() {
       return next;
     },
     nonceCache: {
+      async peek(key) {
+        return s.nonces.has(key);
+      },
       async checkAndStore(key, exp) {
         if (s.nonces.has(key)) return false;
         s.nonces.set(key, exp);
@@ -314,16 +317,38 @@ describe('POST /handshake — pairing', () => {
     expect(store.creds.size).toBe(0);
   });
 
-  it('counts a stale-timestamp pairing attempt as a failure', async () => {
+  it('does not burn the code for stale, malformed or replayed requests (errata v1.0.1)', async () => {
     addProject();
     const code = addCode();
-    const r = await post(HS, handshakeBody('pair'), {
-      secret: pairingSigningKey(code),
-      keyId: 'pairing',
-      timestamp: Math.floor(nowMs / 1000) - 600,
-    });
-    expect(r.statusCode).toBe(401);
+    const wrong = pairingSigningKey(createPairingCode(SITE));
+    // Stale timestamp with the right key: 401, not counted.
+    const stale = await post(HS, handshakeBody('pair'), { secret: pairingSigningKey(code), keyId: 'pairing', timestamp: Math.floor(nowMs / 1000) - 600 });
+    expect(stale.statusCode).toBe(401);
+    expect(stale.json().error.code).toBe('PAIRING_CODE_INVALID');
+    // Malformed signature header: 401, not counted.
+    const body = handshakeBody('pair');
+    const signed = signRequest({ secret: wrong, keyId: 'pairing', siteId: SITE, path: HS, body, timestamp: Math.floor(nowMs / 1000) });
+    const malformed = await app.inject({ method: 'POST', url: HS, payload: body, headers: { ...signed, 'x-aos-signature': 'v1=nothex' } });
+    expect(malformed.statusCode).toBe(401);
+    // The same forged request sent twice (same nonce): counted once.
+    const nonce = 'abababab-cdcd-4efe-8a8a-121212121212';
+    const f1 = await post(HS, body, { secret: wrong, keyId: 'pairing', nonce });
+    const f2 = await post(HS, body, { secret: wrong, keyId: 'pairing', nonce });
+    expect(f1.json().error.details).toEqual({ attemptsLeft: 4 });
+    expect(f2.json().error.details).toBeUndefined();
     expect(store.codes[0].failedAttempts).toBe(1);
+    // The right key still pairs.
+    const ok = await post(HS, body, { secret: pairingSigningKey(code), keyId: 'pairing' });
+    expect(ok.statusCode).toBe(200);
+  });
+
+  it('does not count a bad signature that reuses a nonce of an accepted request', async () => {
+    addProject();
+    const code = addCode();
+    store.nonces.set(`${SITE}:cdcdcdcd-abab-4efe-8a8a-343434343434`, nowMs + 600_000);
+    const r = await post(HS, handshakeBody('pair'), { secret: pairingSigningKey(createPairingCode(SITE)), keyId: 'pairing', nonce: 'cdcdcdcd-abab-4efe-8a8a-343434343434' });
+    expect(r.statusCode).toBe(401);
+    expect(store.codes[0].failedAttempts).toBe(0);
   });
 
   it('refuses mode=heartbeat signed with the pairing key and a body siteId that differs from X-AOS-Site', async () => {
@@ -483,6 +508,7 @@ describe('POST /events', () => {
       { eventId: second.eventId, code: 'TOO_MANY_SNAPSHOTS', retryable: true, message: 'At most one snapshotText per batch' },
     ]);
     expect(store.receipts.get(`${PROJECT_ID}:${unknown.eventId}`)).toBe('stored');
+    expect(json.lastCursor).toBe(60);
   });
 
   it('rejects an invalid event (VALIDATION, not retryable) and an apply failure (INTERNAL, retryable, receipt released)', async () => {
@@ -499,6 +525,8 @@ describe('POST /events', () => {
       ])
     );
     expect(store.receipts.has(`${PROJECT_ID}:${e1.eventId}`)).toBe(false);
+    // lastCursor covers accepted + duplicate only (errata v1.0.1): nothing accepted → 0, not 61.
+    expect(json.lastCursor).toBe(0);
   });
 
   it('bad signature → 401 BAD_SIGNATURE envelope', async () => {

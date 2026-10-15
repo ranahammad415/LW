@@ -88,6 +88,10 @@ function siteInfoProjectData(siteInfo, contract, now) {
       siteUrlReported: siteInfo?.siteUrl ? String(siteInfo.siteUrl).slice(0, 500) : null,
       siteName: siteInfo?.siteName ? String(siteInfo.siteName).slice(0, 200) : null,
       supportedContracts: Array.isArray(siteInfo?.supportedContracts) ? siteInfo.supportedContracts : null,
+      // site-info only (errata v1.0.1 adds framework.blockSchemas): stored for later use, not relied on.
+      ...(siteInfo?.framework && typeof siteInfo.framework === 'object' ? { framework: siteInfo.framework } : {}),
+      ...(Array.isArray(siteInfo?.plugins) ? { plugins: siteInfo.plugins.slice(0, 50) } : {}),
+      ...(siteInfo?.counts && typeof siteInfo.counts === 'object' ? { counts: siteInfo.counts } : {}),
       receivedAt: now.toISOString(),
     },
     cmsLastSeenAt: now,
@@ -206,6 +210,15 @@ export const prismaCmsStore = {
   },
 
   nonceCache: {
+    /** Was this nonce already stored and still live? (read-only; pairing burn rule) */
+    async peek(key, nowMs = Date.now()) {
+      const i = key.indexOf(':');
+      const row = await prisma.cmsNonce.findUnique({
+        where: { siteId_nonce: { siteId: key.slice(0, i), nonce: key.slice(i + 1) } },
+        select: { expiresAt: true },
+      });
+      return !!row && new Date(row.expiresAt).getTime() > nowMs;
+    },
     async checkAndStore(key, expiresAtMs) {
       const i = key.indexOf(':');
       const siteId = key.slice(0, i);
