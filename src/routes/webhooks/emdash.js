@@ -1,0 +1,475 @@
+/**
+ * Site → OS endpoints of the EmDash bridge (contract agency-os-bridge/v1 §4, §5.2, §6).
+ * Mounted at /api/webhooks/emdash:
+ *   POST /handshake  pairing (signed with the pairing signing key) and heartbeat (outbound key);
+ *                    responses are signed (X-AOS-Response-*), rotation is delivered here.
+ *   POST /events     signed event batches; idempotent on (projectId, eventId) via a DB unique
+ *                    index (PM2-safe); per-review seq ordering with gap heal via pipeline-get.
+ *
+ * No JWT: authentication is the HMAC signature. The raw body is hashed BEFORE JSON parsing
+ * (scoped content-type parser below, this plugin only). Bodies over 1 MiB → 413
+ * PAYLOAD_TOO_LARGE (non-retryable) in the contract envelope.
+ *
+ * The persistence layer is injected (`opts.store`, default lib/cmsStore.js prismaCmsStore)
+ * so tests can run against an in-memory store.
+ */
+import {
+  CONTRACT_VERSION,
+  SUPPORTED_CONTRACTS,
+  HEADERS,
+  MAX_EVENTS_BODY_BYTES,
+  MAX_EVENTS_PER_BATCH,
+  MAX_SNAPSHOT_CHARS,
+  NOT_PAIRED,
+  PAIRING_KEY_ID,
+  errorBody,
+  generateKey,
+  negotiateContract,
+  resolveKey,
+  signResponse,
+  verifyRequest,
+} from '../../lib/siteAdapters/signing.js';
+import { CmsKeyConfigError } from '../../lib/cmsKeyCrypto.js';
+import { credentialToRings, normalizeReviewEvent } from '../../lib/siteAdapters/emdash.js';
+
+export const OS_VERSION = '2026.10.16';
+
+const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+
+function sendError(reply, code, message, details) {
+  const { status, body } = errorBody(code, message, details);
+  return reply.status(status).type('application/json').send(JSON.stringify(body));
+}
+
+function rawPath(request) {
+  return String(request.raw.url || request.url || '');
+}
+
+function parseJson(buf) {
+  try {
+    const text = Buffer.isBuffer(buf) ? buf.toString('utf8') : String(buf ?? '');
+    return { ok: true, value: text.length ? JSON.parse(text) : {} };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** Per-event envelope check (contract common.json#/$defs/event). Returns an error message or null. */
+export function validateEvent(ev) {
+  if (!ev || typeof ev !== 'object' || Array.isArray(ev)) return 'event must be an object';
+  if (typeof ev.eventId !== 'string' || !ID_RE.test(ev.eventId)) return 'eventId is required';
+  if (typeof ev.type !== 'string' || !/^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)?$/.test(ev.type)) return 'type is invalid';
+  if (typeof ev.at !== 'string' || !DATE_RE.test(ev.at)) return 'at must be an RFC 3339 date-time';
+  if (!Number.isInteger(ev.cursor) || ev.cursor < 1) return 'cursor must be an integer >= 1';
+  if (!ev.actor || typeof ev.actor !== 'object' || typeof ev.actor.source !== 'string') return 'actor is required';
+  if (ev.snapshotText !== undefined && (typeof ev.snapshotText !== 'string' || ev.snapshotText.length > MAX_SNAPSHOT_CHARS)) {
+    return `snapshotText must be a string of at most ${MAX_SNAPSHOT_CHARS} chars`;
+  }
+  if (ev.type.startsWith('pipeline_')) {
+    if (!Number.isInteger(ev.seq) || ev.seq < 1) return 'seq is required on pipeline_* events';
+    const r = ev.review;
+    if (!r || typeof r !== 'object') return 'review is required on pipeline_* events';
+    if (typeof r.reviewId !== 'string' || !ID_RE.test(r.reviewId)) return 'review.reviewId is required';
+    if (!Number.isInteger(r.reviewNo) || r.reviewNo < 1) return 'review.reviewNo is required';
+    if (!Number.isInteger(r.entryNo) || r.entryNo < 1) return 'review.entryNo is required';
+    if (typeof r.status !== 'string' || !r.status) return 'review.status is required';
+  } else if (ev.type.startsWith('content.')) {
+    if (ev.seq !== undefined) return 'seq must be absent on content.* events';
+    const e = ev.entry;
+    if (!e || typeof e !== 'object') return 'entry is required on content.* events';
+    if (typeof e.entryId !== 'string' || !ID_RE.test(e.entryId)) return 'entry.entryId is required';
+    if (!Number.isInteger(e.entryNo) || e.entryNo < 1) return 'entry.entryNo is required';
+    if (typeof e.updatedAt !== 'string' || !DATE_RE.test(e.updatedAt)) return 'entry.updatedAt is required';
+  }
+  return null;
+}
+
+/** In-memory per-project /events rate limit (contract §10: 300/min/project; per PM2 instance). */
+function createRateLimiter(perMin) {
+  const buckets = new Map();
+  return (key, now = Date.now()) => {
+    let b = buckets.get(key);
+    if (!b || now >= b.resetAt) {
+      b = { count: 0, resetAt: now + 60_000 };
+      buckets.set(key, b);
+    }
+    b.count += 1;
+    if (buckets.size > 5000) for (const [k, v] of buckets) if (now >= v.resetAt) buckets.delete(k);
+    return b.count <= perMin ? null : Math.ceil((b.resetAt - now) / 1000);
+  };
+}
+
+/**
+ * @param {import('fastify').FastifyInstance} app
+ * @param {{ store?: object, now?: () => number, onHeal?: Function, eventsPerMin?: number }} opts
+ */
+export async function emdashWebhookRoutes(app, opts = {}) {
+  const store = opts.store || (await import('../../lib/cmsStore.js')).prismaCmsStore;
+  const nowFn = opts.now || (() => Date.now());
+  const onHeal = opts.onHeal || (await import('../../lib/emdashSync.js')).healReviews;
+  const rateLimit = createRateLimiter(
+    Number(opts.eventsPerMin || process.env.CMS_EVENTS_RATE_PER_MIN) || 300
+  );
+  const maxSkewSec = Number(process.env.CMS_WEBHOOK_MAX_SKEW_SEC) || undefined;
+
+  // Raw body for hashing; scoped to this plugin (encapsulated), so no other route changes.
+  app.removeAllContentTypeParsers();
+  app.addContentTypeParser('*', { parseAs: 'buffer', bodyLimit: MAX_EVENTS_BODY_BYTES }, (req, body, done) => {
+    done(null, body);
+  });
+
+  app.setErrorHandler((err, request, reply) => {
+    if (err?.code === 'FST_ERR_CTP_BODY_TOO_LARGE' || err?.statusCode === 413) {
+      return sendError(reply, 'PAYLOAD_TOO_LARGE', `Request body exceeds ${MAX_EVENTS_BODY_BYTES} bytes; split the batch`);
+    }
+    if (err?.statusCode && err.statusCode < 500) {
+      return sendError(reply, 'VALIDATION', err.message || 'Invalid request');
+    }
+    request.log.error({ err }, 'EmDash webhook failed');
+    return sendError(reply, 'INTERNAL', 'Internal error');
+  });
+
+  const routeOpts = { bodyLimit: MAX_EVENTS_BODY_BYTES };
+
+  const resolveOutbound = async (siteId, keyId, now) => {
+    const project = await store.findProjectBySiteId(siteId);
+    if (!project || project.cmsType !== 'EMDASH') return undefined;
+    const cred = await store.getCredential(project.id);
+    if (!cred) return NOT_PAIRED;
+    const rings = credentialToRings(cred, now);
+    return resolveKey(rings.outbound, keyId, now);
+  };
+
+  // ── POST /handshake ────────────────────────────────────────────────────────
+  app.post('/handshake', routeOpts, async (request, reply) => {
+    const now = nowFn();
+    const path = rawPath(request);
+    const body = request.body ?? Buffer.alloc(0);
+    const keyIdHeader = String(request.headers[HEADERS.keyId] || '');
+    try {
+      if (keyIdHeader === PAIRING_KEY_ID) return await handlePairing({ request, reply, path, body, now });
+      return await handleHeartbeat({ request, reply, path, body, now });
+    } catch (err) {
+      if (err instanceof CmsKeyConfigError) {
+        request.log.error('CMS_KEY_ENCRYPTION_KEY is not set; EmDash handshake refused');
+        return sendError(reply, 'INTERNAL', 'Agency OS is not configured for EmDash sites yet');
+      }
+      throw err;
+    }
+  });
+
+  async function handlePairing({ request, reply, path, body, now }) {
+    let code = null;
+    const v = await verifyRequest({
+      method: 'POST',
+      path,
+      body,
+      headers: request.headers,
+      now,
+      maxSkewSec,
+      nonceCache: store.nonceCache,
+      resolveSecret: async (siteId) => {
+        code = await store.getActivePairingCode(siteId, new Date(now));
+        if (!code) return undefined;
+        return store.decryptSigningKey(code);
+      },
+    });
+    if (!v.ok) {
+      if (v.status === 401) {
+        let details;
+        // Every 401 on a pairing-signed request for that site counts (contract §4 step 1),
+        // also when verification stopped before the code was looked up.
+        const siteHeader = String(request.headers[HEADERS.site] || '');
+        if (!code && /^[A-Za-z0-9_-]{8,64}$/.test(siteHeader)) {
+          code = await store.getActivePairingCode(siteHeader, new Date(now));
+        }
+        if (code) {
+          const { attemptsLeft } = await store.recordPairingFailure(code.id);
+          if (v.code === 'BAD_SIGNATURE') details = { attemptsLeft };
+        }
+        return sendError(reply, 'PAIRING_CODE_INVALID', 'Pairing code is invalid, expired or already used', details);
+      }
+      return sendError(reply, v.code, v.message, v.details);
+    }
+
+    const parsed = parseJson(body);
+    if (!parsed.ok || !parsed.value || typeof parsed.value !== 'object') return sendError(reply, 'VALIDATION', 'Body must be JSON');
+    const info = parsed.value;
+    if (info.mode !== 'pair') return sendError(reply, 'VALIDATION', 'mode must be "pair" when signed with the pairing key');
+    if (info.siteId !== v.siteId) return sendError(reply, 'VALIDATION', 'Body siteId must equal X-AOS-Site');
+    const contract = negotiateContract(info.supportedContracts);
+    if (!contract) {
+      return sendError(reply, 'CONTRACT_UNSUPPORTED', 'No common contract version', { supported: [...SUPPORTED_CONTRACTS] });
+    }
+
+    const project = await store.findProjectBySiteId(v.siteId);
+    if (!project || project.cmsType !== 'EMDASH' || !(await store.consumePairingCode(code.id, new Date(now)))) {
+      return sendError(reply, 'PAIRING_CODE_INVALID', 'Pairing code is invalid, expired or already used');
+    }
+
+    const inbound = generateKey();
+    const outbound = generateKey();
+    await store.completePairing({ projectId: project.id, siteInfo: info, contract, inbound, outbound, now: new Date(now) });
+    request.log.info({ projectId: project.id, siteId: v.siteId }, 'EmDash site paired');
+
+    const responseBody = JSON.stringify({
+      ok: true,
+      contract,
+      siteId: v.siteId,
+      projectId: project.id,
+      projectName: String(project.name || '').slice(0, 200),
+      serverTime: Math.floor(now / 1000),
+      os: { version: OS_VERSION, capabilities: { clientReviewFromOs: false, seoProfiles: false } },
+      pms: await store.listPms(project),
+      keys: { keyId: 1, inbound, outbound },
+    });
+    return sendSigned(reply, { secret: v.secret, keyId: PAIRING_KEY_ID, path, nonce: v.nonce, body: responseBody, now });
+  }
+
+  async function handleHeartbeat({ request, reply, path, body, now }) {
+    const v = await verifyRequest({
+      method: 'POST',
+      path,
+      body,
+      headers: request.headers,
+      now,
+      maxSkewSec,
+      nonceCache: store.nonceCache,
+      resolveSecret: resolveOutbound,
+    });
+    if (!v.ok) return sendError(reply, v.code, v.message, v.details);
+
+    const parsed = parseJson(body);
+    if (!parsed.ok || !parsed.value || typeof parsed.value !== 'object') return sendError(reply, 'VALIDATION', 'Body must be JSON');
+    const info = parsed.value;
+    if (info.mode !== 'heartbeat') return sendError(reply, 'VALIDATION', 'mode must be "heartbeat" when signed with a site key');
+    if (info.siteId !== v.siteId) return sendError(reply, 'VALIDATION', 'Body siteId must equal X-AOS-Site');
+    const contract = negotiateContract(info.supportedContracts);
+    if (!contract) {
+      return sendError(reply, 'CONTRACT_UNSUPPORTED', 'No common contract version', { supported: [...SUPPORTED_CONTRACTS] });
+    }
+
+    const project = await store.findProjectBySiteId(v.siteId);
+    const cred = await store.getCredential(project.id);
+    const rings = credentialToRings(cred, now);
+    await store.recordHeartbeat({ projectId: project.id, siteInfo: info, contract, now: new Date(now) });
+
+    // Sign with the inbound key of the generation the site used (current in the normal case).
+    const reqKeyId = Number(v.keyId);
+    const signKey = resolveKey(rings.inbound, v.keyId, now);
+    let rotate = null;
+    if (reqKeyId === cred.keyId && cred.pendingKeyId != null) {
+      rotate = await store.applyRotation({ projectId: project.id, fromKeyId: cred.keyId, now: new Date(now) });
+      if (rotate) request.log.info({ projectId: project.id, keyId: rotate.keyId }, 'EmDash keys rotated');
+    } else if (rings.inbound.prev && reqKeyId === rings.inbound.prev.id && reqKeyId < cred.keyId) {
+      // The site never installed the last rotation (lost response): deliver the current pair again.
+      rotate = { keyId: cred.keyId, inbound: rings.inbound.current.secret, outbound: rings.outbound.current.secret };
+    }
+
+    const responseBody = JSON.stringify({
+      ok: true,
+      contract,
+      siteId: v.siteId,
+      projectId: project.id,
+      projectName: String(project.name || '').slice(0, 200),
+      serverTime: Math.floor(now / 1000),
+      os: { version: OS_VERSION, capabilities: { clientReviewFromOs: false, seoProfiles: false } },
+      pms: await store.listPms(project),
+      ...(rotate ? { rotate } : {}),
+    });
+    return sendSigned(reply, { secret: signKey, keyId: v.keyId, path, nonce: v.nonce, body: responseBody, now });
+  }
+
+  function sendSigned(reply, { secret, keyId, path, nonce, body, now }) {
+    const headers = signResponse({
+      secret,
+      keyId,
+      status: 200,
+      path,
+      requestNonce: nonce,
+      body,
+      timestamp: Math.floor(now / 1000),
+    });
+    reply.header('cache-control', 'no-store');
+    for (const [k, val] of Object.entries(headers)) reply.header(k, val);
+    return reply.status(200).type('application/json').send(body);
+  }
+
+  // ── POST /events ──────────────────────────────────────────────────────────
+  app.post('/events', routeOpts, async (request, reply) => {
+    const now = nowFn();
+    const path = rawPath(request);
+    const body = request.body ?? Buffer.alloc(0);
+    if (body.length > MAX_EVENTS_BODY_BYTES) {
+      return sendError(reply, 'PAYLOAD_TOO_LARGE', `Event batch exceeds ${MAX_EVENTS_BODY_BYTES} bytes; split the batch`);
+    }
+
+    let v;
+    try {
+      v = await verifyRequest({
+        method: 'POST',
+        path,
+        body,
+        headers: request.headers,
+        now,
+        maxSkewSec,
+        nonceCache: store.nonceCache,
+        resolveSecret: resolveOutbound,
+      });
+    } catch (err) {
+      if (err instanceof CmsKeyConfigError) {
+        request.log.error('CMS_KEY_ENCRYPTION_KEY is not set; EmDash events refused');
+        return sendError(reply, 'INTERNAL', 'Agency OS is not configured for EmDash sites yet');
+      }
+      throw err;
+    }
+    if (!v.ok) return sendError(reply, v.code, v.message, v.details);
+
+    const project = await store.findProjectBySiteId(v.siteId);
+    const retryAfter = rateLimit(project.id, now);
+    if (retryAfter) {
+      reply.header('retry-after', String(retryAfter));
+      return sendError(reply, 'RATE_LIMITED', 'Too many event batches for this site', { retryAfterSec: retryAfter });
+    }
+
+    const parsed = parseJson(body);
+    if (!parsed.ok || !parsed.value || typeof parsed.value !== 'object' || Array.isArray(parsed.value)) {
+      return sendError(reply, 'VALIDATION', 'Body must be a JSON object');
+    }
+    const batch = parsed.value;
+    if (batch.siteId !== v.siteId) return sendError(reply, 'VALIDATION', 'Body siteId must equal X-AOS-Site');
+    if (!Number.isInteger(batch.contract) || batch.contract < 1) return sendError(reply, 'VALIDATION', 'contract is required');
+    if (!Array.isArray(batch.events) || batch.events.length < 1 || batch.events.length > MAX_EVENTS_PER_BATCH) {
+      return sendError(reply, 'VALIDATION', `events must hold 1..${MAX_EVENTS_PER_BATCH} items`);
+    }
+
+    const result = await processEventBatch({ store, project, events: batch.events, log: request.log });
+    await store.touchLastSeen(project.id, new Date(now));
+    if (result.storedCursor > 0) await store.setLastCursor(project.id, result.storedCursor);
+
+    if (result.heal.length) {
+      Promise.resolve()
+        .then(() => onHeal(project.id, result.heal, request.log))
+        .catch((err) => request.log.warn({ err, projectId: project.id }, 'EmDash seq gap heal failed'));
+    }
+
+    return reply.status(200).type('application/json').send(
+      JSON.stringify({
+        ok: true,
+        accepted: result.accepted,
+        duplicate: result.duplicate,
+        rejected: result.rejected,
+        lastCursor: result.lastCursor,
+      })
+    );
+  });
+
+}
+
+/**
+ * Classify and apply one batch (contract §6.3; reference classifyEvents in
+ * os-bridge-contract/src/idempotency.mjs). Events are processed in ascending cursor order.
+ * Idempotency is the receipt claim (DB unique on projectId+eventId), so a batch replayed to
+ * a second PM2 instance at the same time cannot be applied twice.
+ */
+export async function processEventBatch({ store, project, events, log }) {
+  const accepted = [];
+  const duplicate = [];
+  const rejected = [];
+  const heal = new Set();
+  const seqs = new Map();
+  const updated = new Map();
+  const seenInBatch = new Set();
+  let snapshots = 0;
+  let storedCursor = 0;
+  let contentApplied = false;
+
+  const sorted = [...events].sort((a, b) => (Number(a?.cursor) || 0) - (Number(b?.cursor) || 0));
+  for (const ev of sorted) {
+    const invalid = validateEvent(ev);
+    if (invalid) {
+      const eventId = typeof ev?.eventId === 'string' ? ev.eventId.slice(0, 64) : 'unknown';
+      rejected.push({ eventId, code: 'VALIDATION', retryable: false, message: invalid });
+      continue;
+    }
+    if (seenInBatch.has(ev.eventId)) {
+      duplicate.push(ev.eventId);
+      continue;
+    }
+    if (typeof ev.snapshotText === 'string') {
+      snapshots += 1;
+      if (snapshots > 1) {
+        rejected.push({ eventId: ev.eventId, code: 'TOO_MANY_SNAPSHOTS', retryable: true, message: 'At most one snapshotText per batch' });
+        continue;
+      }
+    }
+
+    const claim = await store.claimReceipt(project.id, ev);
+    seenInBatch.add(ev.eventId);
+    if (claim === 'duplicate') {
+      duplicate.push(ev.eventId);
+      storedCursor = Math.max(storedCursor, ev.cursor);
+      continue;
+    }
+
+    try {
+      let outcome = 'stored';
+      if (ev.type.startsWith('pipeline_')) {
+        const r = ev.review;
+        if (await store.isTombstoned(project.id, r.reviewNo)) {
+          outcome = 'tombstoned';
+        } else {
+          const stored = seqs.has(r.reviewId) ? seqs.get(r.reviewId) : (await store.getReviewSeq(project.id, r.reviewId, r.reviewNo)) || 0;
+          if (ev.seq <= stored) {
+            outcome = 'stale';
+          } else {
+            const normalized = normalizeReviewEvent(r, {
+              eventType: ev.type,
+              seq: ev.seq,
+              message: ev.message,
+              override: ev.override === true,
+              snapshotText: ev.snapshotText,
+            });
+            await store.applyPipelineEvent(project, normalized, log);
+            if (ev.seq > stored + 1) heal.add(r.reviewId);
+            seqs.set(r.reviewId, ev.seq);
+            outcome = 'applied';
+          }
+        }
+      } else if (ev.type.startsWith('content.')) {
+        const e = ev.entry;
+        const stored = updated.has(e.entryId) ? updated.get(e.entryId) : await store.getEntryUpdatedAt(project.id, e.entryId, e.entryNo);
+        const storedMs = stored ? new Date(stored).getTime() : null;
+        if (storedMs != null && Date.parse(e.updatedAt) < storedMs) {
+          outcome = 'stale';
+        } else {
+          await store.applyContentEvent(project, ev);
+          updated.set(e.entryId, e.updatedAt);
+          contentApplied = true;
+          outcome = 'applied';
+        }
+      }
+      await store.finalizeReceipt(project.id, ev.eventId, outcome);
+      accepted.push(ev.eventId);
+      storedCursor = Math.max(storedCursor, ev.cursor);
+    } catch (err) {
+      log?.error?.({ err, eventId: ev.eventId, type: ev.type }, 'EmDash event apply failed');
+      await store.releaseReceipt(project.id, ev.eventId).catch(() => {});
+      seenInBatch.delete(ev.eventId);
+      const validation = err?.code === 'VALIDATION';
+      rejected.push({
+        eventId: ev.eventId,
+        code: validation ? 'VALIDATION' : 'INTERNAL',
+        retryable: !validation,
+        message: validation ? String(err.message || 'Invalid event').slice(0, 300) : 'Could not apply the event; retry later',
+      });
+    }
+  }
+
+  if (contentApplied) store.afterContentBatch?.(project.id, log);
+  const lastCursor = Math.max(0, ...events.map((e) => (Number.isInteger(e?.cursor) ? e.cursor : 0)));
+  return { accepted, duplicate, rejected, heal: [...heal], lastCursor, storedCursor };
+}
+
+export { CONTRACT_VERSION };

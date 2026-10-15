@@ -12,6 +12,24 @@ import {
   clientDecisionLabel,
   eventDisplayAt,
 } from '../../lib/pipelineFormat.js';
+import {
+  WP_MUTATION_TIMEOUT_MS,
+  fetchWpPipelinePreviewUrls,
+  wpPmReview,
+  wpPublish,
+  wpRenewAttempts,
+  callWpRenew as callWpRenewFetch,
+  wpChangeType,
+  wpCancelForce,
+} from '../../lib/siteAdapters/wordpress.js';
+import { syncEmdashPipelines } from '../../lib/emdashSync.js';
+import {
+  emdashPmReview,
+  emdashPublish,
+  emdashRenewPreview,
+  emdashChangeType,
+  emdashDelete,
+} from './pipelineEmdash.js';
 
 function reviewStatusLabel(status, clientDecision) {
   if (status === 'changes_requested_by_client' && clientDecision === 'changes_publish') {
@@ -63,68 +81,8 @@ async function requirePipelineCommentAccess(request, reply) {
   }
 }
 
-/** Build WP agent headers matching wpSync.js pattern. */
-function wpHeaders(apiKey) {
-  return {
-    'X-LWA-API-Key': apiKey,
-    Accept: 'application/json',
-    'User-Agent': 'Localwaves-AgencyOS/1.0 (+https://localwaves; pipeline sync)',
-  };
-}
-
-/**
- * Abort OS→WP sooner than typical edge proxy_read_timeout so Fastify can
- * always return CORS-safe JSON (502) before the browser connection is reset.
- * Kept under ~5s so common edge/nginx read timeouts do not drop the browser
- * connection as a bare "Failed to fetch".
- */
-const WP_MUTATION_TIMEOUT_MS = 4500;
-
-/** Short budget for a best-effort preview-URL heal after a failed mutate. */
-const WP_HEAL_TIMEOUT_MS = 2000;
-
-/**
- * Best-effort: pull PM/client preview URLs for one pipeline from WordPress.
- * Used when regenerate times out/fails so OS can still backfill any URLs WP
- * is able to display (or when legacy rows omit token_plain until regenerate).
- */
-async function fetchWpPipelinePreviewUrls({ baseUrl, apiKey, pipelineId, wpPostId }) {
-  const headers = wpHeaders(apiKey);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), WP_HEAL_TIMEOUT_MS);
-  try {
-    let item = null;
-    if (wpPostId) {
-      const res = await fetch(`${baseUrl}/wp-json/lwa/v1/pipeline/${wpPostId}`, {
-        headers,
-        signal: controller.signal,
-      });
-      if (res.ok) {
-        const json = await res.json().catch(() => null);
-        if (json && Number(json.id) === pipelineId) item = json;
-      }
-    }
-    if (!item) {
-      const res = await fetch(
-        `${baseUrl}/wp-json/lwa/v1/pipeline?page=1&per_page=100`,
-        { headers, signal: controller.signal }
-      );
-      if (!res.ok) return null;
-      const json = await res.json().catch(() => null);
-      const batch = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : [];
-      item = batch.find((p) => Number(p.id) === pipelineId) || null;
-    }
-    if (!item) return null;
-    const pmPreviewUrl = String(item.pmPreviewUrl || '').slice(0, 1000) || null;
-    const clientPreviewUrl = String(item.clientPreviewUrl || '').slice(0, 1000) || null;
-    if (!pmPreviewUrl && !clientPreviewUrl) return null;
-    return { pmPreviewUrl, clientPreviewUrl };
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
+// WP fetch helpers (headers, timeouts, WAF-safe routes, preview-URL heal) moved verbatim to
+// lib/siteAdapters/wordpress.js (EmDash bridge O2). EmDash projects branch to ./pipelineEmdash.js.
 
 function commentRoleLabel(role) {
   if (role === 'OWNER') return 'Admin';
@@ -175,6 +133,9 @@ function formatReview(r) {
   // keep their "Cancelled" label.
   const isCancelled = r.status === 'cancelled' || r.lastEventType === 'pipeline_cancelled';
   const effectiveStatus = r.isPublished && !isCancelled ? 'published' : r.status;
+  // EmDash (contract v1): OS approval = "ready to publish"; a human publishes in the site admin.
+  const cmsType = r.project?.cmsType || 'WORDPRESS';
+  const isEmdash = cmsType === 'EMDASH';
   return {
     id: r.id,
     projectId: r.projectId,
@@ -221,6 +182,10 @@ function formatReview(r) {
     history: (r.events || [])
       .filter((e) => e.eventType !== 'pipeline_resend_notification')
       .map((e) => formatHistoryEvent(e)),
+    cmsType,
+    editUrl: r.cmsEditUrl || null,
+    canPublishFromOs: !isEmdash,
+    readyToPublish: isEmdash && effectiveStatus === 'client_approved',
   };
 }
 
@@ -266,6 +231,7 @@ export async function pmPipelineRoutes(app) {
             project: {
               select: {
                 name: true,
+                cmsType: true,
                 client: { select: { agencyName: true } },
               },
             },
@@ -304,6 +270,7 @@ export async function pmPipelineRoutes(app) {
             project: {
               select: {
                 name: true,
+                cmsType: true,
                 client: { select: { agencyName: true } },
               },
             },
@@ -420,7 +387,14 @@ export async function pmPipelineRoutes(app) {
     async (request, reply) => {
       try {
         const result = await syncPipelineFromWp();
-        return reply.send({ success: true, ...result });
+        // EmDash projects are not in the WP sweep; pull them through the EmDash adapter.
+        const emdash = await syncEmdashPipelines({ interactive: true, log: request.log }).catch(() => ({ synced: 0, errors: 1 }));
+        return reply.send({
+          success: true,
+          ...result,
+          synced: (result.synced || 0) + (emdash.synced || 0),
+          errors: (result.errors || 0) + (emdash.errors || 0),
+        });
       } catch (err) {
         request.log.error(err);
         return reply.status(500).send({ message: 'Pipeline sync failed' });
@@ -458,7 +432,7 @@ export async function pmPipelineRoutes(app) {
           where,
           include: {
             events: { orderBy: { createdAt: 'desc' } },
-            project: { select: { name: true, client: { select: { agencyName: true } } } },
+            project: { select: { name: true, cmsType: true, client: { select: { agencyName: true } } } },
           },
           orderBy: [{ wpUpdatedAt: 'desc' }, { updatedAt: 'desc' }],
         });
@@ -485,8 +459,14 @@ export async function pmPipelineRoutes(app) {
 
         const project = await prisma.project.findUnique({
           where: { id: projectId },
-          select: { wpUrl: true, wpApiKey: true, leadPmId: true },
+          select: { wpUrl: true, wpApiKey: true, leadPmId: true, cmsType: true },
         });
+        if (project?.cmsType === 'EMDASH') {
+          if (request.user.role === 'PM' && project.leadPmId !== request.user.id) {
+            return reply.status(403).send({ message: 'Access denied' });
+          }
+          return emdashPmReview({ request, reply, projectId, wpPipelineId, decision, comment, formatReview });
+        }
         if (!project || !project.wpUrl || !project.wpApiKey) {
           return reply.status(404).send({ message: 'Project not found or no WP config' });
         }
@@ -517,15 +497,7 @@ export async function pmPipelineRoutes(app) {
 
         let res;
         try {
-          res = await fetch(url, {
-            method: 'POST',
-            headers: {
-              ...wpHeaders(project.wpApiKey),
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(wpBody),
-            signal: AbortSignal.timeout(15000),
-          });
+          res = await wpPmReview({ baseUrl, apiKey: project.wpApiKey, pipelineId: wpPipelineId, body: wpBody });
         } catch (fetchErr) {
           // Network / timeout / DNS failure talking to WP — surface a clean
           // error instead of leaking the raw stack trace.
@@ -561,8 +533,15 @@ export async function pmPipelineRoutes(app) {
 
         const project = await prisma.project.findUnique({
           where: { id: projectId },
-          select: { wpUrl: true, wpApiKey: true, leadPmId: true, name: true, clientId: true },
+          select: { wpUrl: true, wpApiKey: true, leadPmId: true, name: true, clientId: true, cmsType: true },
         });
+        if (project?.cmsType === 'EMDASH') {
+          if (request.user.role === 'PM' && project.leadPmId !== request.user.id) {
+            return reply.status(403).send({ message: 'Access denied' });
+          }
+          // Phase 1: approval marks "ready to publish"; a human publishes in the EmDash admin.
+          return emdashPublish({ request, reply, projectId, wpPipelineId });
+        }
         if (!project || !project.wpUrl || !project.wpApiKey) {
           return reply.status(404).send({ message: 'Project not found or no WP config' });
         }
@@ -577,14 +556,7 @@ export async function pmPipelineRoutes(app) {
 
         let res;
         try {
-          res = await fetch(url, {
-            method: 'POST',
-            headers: {
-              ...wpHeaders(project.wpApiKey),
-              'Content-Type': 'application/json',
-            },
-            signal: AbortSignal.timeout(15000),
-          });
+          res = await wpPublish({ baseUrl, apiKey: project.wpApiKey, pipelineId: wpPipelineId });
         } catch (fetchErr) {
           request.log.error({ err: fetchErr, url }, 'WP publish fetch failed');
           const isTimeout = fetchErr?.name === 'TimeoutError' || fetchErr?.name === 'AbortError';
@@ -695,8 +667,14 @@ export async function pmPipelineRoutes(app) {
 
         const project = await prisma.project.findUnique({
           where: { id: projectId },
-          select: { wpUrl: true, wpApiKey: true, leadPmId: true },
+          select: { wpUrl: true, wpApiKey: true, leadPmId: true, cmsType: true },
         });
+        if (project?.cmsType === 'EMDASH') {
+          if (request.user.role === 'PM' && project.leadPmId !== request.user.id) {
+            return reply.status(403).send({ message: 'Access denied' });
+          }
+          return emdashRenewPreview({ request, reply, projectId, wpPipelineId, formatReview });
+        }
         if (!project || !project.wpUrl || !project.wpApiKey) {
           return reply.status(404).send({ message: 'Project not found or no WP config' });
         }
@@ -730,27 +708,12 @@ export async function pmPipelineRoutes(app) {
         }
 
         const baseUrl = project.wpUrl.replace(/\/$/, '');
-        // change-type first — already known to pass Milwaukee Signs WAF.
-        const wpAttempts = [
-          {
-            method: 'POST',
-            url: `${baseUrl}/wp-json/lwa/v1/pipeline/${pipelineId}/change-type`,
-            body: JSON.stringify({ rotate_links: true }),
-          },
-          { method: 'POST', url: `${baseUrl}/wp-json/lwa/v1/pipeline/${pipelineId}/rotate`, body: '{}' },
-          { method: 'GET', url: `${baseUrl}/wp-json/lwa/v1/pipeline/${pipelineId}/rotate` },
-          {
-            method: 'POST',
-            url: `${baseUrl}/?rest_route=/lwa/v1/pipeline/${pipelineId}/rotate`,
-            body: '{}',
-          },
-          { method: 'POST', url: `${baseUrl}/wp-json/lwa/v1/pipeline/${pipelineId}/renew-preview`, body: '{}' },
-          { method: 'POST', url: `${baseUrl}/wp-json/lwa/v1/pipeline/${pipelineId}/regenerate-links`, body: '{}' },
-        ];
+        // change-type first — already known to pass Milwaukee Signs WAF (list in wordpress.js).
+        const wpAttempts = wpRenewAttempts(baseUrl, pipelineId);
 
         const reviewInclude = {
           events: { orderBy: { createdAt: 'desc' }, take: 50 },
-          project: { select: { name: true, client: { select: { agencyName: true } } } },
+          project: { select: { name: true, cmsType: true, client: { select: { agencyName: true } } } },
         };
 
         const recordRenewFailed = async (message, code = 'WP_RENEW_FAILED') => {
@@ -794,23 +757,8 @@ export async function pmPipelineRoutes(app) {
           });
         };
 
-        const callWpRenew = async ({ method, url, body }) => {
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), WP_MUTATION_TIMEOUT_MS);
-          try {
-            return await fetch(url, {
-              method,
-              headers: {
-                ...wpHeaders(project.wpApiKey),
-                ...(body ? { 'Content-Type': 'application/json' } : {}),
-              },
-              ...(body ? { body } : {}),
-              signal: controller.signal,
-            });
-          } finally {
-            clearTimeout(timer);
-          }
-        };
+        const callWpRenew = ({ method, url, body }) =>
+          callWpRenewFetch({ apiKey: project.wpApiKey, method, url, body });
 
         const runRegenerateWork = async () => {
           let res = null;
@@ -1121,8 +1069,14 @@ export async function pmPipelineRoutes(app) {
 
         const project = await prisma.project.findUnique({
           where: { id: projectId },
-          select: { wpUrl: true, wpApiKey: true, leadPmId: true },
+          select: { wpUrl: true, wpApiKey: true, leadPmId: true, cmsType: true },
         });
+        if (project?.cmsType === 'EMDASH') {
+          if (request.user.role === 'PM' && project.leadPmId !== request.user.id) {
+            return reply.status(403).send({ message: 'Access denied' });
+          }
+          return emdashChangeType({ request, reply, projectId, wpPipelineId, contentType, formatReview });
+        }
         if (!project || !project.wpUrl || !project.wpApiKey) {
           return reply.status(404).send({ message: 'Project not found or no WP config' });
         }
@@ -1151,21 +1105,13 @@ export async function pmPipelineRoutes(app) {
         let res;
         const wpStartedAt = Date.now();
         try {
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), WP_MUTATION_TIMEOUT_MS);
-          try {
-            res = await fetch(url, {
-              method: 'POST',
-              headers: {
-                ...wpHeaders(project.wpApiKey),
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({ content_type: contentType, actor: request.user.name || '' }),
-              signal: controller.signal,
-            });
-          } finally {
-            clearTimeout(timer);
-          }
+          res = await wpChangeType({
+            baseUrl,
+            apiKey: project.wpApiKey,
+            pipelineId,
+            contentType,
+            actor: request.user.name || '',
+          });
         } catch (fetchErr) {
           const elapsedMs = Date.now() - wpStartedAt;
           request.log.error(
@@ -1232,10 +1178,13 @@ export async function pmPipelineRoutes(app) {
 
         const project = await prisma.project.findUnique({
           where: { id: projectId },
-          select: { wpUrl: true, wpApiKey: true },
+          select: { wpUrl: true, wpApiKey: true, cmsType: true },
         });
         if (!project) {
           return reply.status(404).send({ message: 'Project not found' });
+        }
+        if (project.cmsType === 'EMDASH') {
+          return emdashDelete({ request, reply, projectId, wpPipelineId });
         }
 
         const existing = await prisma.wpContentReview.findUnique({
@@ -1248,15 +1197,7 @@ export async function pmPipelineRoutes(app) {
           const baseUrl = project.wpUrl.replace(/\/$/, '');
           const url = `${baseUrl}/wp-json/lwa/v1/pipeline/${pipelineId}/cancel`;
           try {
-            const res = await fetch(url, {
-              method: 'POST',
-              headers: {
-                ...wpHeaders(project.wpApiKey),
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({ force: true, as_admin: true }),
-              signal: AbortSignal.timeout(15000),
-            });
+            const res = await wpCancelForce({ baseUrl, apiKey: project.wpApiKey, pipelineId });
             // 404 / not_found → already gone on WP; still wipe OS.
             if (!res.ok && res.status !== 404) {
               const json = await res.json().catch(() => ({}));

@@ -2,6 +2,7 @@ import { prisma } from '../lib/prisma.js';
 import { createProjectBodySchema } from '../schemas/projects.js';
 import { generateChat, isAiConfigured } from '../lib/ai.js';
 import { syncProjectPages } from '../lib/wpSync.js';
+import { wpPageTimeline, wpCreateUpdateDraft } from '../lib/siteAdapters/wordpress.js';
 import { ensureProjectAccess } from '../lib/ensureProjectAccess.js';
 import { notify } from '../lib/notificationService.js';
 import { resolveCycle } from '../lib/workCycle.js';
@@ -559,6 +560,7 @@ export async function projectRoutes(app) {
             status: { type: 'string' },
             wpUrl: { type: 'string', nullable: true },
             wpApiKey: { type: 'string', nullable: true },
+            cmsType: { type: 'string', enum: ['WORDPRESS', 'EMDASH'] },
           },
         },
         response: {
@@ -618,6 +620,13 @@ export async function projectRoutes(app) {
       if (body.wpApiKey !== undefined) {
         data.wpApiKey = body.wpApiKey === null || body.wpApiKey === '' ? null : String(body.wpApiKey).trim().slice(0, 255);
       }
+      // CMS bridge type (EmDash bridge O4). Pairing/keys live under /:id/cms/* (routes/projectCms.js).
+      if (body.cmsType !== undefined) {
+        if (!['WORDPRESS', 'EMDASH'].includes(body.cmsType)) {
+          return reply.status(400).send({ message: 'cmsType must be WORDPRESS or EMDASH' });
+        }
+        data.cmsType = body.cmsType;
+      }
       if (Object.keys(data).length === 0) {
         return reply.send({
           id: project.id,
@@ -626,6 +635,7 @@ export async function projectRoutes(app) {
           status: project.status,
           wpUrl: project.wpUrl,
           wpApiKey: project.wpApiKey != null ? '[REDACTED]' : null,
+          cmsType: project.cmsType,
         });
       }
 
@@ -634,7 +644,7 @@ export async function projectRoutes(app) {
         data,
       });
 
-      if (updated.wpUrl && updated.wpApiKey) {
+      if (updated.cmsType !== 'EMDASH' && updated.wpUrl && updated.wpApiKey) {
         syncProjectPages(id).catch((err) => {
           app.log.error({ err, projectId: id }, 'Background WP page sync failed');
         });
@@ -649,6 +659,7 @@ export async function projectRoutes(app) {
         status: updated.status,
         wpUrl: updated.wpUrl,
         wpApiKey: sentWpApiKey !== undefined ? sentWpApiKey : (updated.wpApiKey != null ? '[REDACTED]' : null),
+        cmsType: updated.cmsType,
       });
     }
   );
@@ -670,6 +681,11 @@ export async function projectRoutes(app) {
       if (!project) return reply.status(404).send({ message: 'Project not found' });
       const canAccess = await ensureProjectAccess(project, user);
       if (!canAccess) return reply.status(403).send({ message: 'Access denied' });
+      if (project.cmsType === 'EMDASH') {
+        // EmDash: inventory through the EmDash adapter (syncProjectPages dispatches by cmsType).
+        if (!project.cmsPairedAt) return reply.status(400).send({ message: 'EmDash site is not paired yet' });
+        return reply.send(await syncProjectPages(id));
+      }
       if (!project.wpUrl || !project.wpApiKey) {
         return reply.status(400).send({ message: 'WP connection not configured' });
       }
@@ -774,11 +790,7 @@ export async function projectRoutes(app) {
       let wpTimeline = [];
       if (project.wpUrl && project.wpApiKey) {
         try {
-          const url = `${project.wpUrl.replace(/\/$/, '')}/wp-json/lwa/v1/pages/${wpPostId}/timeline`;
-          const res = await fetch(url, {
-            headers: { 'X-LWA-API-Key': project.wpApiKey },
-            signal: AbortSignal.timeout(15000),
-          });
+          const res = await wpPageTimeline({ wpUrl: project.wpUrl, apiKey: project.wpApiKey, wpPostId });
           if (res.ok) { wpTimeline = await res.json(); }
         } catch { /* WP might be unreachable */ }
       }
@@ -934,6 +946,21 @@ export async function projectRoutes(app) {
       if (!project) return reply.status(404).send({ message: 'Project not found' });
       const canAccess = await ensureProjectAccess(project, user);
       if (!canAccess) return reply.status(403).send({ message: 'Access denied' });
+
+      if (project.cmsType === 'EMDASH') {
+        // EmDash keeps native draft revisions on the same entry: nothing to clone. Return the
+        // entry's admin edit URL with reused:true (plan O4).
+        const entryNo = Number(wpPostId);
+        const page = Number.isInteger(entryNo) && entryNo > 0
+          ? await prisma.wpPage.findUnique({
+              where: { projectId_wpPostId: { projectId: id, wpPostId: entryNo } },
+              select: { cmsEditUrl: true },
+            })
+          : null;
+        if (!page) return reply.status(404).send({ message: 'Page not found' });
+        return reply.send({ draftId: entryNo, parentId: entryNo, editUrl: page.cmsEditUrl || null, reused: true });
+      }
+
       if (!project.wpUrl || !project.wpApiKey) {
         return reply.status(400).send({ message: 'WP connection not configured' });
       }
@@ -948,11 +975,7 @@ export async function projectRoutes(app) {
 
       let res;
       try {
-        res = await fetch(url, {
-          method: 'POST',
-          headers: { 'X-LWA-API-Key': project.wpApiKey, 'Content-Type': 'application/json' },
-          signal: AbortSignal.timeout(20000),
-        });
+        res = await wpCreateUpdateDraft({ baseUrl, apiKey: project.wpApiKey, postId });
       } catch (fetchErr) {
         request.log.error({ err: fetchErr, url }, 'WP update-content fetch failed');
         const isTimeout = fetchErr?.name === 'TimeoutError' || fetchErr?.name === 'AbortError';

@@ -33,6 +33,7 @@ import { adminNextMonthRoutes } from './routes/admin/nextMonth.js';
 import { adminInterviewRoutes } from './routes/admin/interviews.js';
 import { workCycleRoutes } from './routes/workCycles.js';
 import { projectRoutes } from './routes/projects.js';
+import { projectCmsRoutes } from './routes/projectCms.js';
 import { taskRoutes } from './routes/tasks.js';
 import { clientDashboardRoutes } from './routes/client/dashboard.js';
 import { clientAnalyticsRoutes } from './routes/client/analytics.js';
@@ -71,6 +72,7 @@ import { pmContentMapRoutes } from './routes/pm/contentMap.js';
 import { pmDigestRoutes } from './routes/pm/digest.js';
 import { pmClientDashboardRoutes } from './routes/pm/clientDashboard.js';
 import { wpWebhookRoutes } from './routes/webhooks.js';
+import { emdashWebhookRoutes } from './routes/webhooks/emdash.js';
 import { realtimeRoutes } from './routes/realtime.js';
 import { toolRoutes } from './routes/tool.js';
 import omniSearchRoutes from './routes/omniSearch/index.js';
@@ -84,6 +86,7 @@ import cron from 'node-cron';
 import { syncAllProjects } from './lib/wpSync.js';
 import { runScheduledAeoSweep } from './lib/aeoRunner.js';
 import { startPipelineSyncInterval } from './lib/pipelineSync.js';
+import { startEmdashSyncInterval, syncAllEmdashProjects } from './lib/emdashSync.js';
 import { prisma } from './lib/prisma.js';
 import { sendEmail, smtpConfigured } from './lib/mailer.js';
 import { initGscClient } from './lib/gscClient.js';
@@ -203,6 +206,7 @@ app.register(adminAiUsageRoutes, { prefix: '/api/admin' });
 app.register(adminIntegrationsRoutes, { prefix: '/api/admin' });
 app.register(adminAnalyticsRoutes, { prefix: '/api/admin' });
 app.register(projectRoutes, { prefix: '/api/projects' });
+app.register(projectCmsRoutes, { prefix: '/api/projects' });
 app.register(taskRoutes, { prefix: '/api/tasks' });
 app.register(clientDashboardRoutes, { prefix: '/api/client' });
 app.register(clientAnalyticsRoutes, { prefix: '/api/client' });
@@ -247,6 +251,8 @@ app.register(workCycleRoutes, { prefix: '/api/work-cycles' });
 app.register(publicIssuesRoutes, { prefix: '/api/public' });
 app.register(publicKnowledgeInterviewRoutes, { prefix: '/api/public' });
 app.register(wpWebhookRoutes, { prefix: '/api/webhooks' });
+// EmDash bridge (contract agency-os-bridge/v1): HMAC-signed site → OS calls, raw-body parser scoped to this plugin.
+app.register(emdashWebhookRoutes, { prefix: '/api/webhooks/emdash' });
 app.register(realtimeRoutes, { prefix: '/api/realtime' });
 app.register(toolRoutes, { prefix: '/api/tool' });
 // OmniSearch is a large, self-contained sub-app kept hidden by default to reduce
@@ -288,6 +294,15 @@ try {
     } catch (err) {
       app.log.error({ err }, 'Daily WP page sync failed');
     }
+    // EmDash inventories: leader only (one PM2 instance), see backend.md §6.
+    if (isLeader()) {
+      try {
+        const emdash = await syncAllEmdashProjects();
+        if (emdash.length) app.log.info({ results: emdash }, 'Daily EmDash inventory sync complete');
+      } catch (err) {
+        app.log.error({ err }, 'Daily EmDash inventory sync failed');
+      }
+    }
   });
 
   // AEO automated sweep — runs daily at 04:00 UTC
@@ -303,6 +318,8 @@ try {
 
   // Pipeline sync — configurable interval from .env
   startPipelineSyncInterval(app.log);
+  // EmDash pipeline pull + events-replay + connection-lost check (leader only).
+  startEmdashSyncInterval(app.log);
 
   // Scheduled sheet → OS task sync (keeps task status/comments fresh for the
   // current monthly session). Opt-in via TASK_SYNC_ENABLED=true.

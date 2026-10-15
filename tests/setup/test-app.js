@@ -11,6 +11,7 @@ import { requirePM } from '../../src/lib/requirePM.js';
 import { authRoutes } from '../../src/routes/auth.js';
 import { userRoutes } from '../../src/routes/users.js';
 import { projectRoutes } from '../../src/routes/projects.js';
+import { projectCmsRoutes } from '../../src/routes/projectCms.js';
 import { taskRoutes } from '../../src/routes/tasks.js';
 
 import { adminDashboardRoutes } from '../../src/routes/admin/dashboard.js';
@@ -92,6 +93,7 @@ export async function buildApp() {
   app.register(adminBacklinkRoutes, { prefix: '/api/admin' });
 
   app.register(projectRoutes, { prefix: '/api/projects' });
+  app.register(projectCmsRoutes, { prefix: '/api/projects' });
   app.register(taskRoutes, { prefix: '/api/tasks' });
 
   app.register(clientDashboardRoutes, { prefix: '/api/client' });

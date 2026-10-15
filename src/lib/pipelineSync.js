@@ -5,15 +5,9 @@ import {
 } from './pipelineFormat.js';
 import { mirrorPipelineToMaps } from './contentMapSync.js';
 import { hasWpPostStatus, isOrphanWpPostStatus, listTombstonedPipelineIds } from './pipelineReviewGuard.js';
-
-/** Build WP agent headers. */
-function wpHeaders(apiKey) {
-  return {
-    'X-LWA-API-Key': apiKey,
-    Accept: 'application/json',
-    'User-Agent': 'Localwaves-AgencyOS/1.0 (+https://localwaves; pipeline sync)',
-  };
-}
+// WP fetch (headers, URL, timeout) moved to lib/siteAdapters/wordpress.js (EmDash bridge O2).
+import { wpFetchPipelinePage } from './siteAdapters/wordpress.js';
+import { syncEmdashPipelines } from './emdashSync.js';
 
 /**
  * Sync pipeline data from WP sites into local WpContentReview + WpContentReviewEvent tables.
@@ -22,8 +16,20 @@ function wpHeaders(apiKey) {
  * Returns { synced: number, errors: number }
  */
 export async function syncPipelineFromWp({ projectId } = {}) {
+  // EmDash project (refresh / client read of one project): pull through the EmDash adapter.
+  // The full sweep below stays WordPress-only; EmDash has its own leader-only interval
+  // (lib/emdashSync.js startEmdashSyncInterval).
+  if (projectId) {
+    const target = await prisma.project.findUnique({ where: { id: projectId }, select: { cmsType: true } });
+    if (target?.cmsType === 'EMDASH') {
+      const r = await syncEmdashPipelines({ projectId, interactive: true });
+      return { synced: r.synced, errors: r.errors };
+    }
+  }
+
   const projects = await prisma.project.findMany({
     where: {
+      cmsType: 'WORDPRESS',
       wpUrl: { not: null },
       wpApiKey: { not: null },
       ...(projectId ? { id: projectId } : {}),
@@ -44,11 +50,7 @@ export async function syncPipelineFromWp({ projectId } = {}) {
       let page = 1;
       let totalPages = 1;
       while (page <= totalPages && page <= 40) {
-        const url = `${baseUrl}/wp-json/lwa/v1/pipeline?page=${page}&per_page=100`;
-        const res = await fetch(url, {
-          headers: wpHeaders(project.wpApiKey),
-          signal: AbortSignal.timeout(15000),
-        });
+        const res = await wpFetchPipelinePage({ baseUrl, apiKey: project.wpApiKey, page });
         if (!res.ok) {
           errors++;
           return;
