@@ -1175,7 +1175,7 @@
         "contractRevision": {
           "type": "string",
           "pattern": "^1\\.\\d+\\.\\d+$",
-          "description": "v1.0.1: errata level the sender implements (informational; X-AOS-Contract stays 1)"
+          "description": "v1.0.1+: errata level the sender implements (informational; X-AOS-Contract stays 1)"
         }
       },
       "required": [
@@ -1387,6 +1387,7 @@
             "SLUG_MISMATCH",
             "SLUG_CHANGE_FORBIDDEN",
             "ALREADY_EXISTS",
+            "COUNTER_REGRESSION",
             "PAYLOAD_TOO_LARGE",
             "UNKNOWN_BLOCK",
             "SCHEMA_INVALID",

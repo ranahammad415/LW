@@ -1,7 +1,7 @@
 # EmDash bridge contract fixtures (read-only copy)
 
 Copied verbatim from the framework repo `oasis-astro`, package `packages/os-bridge-contract`,
-at commit `0bb1564` ("Contract errata v1.0.1: resolve site and OS team issues"; contract v1, errata v1.0.1):
+at commit `b49811a` ("Contract clarification v1.0.2: counters, redirects, 429, in-flight events"; contract v1, errata v1.0.2):
 
 | Folder | Source |
 | --- | --- |
