@@ -73,6 +73,7 @@ export async function clientProjectsRoutes(app) {
           name: p.name,
           projectType: p.projectType,
           status: p.status,
+          cmsType: p.cmsType || 'WORDPRESS',
           wpThemeName: p.wpThemeName,
           wpThemeVersion: p.wpThemeVersion,
           wpPlugins: p.wpPlugins,
@@ -461,14 +462,16 @@ export async function clientProjectsRoutes(app) {
 
       const project = await prisma.project.findUnique({
         where: { id: projectId },
-        select: { id: true, clientId: true },
+        select: { id: true, clientId: true, cmsType: true },
       });
       if (!project || !clientIds.includes(project.clientId)) {
         return reply.status(404).send({ message: 'Project not found' });
       }
+      const cmsType = project.cmsType || 'WORDPRESS';
 
       const pages = await prisma.wpPage.findMany({
-        where: { projectId },
+        // EmDash keeps removed entries as `deleted` rows (history); clients do not see them. WordPress unchanged.
+        where: { projectId, ...(cmsType === 'EMDASH' ? { status: { not: 'deleted' } } : {}) },
         orderBy: { title: 'asc' },
         select: {
           id: true,
@@ -483,7 +486,7 @@ export async function clientProjectsRoutes(app) {
         },
       });
 
-      return reply.send(pages);
+      return reply.send(pages.map((p) => ({ ...p, cmsType })));
     }
   );
 

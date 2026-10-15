@@ -336,6 +336,7 @@ describe('Review → WpContentReview normalisation (both adapters)', () => {
       url: 'https://oasispoolspas.com/spa-services/hot-tub-repair/',
       seoTitle: 'Hot Tub Repair in Waukesha & Milwaukee | Oasis Pool and Spa',
       contentHash: entry.live.contentHash,
+      cmsPublishedAt: new Date(entry.publishedAt),
       template: null,
       cmsEntryId: entry.entryId,
       cmsCollection: 'pages',

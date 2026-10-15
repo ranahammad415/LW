@@ -490,6 +490,8 @@ export function entryToPageData(entry, siteUrl) {
       contentHash: String((live ? live.contentHash : e.contentHash) || e.contentHash || '').slice(0, 64) || String(Date.now()),
       // Ordering key for content.* events: the entry's last change (draft included), not live.updatedAt.
       modifiedAt: parseDate(e.updatedAt),
+      // Entry-level publish time (never a draft value); null for never-published entries.
+      cmsPublishedAt: parseDate(e.publishedAt),
       cmsHasPendingDraft: pending,
       cmsDraftTitle: pending ? String(e.title || '').slice(0, 500) : null,
       cmsWordCount: wordCount,

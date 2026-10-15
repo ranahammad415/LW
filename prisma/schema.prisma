@@ -1093,6 +1093,8 @@ model WpPage {
   /// EmDash: outline { headings, internalLinks, externalLinkCount, imageCount } (v1.0.6) for the content map.
   cmsOutline         Json?
   cmsOutlineHash     String?  @db.VarChar(64)
+  /// EmDash: when the entry was (last) published (entry `publishedAt`; `live` carries no publishedAt in v1.0.6).
+  cmsPublishedAt     DateTime?
 
   project            Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
   task               Task?               @relation(fields: [taskId], references: [id], onDelete: SetNull)

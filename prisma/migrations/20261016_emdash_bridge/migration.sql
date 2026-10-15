@@ -328,6 +328,13 @@ SET @sql := IF(@col = 0,
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'wppage' AND COLUMN_NAME = 'cmsPublishedAt');
+SET @sql := IF(@col = 0,
+  'ALTER TABLE `wppage` ADD COLUMN `cmsPublishedAt` DATETIME(3) NULL',
+  'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'project' AND COLUMN_NAME = 'cmsDisconnectedAt');
 SET @sql := IF(@col = 0,
   'ALTER TABLE `project` ADD COLUMN `cmsDisconnectedAt` DATETIME(3) NULL',
