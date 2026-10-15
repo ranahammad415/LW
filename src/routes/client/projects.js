@@ -11,6 +11,12 @@ import { resolveCycle } from '../../lib/workCycle.js';
 import { syncClientProjectsFromWp } from '../../lib/pipelineSync.js';
 import { emdashReviewExtras } from '../../lib/siteAdapters/clientReview.js';
 
+/** Same rule as requireClientWriter: every linked client role is VIEWER → read-only. */
+function isViewerOnly(request) {
+  const roles = request.clientUserRoles || [];
+  return roles.length > 0 && roles.every((cu) => cu.role === 'VIEWER');
+}
+
 async function buildCycleWhere(query = {}) {
   if (query.cycle === 'all') return {};
   const cycle = await resolveCycle({
@@ -925,7 +931,7 @@ export async function clientProjectsRoutes(app) {
             .map((e) => formatHistoryEvent(e, CLIENT_STATUS_LABELS)),
           // EmDash v1.1.0 (§21): decision channel, suggestion counts, who decided. WordPress rows unchanged.
           ...(project.cmsType === 'EMDASH' ? { cmsType: 'EMDASH' } : {}),
-          ...emdashReviewExtras(r, project),
+          ...emdashReviewExtras(r, project, { clientCanDecide: !isViewerOnly(request) }),
         }));
 
         return reply.send(result);
@@ -1032,7 +1038,7 @@ export async function clientProjectsRoutes(app) {
             .filter((e) => e.eventType !== 'pipeline_resend_notification')
             .map((e) => formatHistoryEvent(e, CLIENT_STATUS_LABELS)),
           ...(r.project?.cmsType === 'EMDASH' ? { cmsType: 'EMDASH' } : {}),
-          ...emdashReviewExtras(r, r.project),
+          ...emdashReviewExtras(r, r.project, { clientCanDecide: !isViewerOnly(request) }),
         }));
 
         return reply.send(result);

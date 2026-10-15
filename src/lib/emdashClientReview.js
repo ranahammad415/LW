@@ -129,7 +129,10 @@ export async function submitEmdashClientDecision({ projectId, rowId, user, input
         if (err.code === 'SITE_MISMATCH') await closeForeignReview(projectId, row.wpPipelineId).catch(() => {});
         const friendly = clientReviewErrorMessage(err);
         if (friendly) err.message = friendly;
-        if (err.code === 'NOT_IMPLEMENTED') err.details = { ...(err.details || {}), fallback: 'review-link' };
+        if (err.code === 'NOT_IMPLEMENTED') {
+          err.details = { ...(err.details || {}), fallback: 'review-link' };
+          await rememberNoClientReview(projectId).catch(() => {});
+        }
       }
       throw err;
     }
@@ -158,6 +161,17 @@ export async function submitEmdashClientDecision({ projectId, rowId, user, input
   } finally {
     inFlight.delete(row.id);
   }
+}
+
+/**
+ * The site answered 501 for a v1.1.0 route: hide the in-app review until the next heartbeat / site-info, which
+ * rewrites cmsCapabilities from what the site advertises.
+ */
+async function rememberNoClientReview(projectId) {
+  const p = await prisma.project.findUnique({ where: { id: projectId }, select: { cmsCapabilities: true } });
+  const caps = p?.cmsCapabilities && typeof p.cmsCapabilities === 'object' ? p.cmsCapabilities : {};
+  if (caps.clientReviewFromOs === false) return;
+  await prisma.project.update({ where: { id: projectId }, data: { cmsCapabilities: { ...caps, clientReviewFromOs: false } } });
 }
 
 /** Heal the suggestion mirror from the site (`pipeline-suggestions`, ≤ 3 pages of 100). */

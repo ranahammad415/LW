@@ -201,6 +201,20 @@ export function suggestionEventMessage(ev, quote) {
   return `${who} ${verb} a client suggestion${q}${note}`.slice(0, 500);
 }
 
+/** Plain-text lines of a repeater value: strings in document order, nested objects/arrays to depth 4. */
+export function textLines(v, depth = 0) {
+  if (typeof v === 'string') return v.trim() ? [v] : [];
+  if (depth >= 4 || v == null || typeof v !== 'object') return [];
+  const out = [];
+  for (const x of Array.isArray(v) ? v : Object.values(v)) {
+    for (const line of textLines(x, depth + 1)) {
+      out.push(line);
+      if (out.length >= 50) return out;
+    }
+  }
+  return out;
+}
+
 /**
  * entry-get { includeFields } → what a client may see in the OS portal: text only. No entry/revision ids, no edit
  * URL, no block keys, no preview links.
@@ -212,10 +226,12 @@ export function clientContentView(entry) {
   const blocks = (Array.isArray(e.blocks) ? e.blocks : []).slice(0, 200).map((b) => {
     const fields = {};
     for (const [k, v] of Object.entries(b?.fields && typeof b.fields === 'object' ? b.fields : {}).slice(0, 50)) {
-      if (typeof v === 'string' && v.trim()) fields[String(k).slice(0, 64)] = text(v, 20_000);
-      else if (Array.isArray(v)) {
-        const items = v.filter((x) => typeof x === 'string' && x.trim()).slice(0, 100).map((x) => text(x, 5_000));
-        if (items.length) fields[String(k).slice(0, 64)] = items;
+      if (typeof v === 'string') {
+        if (v.trim()) fields[String(k).slice(0, 64)] = text(v, 20_000);
+      } else if (Array.isArray(v) || (v && typeof v === 'object')) {
+        // Repeaters (e.g. faq.items[{question, answer}], buttons, links): one plain-text entry per item.
+        const items = (Array.isArray(v) ? v : [v]).slice(0, 100).map((x) => textLines(x).join('\n')).filter(Boolean);
+        if (items.length) fields[String(k).slice(0, 64)] = items.map((x) => text(x, 5_000));
       }
     }
     return { type: s(b?.type, 64) || 'block', fields };
@@ -239,12 +255,14 @@ export function clientContentView(entry) {
  * Extra review fields for EmDash rows (PM and client lists): decision channel, suggestion counts, who decided, and
  * whether the OS may take the client decision. Empty for WordPress rows (their shape stays unchanged).
  */
-export function emdashReviewExtras(r, project) {
+export function emdashReviewExtras(r, project, { clientCanDecide = true } = {}) {
   if (project?.cmsType !== 'EMDASH') return {};
   const caps = project.cmsCapabilities && typeof project.cmsCapabilities === 'object' ? project.cmsCapabilities : {};
   const actor = r.cmsClientActor && typeof r.cmsClientActor === 'object' ? r.cmsClientActor : null;
   return {
     clientReviewFromOs: caps.clientReviewFromOs === true,
+    // O3: VIEWER client users (requireClientWriter would refuse) get a read-only view.
+    ...(clientCanDecide ? {} : { canDecide: false }),
     clientDecisionSource: r.cmsClientDecisionSource || null,
     suggestionCounts: r.cmsSuggestionCounts || null,
     clientDecidedBy: actor ? { name: actor.name || null, onBehalfOfClient: !!actor.onBehalfOfClient, source: actor.source || null } : null,

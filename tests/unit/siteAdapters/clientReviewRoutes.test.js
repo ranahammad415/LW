@@ -170,6 +170,9 @@ describe('client portal decision', () => {
     const r2 = await decide({ decision: 'approved' });
     expect(r2.statusCode).toBe(409);
     expect(r2.json()).toMatchObject({ code: 'NOT_IMPLEMENTED', fallback: 'review-link' });
+    // e2e P2 O5: the fallback is remembered until the next heartbeat rewrites the capabilities.
+    const capUpd = db.calls.find((c) => c.key === 'project.update');
+    expect(capUpd.args.data.cmsCapabilities).toMatchObject({ clientReviewFromOs: false });
 
     site.clientReview = async () => {
       throw new CmsBridgeError({ status: 422, code: 'SUGGESTION_LIMIT', message: 'too many' });

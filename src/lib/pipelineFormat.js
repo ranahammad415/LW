@@ -39,6 +39,10 @@ export const EVENT_LABELS = {
   pipeline_draft_updated: 'Draft Updated',
   pipeline_scheduled: 'Scheduled',
   pipeline_unscheduled: 'Unscheduled',
+  // EmDash v1.1.0: editor decisions on client suggestions (timeline only).
+  'review.suggestion_accepted': 'Suggestion accepted',
+  'review.suggestion_rejected': 'Suggestion not used',
+  'review.suggestion_applied': 'Suggestion applied to draft',
 };
 
 /** Client-facing labels (slightly different for pending_client_review). */

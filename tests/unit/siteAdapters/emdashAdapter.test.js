@@ -142,6 +142,21 @@ describe('siteRequest: signed POST to /_emdash/api/plugins/agency-os-bridge/<rou
     expect(sleep).toHaveBeenCalledTimes(2);
   });
 
+  it('e2e P2 O4: 501 NOT_IMPLEMENTED (contract or not) and contract retryable:false 5xx are never retried; 429 and retryable 5xx are', async () => {
+    const r501 = vi.fn(async () => jsonResponse({ ok: false, error: { code: 'NOT_IMPLEMENTED', message: 'off', retryable: false } }, 501));
+    await expect(siteRequest(conn, 'pipeline-client-review', {}, { fetchImpl: r501, sleep: noSleep })).rejects.toMatchObject({ code: 'NOT_IMPLEMENTED', retryable: false });
+    expect(r501).toHaveBeenCalledTimes(1);
+    const bare501 = vi.fn(async () => new Response('Not Implemented', { status: 501 }));
+    await expect(siteRequest(conn, 'pipeline-suggestions', {}, { fetchImpl: bare501, sleep: noSleep })).rejects.toMatchObject({ retryable: false });
+    expect(bare501).toHaveBeenCalledTimes(1);
+    const final500 = vi.fn(async () => jsonResponse({ ok: false, error: { code: 'INTERNAL', message: 'x', retryable: false } }, 500));
+    await expect(siteRequest(conn, 'health', {}, { fetchImpl: final500, sleep: noSleep })).rejects.toMatchObject({ code: 'INTERNAL' });
+    expect(final500).toHaveBeenCalledTimes(1);
+    const busy = vi.fn(async (_u, _i) => (busy.mock.calls.length === 1 ? jsonResponse({ ok: false, error: { code: 'RATE_LIMITED', message: 'slow', retryable: true } }, 429, { 'retry-after': '0' }) : jsonResponse(ex('health.response'))));
+    await siteRequest(conn, 'health', {}, { fetchImpl: busy, sleep: noSleep });
+    expect(busy).toHaveBeenCalledTimes(2);
+  });
+
   it('treats a non-contract 4xx host error as INTERNAL and final (v1.0.1 §9)', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ error: { code: 'INVALID_PLUGIN_REQUEST', message: 'too big' } }, 413));
     await expect(siteRequest(conn, 'inventory', {}, { fetchImpl, sleep: noSleep })).rejects.toMatchObject({

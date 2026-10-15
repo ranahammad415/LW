@@ -33,7 +33,7 @@ import {
 } from '../../lib/siteAdapters/signing.js';
 import { CmsKeyConfigError } from '../../lib/cmsKeyCrypto.js';
 import { credentialToRings, normalizeReviewEvent } from '../../lib/siteAdapters/emdash.js';
-import { suggestionEventMessage } from '../../lib/siteAdapters/clientReview.js';
+import { suggestionEventMessage, clientActorFromEvent } from '../../lib/siteAdapters/clientReview.js';
 
 export const OS_VERSION = '2026.10.16';
 
@@ -560,7 +560,8 @@ export async function processEventBatch({ store, project, events, log }) {
             outcome = 'stale';
           } else {
             let message = ev.message;
-            if (!message && ev.type.startsWith('review.suggestion_')) {
+            // Suggestion lines are always the OS wording (who + which quote), not the site's generic message.
+            if (ev.type.startsWith('review.suggestion_')) {
               const quote = await store.suggestionQuote?.(project.id, ev.suggestion?.suggestionId).catch(() => null);
               message = suggestionEventMessage(ev, quote);
             }
@@ -570,6 +571,7 @@ export async function processEventBatch({ store, project, events, log }) {
               message,
               override: ev.override === true,
               snapshotText: ev.snapshotText,
+              clientActor: clientActorFromEvent(ev.actor),
             });
             const applied = await store.applyPipelineEvent(project, normalized, log);
             if (applied?.skipped === 'stale_seq') {

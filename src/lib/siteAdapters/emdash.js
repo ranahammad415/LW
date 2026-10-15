@@ -144,7 +144,7 @@ export function errorFromResponse(status, json) {
       message: pluginMissing
         ? 'The EmDash site does not answer the Agency OS bridge route: the agency-os-bridge plugin is missing or disabled.'
         : `The EmDash site returned HTTP ${status}${e?.code ? ` (${String(e.code).slice(0, 60)})` : ''}.`,
-      retryable: status >= 500 || status === 429,
+      retryable: (status >= 500 && status !== 501) || status === 429,
       details: { nonContract: true, ...(pluginMissing ? { pluginMissing: true } : {}), ...(e?.code ? { hostCode: String(e.code).slice(0, 60) } : {}) },
     });
   }
@@ -238,7 +238,9 @@ export async function siteRequest(conn, route, body = {}, opts = {}) {
       key = conn.inbound.prev;
       continue;
     }
-    const retryable = err.retryable || (res && (res.status >= 500 || res.status === 429));
+    // The error's own retryable flag decides (contract body / ERROR_CODES; non-contract: 5xx except 501, and 429).
+    // 501 NOT_IMPLEMENTED (capability off) and every other 4xx fail at once, so the caller can fall back.
+    const retryable = !!err.retryable;
     if (retryable && attempt < retryDelays.length) {
       const wait = (res && retryAfterMs(res)) ?? retryDelays[attempt];
       attempt += 1;
@@ -334,7 +336,7 @@ function postTypeFor(collection) {
  * Contract `Review` (+ envelope bits) → the normalized review event consumed by
  * lib/reviewEvents.js applyReviewEvent (same keys as wordpress.normalizePipelineWebhook).
  */
-export function normalizeReviewEvent(review, { eventType, seq, message = null, override = false, snapshotText = null } = {}) {
+export function normalizeReviewEvent(review, { eventType, seq, message = null, override = false, snapshotText = null, clientActor = null } = {}) {
   const r = review || {};
   const reviewNo = int(r.reviewNo);
   const entryNo = int(r.entryNo) || 0;
@@ -386,6 +388,8 @@ export function normalizeReviewEvent(review, { eventType, seq, message = null, o
       rev: Number.isInteger(r.rev) ? r.rev : null,
       clientDecisionSource: r.clientDecisionSource === 'os' || r.clientDecisionSource === 'review-link' ? r.clientDecisionSource : null,
       suggestionCounts: suggestionCounts(r.suggestionCounts),
+      // v1.1.0: who made a client decision (names only), for notification wording.
+      clientActor: clientActor && typeof clientActor === 'object' ? clientActor : null,
     },
   };
 }

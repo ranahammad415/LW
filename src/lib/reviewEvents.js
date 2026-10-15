@@ -34,6 +34,21 @@ import {
  * @param {object} [p.log]  Fastify logger (content-map mirror)
  * @returns {Promise<{skipped?: string, review?: object, testResponse?: object}>}
  */
+/**
+ * EmDash (v1.1.0) notification wording through the existing {{postType}} slot (templates unchanged): a
+ * "minor changes, then ready to publish" decision and an OWNER deciding for the client are named. WordPress unchanged.
+ */
+export function emdashPostTypeLabel(n, postType, eventType) {
+  if (n?.source !== 'EMDASH') return postType;
+  const isClientDecision = eventType === 'pipeline_client_changes_requested' || eventType === 'pipeline_client_approved';
+  if (!isClientDecision) return postType;
+  const parts = [postType];
+  if (eventType === 'pipeline_client_changes_requested' && n.clientDecision === 'changes_publish') parts.push('minor changes, then ready to publish');
+  const a = n.cms?.clientActor;
+  if (a?.onBehalfOfClient && a.name) parts.push(`decided by ${a.name} for the client`);
+  return parts.filter(Boolean).join(' · ');
+}
+
 export async function applyReviewEvent({ project, event: n, log }) {
   const isEmdash = n.source === 'EMDASH';
   const {
@@ -412,7 +427,7 @@ async function notifyForReviewEvent({ project, n, review, alreadyPublished, port
 
   // Common variables for all pipeline notifications
   const nowFormatted = new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
-  const commonVars = { postTitle, contentTitle: postTitle, projectName: project.name || '', postType, submittedBy: submittedByName || 'Team member', submittedAt: nowFormatted, aiSummary: review.aiSummary || '' };
+  const commonVars = { postTitle, contentTitle: postTitle, projectName: project.name || '', postType: emdashPostTypeLabel(n, postType, eventType), submittedBy: submittedByName || 'Team member', submittedAt: nowFormatted, aiSummary: review.aiSummary || '' };
 
   if (eventType === 'pipeline_submitted' || eventType === 'pipeline_resubmitted') {
     // PM(s) + Owners receive the "submitted for review" notification.

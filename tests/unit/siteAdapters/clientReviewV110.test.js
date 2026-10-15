@@ -254,3 +254,49 @@ describe('events: review.suggestion_* are review-ordered events (§21.3)', () =>
     ]);
   });
 });
+
+describe('Stage 1 e2e fixes (oasis-astro e6fa491)', () => {
+  it('O1: repeater text (FAQ question/answer, link labels) reaches the client view as plain text', () => {
+    const view = clientContentView(ex('entry-get.response--fields').entry);
+    const faq = view.blocks.find((b) => b.type === 'faq');
+    expect(faq.fields.items).toEqual(['Why is my hot tub not heating?\nMost often a failed heater element, a tripped high-limit switch or low flow.']);
+    expect(view.blocks.find((b) => b.type === 'related_links').fields.links[0]).toContain('Spa services');
+    const deep = clientContentView({ blocks: [{ type: 'x', fields: { a: [{ b: [{ c: { d: { e: 'too deep' } } }], t: '<b>kept as text</b>' }] } }] });
+    expect(deep.blocks[0].fields.a).toEqual(['<b>kept as text</b>']);
+  });
+
+  it('O3: VIEWER-only client users get canDecide:false', () => {
+    const p = { cmsType: 'EMDASH', cmsCapabilities: { clientReviewFromOs: true } };
+    expect(emdashReviewExtras({ status: 'pending_client_review' }, p, { clientCanDecide: false })).toMatchObject({ canDecide: false });
+    expect(emdashReviewExtras({ status: 'pending_client_review' }, p)).not.toHaveProperty('canDecide');
+  });
+
+  it('O8: notification wording names "minor changes" and the OWNER acting for the client (EmDash only)', async () => {
+    const { emdashPostTypeLabel } = await import('../../../src/lib/reviewEvents.js');
+    const n = { source: 'EMDASH', clientDecision: 'changes_publish', cms: { clientActor: { name: 'Agency Owner', onBehalfOfClient: true } } };
+    expect(emdashPostTypeLabel(n, 'Page', 'pipeline_client_changes_requested')).toBe(
+      'Page · minor changes, then ready to publish · decided by Agency Owner for the client'
+    );
+    expect(emdashPostTypeLabel({ ...n, clientDecision: 'approved' }, 'Page', 'pipeline_client_approved')).toBe('Page · decided by Agency Owner for the client');
+    expect(emdashPostTypeLabel({ ...n, source: 'WORDPRESS' }, 'Page', 'pipeline_client_changes_requested')).toBe('Page');
+    expect(emdashPostTypeLabel(n, 'Page', 'pipeline_pm_approved')).toBe('Page');
+  });
+
+  it('O7: suggestion timeline lines are the OS wording even when the site sends a message', async () => {
+    const batch = ex('events.request--suggestions');
+    const applied = [];
+    const store = {
+      claimReceipt: async () => 'new',
+      finalizeReceipt: async () => {},
+      releaseReceipt: async () => {},
+      isTombstoned: async () => false,
+      getReviewSeq: async () => 5,
+      applyPipelineEvent: async (_p, n) => (applied.push(n), {}),
+      applyReviewExtras: async () => {},
+      suggestionQuote: async () => 'a failed heater element',
+    };
+    const ev = { ...batch.events[1], message: 'Suggestion applied to the draft (not published)' };
+    await processEventBatch({ store, project: { id: 'p1', cmsSiteId: 'site_9f3c2a7b41d0' }, events: [ev] });
+    expect(applied[0].logMessage).toBe('Sam Worker applied a client suggestion: "a failed heater element"');
+  });
+});
