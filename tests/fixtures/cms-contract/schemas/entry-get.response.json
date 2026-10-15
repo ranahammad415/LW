@@ -114,7 +114,17 @@
         "variant",
         "plainText",
         "blocks"
-      ]
+      ],
+      "not": {
+        "properties": {
+          "outlineOmitted": {
+            "const": true
+          }
+        },
+        "required": [
+          "outlineOmitted"
+        ]
+      }
     }
   },
   "required": [

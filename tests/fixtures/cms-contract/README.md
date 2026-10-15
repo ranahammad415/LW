@@ -1,13 +1,13 @@
 # EmDash bridge contract fixtures (read-only copy)
 
 Copied verbatim from the framework repo `oasis-astro`, package `packages/os-bridge-contract`,
-at commit `4a61307` ("Contract v1.0.5: scope reviews by siteId"; contract v1, errata v1.0.5):
+at commit `f2c7b6f` ("Contract v1.0.6 addendum: content outline on entry summaries"; contract v1, errata v1.0.6; the `live` object came in 82476f8):
 
 | Folder | Source |
 | --- | --- |
 | `schemas/` | `packages/os-bridge-contract/schemas/*.json` (JSON Schema 2020-12) |
 | `examples/` | `packages/os-bridge-contract/examples/*.json` (one valid payload per schema) |
-| `vectors/` | `packages/os-bridge-contract/vectors/signature-vectors.json` (HMAC test vectors; v1.0.3 adds the counterFloor pairing response, v1.0.4 the disconnect handshake) |
+| `vectors/` | `packages/os-bridge-contract/vectors/signature-vectors.json` (HMAC test vectors; v1.0.3 adds the counterFloor pairing response, v1.0.4 the disconnect handshake; v1.0.6 adds the `outline` hash vector) |
 
 The contract spec itself is `packages/os-bridge-contract/contract.md` in that repo; the OS-side summary
 is `docs/ledger/emdash-bridge.md`. Keys in these files are public test values (vector keys are

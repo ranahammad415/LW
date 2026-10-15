@@ -1,0 +1,42 @@
+{
+  "ok": true,
+  "items": [
+    {
+      "entryId": "01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+      "entryNo": 118,
+      "collection": "pages",
+      "slug": "hot-tub-repair",
+      "path": "/spa-services/hot-tub-repair/",
+      "title": "Hot Tub Repair for Most Brands",
+      "status": "published",
+      "hasPendingDraft": true,
+      "draftRevisionId": "01JAC6ZK3D4F5G6H7J8K9M0N1P",
+      "liveRevisionId": "01JA9Y1B2C3D4E5F6G7H8J9K0M",
+      "seo": {
+        "title": "Hot Tub Repair in Waukesha & Milwaukee | Oasis Pool and Spa",
+        "description": "Hot tub not heating? Oasis repairs most spa brands across Waukesha and Milwaukee.",
+        "canonical": null,
+        "noIndex": false
+      },
+      "contentHash": "9b1f0c2d3e4a5b6c7d8e9f00112233445566778899aabbccddeeff0011223344",
+      "wordCount": 812,
+      "excerpt": "Oasis diagnoses and repairs most hot tub brands.",
+      "updatedAt": "2026-10-15T12:01:00Z",
+      "publishedAt": "2026-06-02T14:00:00Z",
+      "scheduledAt": null,
+      "editUrl": "https://oasispoolspas.com/_emdash/admin/content/pages/01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+      "template": null,
+      "outlineHash": "fdf9c0ae7d0c95ee25b6921c6d0c988a9893787520d142903b1f1637f7cf672b",
+      "outlineOmitted": true,
+      "live": {
+        "title": "Hot Tub Repair",
+        "contentHash": "5c2e7a9b1d3f4e6a8b0c2d4e6f8a0b1c3d5e7f9a1b3c5d7e9f0a2b4c6d8e0f1a",
+        "wordCount": 764,
+        "excerpt": "Oasis repairs most hot tub brands.",
+        "updatedAt": "2026-06-02T14:00:00Z",
+        "outlineHash": "f48ca44ed79081885d68ff09ae0045275dd09d197566d24f89d04d143914f4b9"
+      }
+    }
+  ],
+  "next": "eyJjIjoiMDFKQUI0TTlaUTdYM0syVjhONVQ2UjFXMEMifQ"
+}

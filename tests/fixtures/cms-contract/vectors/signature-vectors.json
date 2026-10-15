@@ -220,5 +220,34 @@
         "x-aos-response-signature": "v1=8f0db6d3903300d7ccd92afe373d9d7f1ad902ea6ffa980042733605a22f0eba"
       }
     }
+  ],
+  "outline": [
+    {
+      "name": "outlineHash (v1.0.6): sha256hex(UTF-8 canonical JSON)",
+      "outline": {
+        "headings": [
+          {
+            "level": 1,
+            "text": "Hot Tub Repair for Most Brands"
+          },
+          {
+            "level": 2,
+            "text": "Why is my hot tub not heating?"
+          },
+          {
+            "level": 2,
+            "text": "Café-style \"quiet\" pumps"
+          }
+        ],
+        "internalLinks": [
+          "/spa-services/",
+          "/contact/"
+        ],
+        "externalLinkCount": 1,
+        "imageCount": 2
+      },
+      "canonical": "{\"headings\":[{\"level\":1,\"text\":\"Hot Tub Repair for Most Brands\"},{\"level\":2,\"text\":\"Why is my hot tub not heating?\"},{\"level\":2,\"text\":\"Café-style \\\"quiet\\\" pumps\"}],\"internalLinks\":[\"/spa-services/\",\"/contact/\"],\"externalLinkCount\":1,\"imageCount\":2}",
+      "outlineHash": "67fe0630f9959e3ad61d4e65b844ee42be9a1bec6f097894008760af8f4dec2e"
+    }
   ]
 }

@@ -288,6 +288,65 @@
       },
       "required": []
     },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "outline": {
+      "type": "object",
+      "properties": {
+        "headings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "level": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 6
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "level",
+              "text"
+            ]
+          },
+          "maxItems": 20,
+          "description": "Document order"
+        },
+        "internalLinks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^/",
+            "maxLength": 300
+          },
+          "maxItems": 100,
+          "uniqueItems": true,
+          "description": "Site-relative paths, deduplicated, first-seen order"
+        },
+        "externalLinkCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "imageCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "headings",
+        "internalLinks",
+        "externalLinkCount",
+        "imageCount"
+      ],
+      "description": "v1.0.6: content-map data derived from the rendered block content (Portable Text + block fields)"
+    },
     "warning": {
       "type": "object",
       "properties": {
@@ -402,6 +461,60 @@
         "template": {
           "type": "null",
           "description": "Always null on EmDash (WP template/isElementor have no equivalent)"
+        },
+        "outline": {
+          "$ref": "common.json#/$defs/outline"
+        },
+        "outlineHash": {
+          "$ref": "common.json#/$defs/sha256",
+          "description": "v1.0.6: sha256hex of the canonical outline JSON (outline.mjs canonicalOutline)"
+        },
+        "outlineOmitted": {
+          "type": "boolean",
+          "description": "v1.0.6: true when inventory left out outline to stay under ~2 MiB (outlineHash kept); fetch it with entry-get"
+        },
+        "live": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "contentHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "wordCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "excerpt": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 1000
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "updatedAt": {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            "outline": {
+              "$ref": "common.json#/$defs/outline"
+            },
+            "outlineHash": {
+              "$ref": "common.json#/$defs/sha256"
+            }
+          },
+          "required": [
+            "title",
+            "contentHash",
+            "updatedAt"
+          ],
+          "description": "v1.0.6: the LIVE (published) version's own values, present exactly when hasPendingDraft is true. Top-level title/contentHash/wordCount/excerpt/updatedAt are then the pending DRAFT's. seo, slug and path are shared by live and draft (not repeated here)"
         }
       },
       "required": [
@@ -417,6 +530,61 @@
         "liveRevisionId",
         "contentHash",
         "updatedAt"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "hasPendingDraft": {
+                "const": false
+              }
+            },
+            "required": [
+              "hasPendingDraft"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "live"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "outlineOmitted": {
+                "const": true
+              }
+            },
+            "required": [
+              "outlineOmitted"
+            ]
+          },
+          "then": {
+            "required": [
+              "outlineHash"
+            ],
+            "not": {
+              "required": [
+                "outline"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "outline"
+            ]
+          },
+          "then": {
+            "required": [
+              "outlineHash"
+            ]
+          }
+        }
       ]
     },
     "historyItem": {
@@ -1532,6 +1700,60 @@
         "template": {
           "type": "null",
           "description": "Always null on EmDash (WP template/isElementor have no equivalent)"
+        },
+        "outline": {
+          "$ref": "common.json#/$defs/outline"
+        },
+        "outlineHash": {
+          "$ref": "common.json#/$defs/sha256",
+          "description": "v1.0.6: sha256hex of the canonical outline JSON (outline.mjs canonicalOutline)"
+        },
+        "outlineOmitted": {
+          "type": "boolean",
+          "description": "v1.0.6: true when inventory left out outline to stay under ~2 MiB (outlineHash kept); fetch it with entry-get"
+        },
+        "live": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "contentHash": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "wordCount": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "excerpt": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 1000
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "updatedAt": {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            "outline": {
+              "$ref": "common.json#/$defs/outline"
+            },
+            "outlineHash": {
+              "$ref": "common.json#/$defs/sha256"
+            }
+          },
+          "required": [
+            "title",
+            "contentHash",
+            "updatedAt"
+          ],
+          "description": "v1.0.6: the LIVE (published) version's own values, present exactly when hasPendingDraft is true. Top-level title/contentHash/wordCount/excerpt/updatedAt are then the pending DRAFT's. seo, slug and path are shared by live and draft (not repeated here)"
         }
       },
       "required": [
@@ -1539,6 +1761,61 @@
         "entryNo",
         "collection",
         "updatedAt"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "hasPendingDraft": {
+                "const": false
+              }
+            },
+            "required": [
+              "hasPendingDraft"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "live"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "outlineOmitted": {
+                "const": true
+              }
+            },
+            "required": [
+              "outlineOmitted"
+            ]
+          },
+          "then": {
+            "required": [
+              "outlineHash"
+            ],
+            "not": {
+              "required": [
+                "outline"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "outline"
+            ]
+          },
+          "then": {
+            "required": [
+              "outlineHash"
+            ]
+          }
+        }
       ],
       "description": "Reduced entry for content.deleted (v1.0.1): the last summary the site saw; updatedAt = deletion time"
     }
