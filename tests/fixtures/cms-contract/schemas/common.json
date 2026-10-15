@@ -467,6 +467,10 @@
         "reviewId": {
           "$ref": "common.json#/$defs/id"
         },
+        "siteId": {
+          "$ref": "common.json#/$defs/siteId",
+          "description": "v1.0.5: the siteId the review was created under (stamped by the site, never rewritten). The OS ignores a Review whose siteId differs from the project's paired siteId"
+        },
         "reviewNo": {
           "$ref": "common.json#/$defs/surrogateNo"
         },
@@ -1401,6 +1405,7 @@
             "SLUG_CHANGE_FORBIDDEN",
             "ALREADY_EXISTS",
             "COUNTER_REGRESSION",
+            "SITE_MISMATCH",
             "PAYLOAD_TOO_LARGE",
             "UNKNOWN_BLOCK",
             "SCHEMA_INVALID",

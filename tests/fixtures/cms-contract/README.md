@@ -1,7 +1,7 @@
 # EmDash bridge contract fixtures (read-only copy)
 
 Copied verbatim from the framework repo `oasis-astro`, package `packages/os-bridge-contract`,
-at commit `77a7d6a` ("Contract v1.0.4: siteId-scoped events, disconnect, block _version, preview secret"; contract v1, errata v1.0.4):
+at commit `4a61307` ("Contract v1.0.5: scope reviews by siteId"; contract v1, errata v1.0.5):
 
 | Folder | Source |
 | --- | --- |

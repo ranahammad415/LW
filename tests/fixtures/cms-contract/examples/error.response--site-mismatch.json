@@ -1,0 +1,11 @@
+{
+  "ok": false,
+  "error": {
+    "code": "SITE_MISMATCH",
+    "message": "Review 01JAC7Q2HV5M8N3P4R6S9T0W1X belongs to a previous pairing of this site",
+    "retryable": false,
+    "details": {
+      "reviewId": "01JAC7Q2HV5M8N3P4R6S9T0W1X"
+    }
+  }
+}
