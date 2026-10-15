@@ -1,11 +1,32 @@
 {
   "reviewId": "01JAC7Q2HV5M8N3P4R6S9T0W1X",
+  "expectedRound": 1,
+  "expectedRev": 4,
   "decision": "changes_publish",
-  "comment": "Fix the phone number, then publish",
+  "comment": "Two small fixes, then publish.",
+  "suggestions": [
+    {
+      "target": {
+        "field": "body",
+        "blockKey": "faq_b2"
+      },
+      "quote": "Most often a failed heater element, a tripped high-limit switch or low flow.",
+      "proposedText": "Most often a failed heater element, a tripped high-limit switch or low flow. We check all three on the first visit.",
+      "note": "Customers ask about this a lot"
+    },
+    {
+      "target": {
+        "field": "seo.description"
+      },
+      "quote": "across Waukesha and Milwaukee",
+      "proposedText": "in Waukesha and Milwaukee. Call for a quote",
+      "note": null
+    }
+  ],
   "actor": {
     "kind": "human",
-    "osUserId": "3b0d9a1e-6c2f-4d8a-9e57-0f1a2b3c4d5e",
-    "name": "Agency Owner",
-    "role": "OWNER"
+    "osUserId": "2c624232-cdd2-4f4a-9e8b-1d2c3b4a5f60",
+    "name": "Client Owner",
+    "role": "CLIENT"
   }
 }

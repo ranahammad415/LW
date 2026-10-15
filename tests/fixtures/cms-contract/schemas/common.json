@@ -215,6 +215,29 @@
             }
           ]
         },
+        "onBehalfOf": {
+          "type": "object",
+          "properties": {
+            "role": {
+              "const": "CLIENT"
+            },
+            "clientAccountId": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "role"
+          ],
+          "description": "v1.1.0: an OWNER acted for the client"
+        },
         "source": {
           "enum": [
             "api",
@@ -291,6 +314,274 @@
     "sha256": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
+    },
+    "suggestionTarget": {
+      "type": "object",
+      "properties": {
+        "field": {
+          "enum": [
+            "title",
+            "excerpt",
+            "body",
+            "seo.title",
+            "seo.description"
+          ],
+          "description": "body = the entry content (page layout blocks or post body)"
+        },
+        "blockKey": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "description": "optional, only with field=body: the block _key to narrow the quote"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "field"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "field": {
+                "not": {
+                  "const": "body"
+                }
+              }
+            },
+            "required": [
+              "field"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "blockKey"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "suggestionInput": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "$ref": "common.json#/$defs/suggestionTarget"
+        },
+        "quote": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "plain text the client is commenting on, copied from the content (quote + replacement is the main mode)"
+        },
+        "proposedText": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "description": "plain text replacement; never HTML; never applied automatically"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 1000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "target",
+        "quote",
+        "proposedText"
+      ]
+    },
+    "suggestion": {
+      "type": "object",
+      "properties": {
+        "suggestionId": {
+          "$ref": "common.json#/$defs/id"
+        },
+        "siteId": {
+          "$ref": "common.json#/$defs/siteId"
+        },
+        "reviewId": {
+          "$ref": "common.json#/$defs/id"
+        },
+        "round": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "target": {
+          "$ref": "common.json#/$defs/suggestionTarget"
+        },
+        "quote": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "proposedText": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 1000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "enum": [
+            "open",
+            "accepted",
+            "rejected",
+            "applied",
+            "closed"
+          ]
+        },
+        "source": {
+          "enum": [
+            "os",
+            "review-link"
+          ]
+        },
+        "createdBy": {
+          "$ref": "common.json#/$defs/siteActor"
+        },
+        "createdAt": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "decidedBy": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/siteActor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decidedAt": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decisionNote": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 1000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "appliedRevisionId": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "updatedAt": {
+          "$ref": "common.json#/$defs/dateTime"
+        }
+      },
+      "required": [
+        "suggestionId",
+        "reviewId",
+        "round",
+        "target",
+        "quote",
+        "proposedText",
+        "state",
+        "source",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "suggestionChange": {
+      "type": "object",
+      "properties": {
+        "suggestionId": {
+          "$ref": "common.json#/$defs/id"
+        },
+        "state": {
+          "enum": [
+            "accepted",
+            "rejected",
+            "applied"
+          ]
+        },
+        "at": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "actor": {
+          "$ref": "common.json#/$defs/siteActor"
+        },
+        "draftRevisionId": {
+          "$ref": "common.json#/$defs/id",
+          "description": "applied only: the new draft revision that contains the text"
+        },
+        "decisionNote": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 1000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "suggestionId",
+        "state",
+        "at",
+        "actor"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "applied"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          "then": {
+            "required": [
+              "draftRevisionId"
+            ]
+          }
+        }
+      ]
     },
     "outline": {
       "type": "object",
@@ -776,6 +1067,53 @@
               "type": "null"
             }
           ]
+        },
+        "clientDecisionSource": {
+          "anyOf": [
+            {
+              "enum": [
+                "os",
+                "review-link"
+              ],
+              "description": "v1.1.0: where the client decision of this round was made"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "suggestionCounts": {
+          "type": "object",
+          "properties": {
+            "open": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "accepted": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "rejected": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "applied": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "closed": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "open",
+            "accepted",
+            "rejected",
+            "applied",
+            "closed"
+          ],
+          "description": "v1.1.0: client suggestions on this review, all rounds"
         },
         "clientComment": {
           "anyOf": [
@@ -1461,6 +1799,17 @@
         "data": {
           "type": "object",
           "description": "Type-specific payload for site.* and reserved seo.* events"
+        },
+        "suggestion": {
+          "$ref": "common.json#/$defs/suggestionChange"
+        },
+        "suggestions": {
+          "type": "array",
+          "items": {
+            "$ref": "common.json#/$defs/suggestion"
+          },
+          "maxItems": 50,
+          "description": "v1.1.0: suggestions created with a client decision (pipeline_client_changes_requested)"
         }
       },
       "required": [
@@ -1483,6 +1832,25 @@
             "required": [
               "review",
               "seq"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "pattern": "^review\\."
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "review",
+              "seq",
+              "suggestion"
             ]
           }
         },
@@ -1573,6 +1941,7 @@
             "SLUG_CHANGE_FORBIDDEN",
             "ALREADY_EXISTS",
             "COUNTER_REGRESSION",
+            "SUGGESTION_LIMIT",
             "SITE_MISMATCH",
             "PAYLOAD_TOO_LARGE",
             "UNKNOWN_BLOCK",

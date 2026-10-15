@@ -138,6 +138,25 @@
       "canonical": "v1\nPOST\n/_emdash/api/plugins/agency-os-bridge/site-info\n1792065604\n22222222-3333-4444-8555-666666666666\n44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
     },
     {
+      "name": "os-to-site pipeline-client-review with a suggestion (v1.1.0)",
+      "direction": "os->site",
+      "secret": "inbound key 1",
+      "headers": {
+        "x-aos-contract": "1",
+        "x-aos-site": "site_9f3c2a7b41d0",
+        "x-aos-key-id": "1",
+        "x-aos-timestamp": "1792065608",
+        "x-aos-nonce": "77777777-8888-4999-8aaa-bbbbbbbbbbbb",
+        "x-aos-idempotency-key": "1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+        "x-aos-signature": "v1=acc39fcfefa430aa506a2f8bb75fd506e7107642bbf6e05e98979a023ce8ec25"
+      },
+      "method": "POST",
+      "path": "/_emdash/api/plugins/agency-os-bridge/pipeline-client-review",
+      "body": "{\"reviewId\":\"01JAC7Q2HV5M8N3P4R6S9T0W1X\",\"expectedRound\":1,\"decision\":\"changes_publish\",\"comment\":\"One fix, then publish\",\"suggestions\":[{\"target\":{\"field\":\"body\",\"blockKey\":\"faq_b2\"},\"quote\":\"a failed heater element\",\"proposedText\":\"a failed heater element or a tripped high-limit switch — we check both\",\"note\":null}],\"actor\":{\"kind\":\"human\",\"osUserId\":\"2c624232-cdd2-4f4a-9e8b-1d2c3b4a5f60\",\"name\":\"Client Owner\",\"role\":\"CLIENT\"}}",
+      "bodySha256": "8482613f07c36047dee5256355a16aafbac4f3268f2997970272933751630fed",
+      "canonical": "v1\nPOST\n/_emdash/api/plugins/agency-os-bridge/pipeline-client-review\n1792065608\n77777777-8888-4999-8aaa-bbbbbbbbbbbb\n8482613f07c36047dee5256355a16aafbac4f3268f2997970272933751630fed"
+    },
+    {
       "name": "disconnect handshake (v1.0.4) signed with the current outbound key",
       "direction": "site->os",
       "secret": "outbound key 1",

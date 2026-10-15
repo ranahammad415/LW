@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/pipeline-suggestions.request.json",
+  "title": "pipeline-suggestions (v1.1.0)",
+  "description": "List the client suggestions of a review (current siteId only).",
+  "type": "object",
+  "properties": {
+    "reviewId": {
+      "$ref": "common.json#/$defs/id"
+    },
+    "state": {
+      "enum": [
+        "open",
+        "accepted",
+        "rejected",
+        "applied",
+        "closed",
+        "any"
+      ]
+    },
+    "round": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "cursor": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 512
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100
+    }
+  },
+  "required": [
+    "reviewId"
+  ]
+}

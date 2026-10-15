@@ -1,12 +1,22 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/pipeline-client-review.request.json",
-  "title": "pipeline-client-review (reserved, Phase 2)",
-  "description": "OWNER acting for the client.",
+  "title": "pipeline-client-review (v1.1.0)",
+  "description": "Client decision made in the Agency OS portal (CLIENT, or OWNER acting for the client). Requires X-AOS-Idempotency-Key; raw body <= 64 KiB. Never publishes; suggestions are stored, never applied automatically. No override.",
   "type": "object",
   "properties": {
     "reviewId": {
       "$ref": "common.json#/$defs/id"
+    },
+    "expectedRound": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "must equal the review's current round, else 409 CONFLICT_REV"
+    },
+    "expectedRev": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "optional; must equal the review's rev, else 409 CONFLICT_REV"
     },
     "decision": {
       "$ref": "common.json#/$defs/clientDecision"
@@ -22,13 +32,147 @@
         }
       ]
     },
+    "suggestions": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/suggestionInput"
+      },
+      "minItems": 1,
+      "maxItems": 50
+    },
     "actor": {
-      "$ref": "common.json#/$defs/osActor"
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "human"
+        },
+        "osUserId": {
+          "$ref": "common.json#/$defs/uuid"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "role": {
+          "enum": [
+            "CLIENT",
+            "OWNER"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "osUserId",
+        "name",
+        "role"
+      ],
+      "description": "no email or other PII"
+    },
+    "onBehalfOf": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "const": "CLIENT"
+        },
+        "clientAccountId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "role"
+      ]
     }
   },
   "required": [
     "reviewId",
+    "expectedRound",
     "decision",
     "actor"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "actor": {
+            "properties": {
+              "role": {
+                "const": "OWNER"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "onBehalfOf"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "onBehalfOf"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "const": "approved"
+          }
+        },
+        "required": [
+          "decision"
+        ]
+      },
+      "then": {
+        "not": {
+          "required": [
+            "suggestions"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "const": "changes_requested"
+          }
+        },
+        "required": [
+          "decision"
+        ]
+      },
+      "then": {
+        "anyOf": [
+          {
+            "required": [
+              "comment"
+            ],
+            "properties": {
+              "comment": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          {
+            "required": [
+              "suggestions"
+            ]
+          }
+        ]
+      }
+    }
   ]
 }

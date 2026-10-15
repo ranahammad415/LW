@@ -1,7 +1,7 @@
 # EmDash bridge contract fixtures (read-only copy)
 
 Copied verbatim from the framework repo `oasis-astro`, package `packages/os-bridge-contract`,
-at commit `18b2b83` ("Contract v1.0.7: outline scope, delete resets draft state, sitemap discovery"; contract v1, errata v1.0.7; the v1.0.6 `live` object came in 82476f8, the outline in f2c7b6f):
+at commit `9c62490` ("Contract v1.1.0: client review from the OS (Phase 2 stage 1)"; contract v1, errata v1.0.7 + v1.1.0 §21; v1.0.7 came in 18b2b83, the v1.0.6 `live` object in 82476f8, the outline in f2c7b6f; vector 10 = signed `pipeline-client-review`):
 
 | Folder | Source |
 | --- | --- |

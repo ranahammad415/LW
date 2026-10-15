@@ -1,0 +1,133 @@
+{
+  "ok": true,
+  "review": {
+    "reviewId": "01JAC7Q2HV5M8N3P4R6S9T0W1X",
+    "siteId": "site_9f3c2a7b41d0",
+    "reviewNo": 42,
+    "entryId": "01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+    "entryNo": 118,
+    "collection": "pages",
+    "slug": "hot-tub-repair",
+    "path": "/spa-services/hot-tub-repair/",
+    "title": "Hot Tub Repair for Most Brands",
+    "status": "changes_requested_by_client",
+    "statusLabel": "Changes Requested (Client)",
+    "stage": "review",
+    "readyToPublish": false,
+    "entryStatus": "published",
+    "updateMode": true,
+    "parentEntryId": "01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+    "round": 1,
+    "seq": 5,
+    "rev": 5,
+    "contentType": "service_page",
+    "submittedBy": {
+      "memberId": "c9f0f895-fb98-4b91-a5b3-0e1d2c3b4a59",
+      "name": "Sam Worker"
+    },
+    "pmAssigned": {
+      "memberId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90",
+      "name": "Jane PM"
+    },
+    "pmDecision": "approved",
+    "pmComment": "Good to go",
+    "pmReviewedAt": "2026-10-15T11:59:58Z",
+    "clientDecision": "changes_publish",
+    "clientComment": "Two small fixes, then publish.",
+    "clientReviewedAt": "2026-10-16T09:00:00Z",
+    "workerNote": "Refreshed FAQ",
+    "draftRevisionId": "01JAC6ZK3D4F5G6H7J8K9M0N1P",
+    "liveRevisionId": "01JA9Y1B2C3D4E5F6G7H8J9K0M",
+    "pmPreviewUrl": null,
+    "clientPreviewUrl": null,
+    "linksExpireAt": {
+      "pm": "2026-10-22T11:00:00Z",
+      "client": "2026-10-29T12:00:00Z"
+    },
+    "editUrl": "https://oasispoolspas.com/_emdash/admin/content/pages/01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+    "seoGate": null,
+    "publishedAt": null,
+    "scheduledAt": null,
+    "cancelledReason": null,
+    "createdAt": "2026-10-15T11:00:00Z",
+    "updatedAt": "2026-10-15T12:00:00Z",
+    "history": [],
+    "links": {
+      "pm": {
+        "state": "active",
+        "issuedAt": "2026-10-15T11:00:00Z",
+        "expiresAt": "2026-10-22T11:00:00Z"
+      },
+      "client": {
+        "state": "active",
+        "issuedAt": "2026-10-15T12:00:00Z",
+        "expiresAt": "2026-10-29T12:00:00Z"
+      }
+    },
+    "clientDecisionSource": "os",
+    "suggestionCounts": {
+      "open": 2,
+      "accepted": 0,
+      "rejected": 0,
+      "applied": 0,
+      "closed": 0
+    }
+  },
+  "suggestions": [
+    {
+      "suggestionId": "01JAE0SUGG000000000000001A",
+      "siteId": "site_9f3c2a7b41d0",
+      "reviewId": "01JAC7Q2HV5M8N3P4R6S9T0W1X",
+      "round": 1,
+      "target": {
+        "field": "body",
+        "blockKey": "faq_b2"
+      },
+      "quote": "Most often a failed heater element, a tripped high-limit switch or low flow.",
+      "proposedText": "Most often a failed heater element, a tripped high-limit switch or low flow. We check all three on the first visit.",
+      "note": "Customers ask about this a lot",
+      "state": "open",
+      "source": "os",
+      "createdBy": {
+        "kind": "client",
+        "name": "Client Owner",
+        "osUserId": "2c624232-cdd2-4f4a-9e8b-1d2c3b4a5f60",
+        "role": "CLIENT",
+        "source": "os"
+      },
+      "createdAt": "2026-10-16T09:00:00Z",
+      "decidedBy": null,
+      "decidedAt": null,
+      "decisionNote": null,
+      "appliedRevisionId": null,
+      "updatedAt": "2026-10-16T09:00:00Z"
+    },
+    {
+      "suggestionId": "01JAE0SUGG000000000000002A",
+      "siteId": "site_9f3c2a7b41d0",
+      "reviewId": "01JAC7Q2HV5M8N3P4R6S9T0W1X",
+      "round": 1,
+      "target": {
+        "field": "seo.description"
+      },
+      "quote": "across Waukesha and Milwaukee",
+      "proposedText": "in Waukesha and Milwaukee. Call for a quote",
+      "note": null,
+      "state": "open",
+      "source": "os",
+      "createdBy": {
+        "kind": "client",
+        "name": "Client Owner",
+        "osUserId": "2c624232-cdd2-4f4a-9e8b-1d2c3b4a5f60",
+        "role": "CLIENT",
+        "source": "os"
+      },
+      "createdAt": "2026-10-16T09:00:00Z",
+      "decidedBy": null,
+      "decidedAt": null,
+      "decisionNote": null,
+      "appliedRevisionId": null,
+      "updatedAt": "2026-10-16T09:00:00Z"
+    }
+  ]
+}

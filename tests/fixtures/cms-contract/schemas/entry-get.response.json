@@ -102,12 +102,20 @@
               },
               "type": {
                 "type": "string"
+              },
+              "fields": {
+                "type": "object",
+                "description": "v1.1.0, only with includeFields: text values by field slug (string/text as strings, repeaters as arrays of objects, Portable Text as plain text). Never HTML"
               }
             },
             "required": [
               "type"
             ]
           }
+        },
+        "entryFields": {
+          "type": "object",
+          "description": "v1.1.0, only with includeFields: entry-level text fields (title, excerpt, seo.title, seo.description, posts body as plain text)"
         }
       },
       "required": [

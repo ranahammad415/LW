@@ -1,0 +1,16 @@
+{
+  "reviewId": "01JAC7Q2HV5M8N3P4R6S9T0W1X",
+  "expectedRound": 1,
+  "decision": "approved",
+  "comment": "Approved for the client after a phone call",
+  "actor": {
+    "kind": "human",
+    "osUserId": "3b0d9a1e-6c2f-4d8a-9e57-0f1a2b3c4d5e",
+    "name": "Agency Owner",
+    "role": "OWNER"
+  },
+  "onBehalfOf": {
+    "role": "CLIENT",
+    "clientAccountId": "ca_8f2e"
+  }
+}

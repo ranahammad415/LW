@@ -1,0 +1,73 @@
+{
+  "ok": true,
+  "items": [
+    {
+      "suggestionId": "01JAE0SUGG000000000000001A",
+      "siteId": "site_9f3c2a7b41d0",
+      "reviewId": "01JAC7Q2HV5M8N3P4R6S9T0W1X",
+      "round": 1,
+      "target": {
+        "field": "body",
+        "blockKey": "faq_b2"
+      },
+      "quote": "Most often a failed heater element, a tripped high-limit switch or low flow.",
+      "proposedText": "Most often a failed heater element, a tripped high-limit switch or low flow. We check all three on the first visit.",
+      "note": "Customers ask about this a lot",
+      "state": "applied",
+      "source": "os",
+      "createdBy": {
+        "kind": "client",
+        "name": "Client Owner",
+        "osUserId": "2c624232-cdd2-4f4a-9e8b-1d2c3b4a5f60",
+        "role": "CLIENT",
+        "source": "os"
+      },
+      "createdAt": "2026-10-16T09:00:00Z",
+      "decidedBy": {
+        "kind": "human",
+        "id": "usr_5",
+        "name": "Sam Worker",
+        "role": "contributor",
+        "source": "admin-panel"
+      },
+      "decidedAt": "2026-10-16T10:00:00Z",
+      "decisionNote": null,
+      "appliedRevisionId": "01JAE1REV0000000000000000A",
+      "updatedAt": "2026-10-16T10:00:00Z"
+    },
+    {
+      "suggestionId": "01JAE0SUGG000000000000002A",
+      "siteId": "site_9f3c2a7b41d0",
+      "reviewId": "01JAC7Q2HV5M8N3P4R6S9T0W1X",
+      "round": 1,
+      "target": {
+        "field": "seo.description"
+      },
+      "quote": "across Waukesha and Milwaukee",
+      "proposedText": "in Waukesha and Milwaukee. Call for a quote",
+      "note": null,
+      "state": "rejected",
+      "source": "os",
+      "createdBy": {
+        "kind": "client",
+        "name": "Client Owner",
+        "osUserId": "2c624232-cdd2-4f4a-9e8b-1d2c3b4a5f60",
+        "role": "CLIENT",
+        "source": "os"
+      },
+      "createdAt": "2026-10-16T09:00:00Z",
+      "decidedBy": {
+        "kind": "human",
+        "id": "usr_5",
+        "name": "Sam Worker",
+        "role": "contributor",
+        "source": "admin-panel"
+      },
+      "decidedAt": "2026-10-16T10:01:00Z",
+      "decisionNote": "The locked SEO contract keeps 'across'",
+      "appliedRevisionId": null,
+      "updatedAt": "2026-10-16T10:01:00Z"
+    }
+  ],
+  "next": null
+}

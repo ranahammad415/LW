@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/pipeline-client-review.response.json",
+  "title": "pipeline-client-review response (v1.1.0)",
+  "description": "The Review after the decision plus the suggestions stored by this call.",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
+    "review": {
+      "$ref": "common.json#/$defs/review"
+    },
+    "suggestions": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/suggestion"
+      },
+      "maxItems": 50
+    }
+  },
+  "required": [
+    "ok",
+    "review",
+    "suggestions"
+  ]
+}
