@@ -13,7 +13,7 @@
  */
 import { prisma } from '../../lib/prisma.js';
 import { recordPipelineTombstone } from '../../lib/pipelineReviewGuard.js';
-import { loadEmdashConnection, mirrorEmdashReview } from '../../lib/cmsStore.js';
+import { loadEmdashConnection, mirrorEmdashReview, closeForeignReview } from '../../lib/cmsStore.js';
 import {
   CmsBridgeError,
   emdashRoutes,
@@ -41,6 +41,12 @@ export function sendEmdashError(reply, err, log) {
     return reply.status(500).send({ message: 'EmDash request failed' });
   }
   log?.warn?.({ code: err.code, status: err.status }, 'EmDash site call failed');
+  if (err.code === 'SITE_MISMATCH') {
+    return reply.status(409).send({
+      code: 'SITE_MISMATCH',
+      message: 'This review belongs to a previous site pairing. It was closed in Agency OS; the site handles it locally.',
+    });
+  }
   const authFailure = ['BAD_SIGNATURE', 'UNKNOWN_KEY', 'UNKNOWN_SITE', 'STALE_TIMESTAMP', 'REPLAY'].includes(err.code);
   let status = err.status;
   if (authFailure || status >= 500 || status === 401) status = 502;
@@ -53,6 +59,12 @@ export function sendEmdashError(reply, err, log) {
     ...(err.details && typeof err.details === 'object' ? { details: err.details } : {}),
     ...(err.details?.editUrl ? { editUrl: err.details.editUrl } : {}),
   });
+}
+
+/** v1.0.5: close the OS row when the site says the review belongs to another siteId. */
+async function onSiteMismatch(projectId, wpPipelineId, err, log) {
+  if (!(err instanceof CmsBridgeError) || err.code !== 'SITE_MISMATCH') return;
+  await closeForeignReview(projectId, wpPipelineId).catch((e) => log?.warn?.({ err: e }, 'closeForeignReview failed'));
 }
 
 async function loadReview(projectId, wpPipelineId) {
@@ -105,6 +117,7 @@ export async function emdashPmReview({ request, reply, projectId, wpPipelineId, 
       err.message =
         'The client already requested changes and the worker has them. When the page is revised, use Approve to send it back to the client.';
     }
+    await onSiteMismatch(projectId, wpPipelineId, err, request.log);
     return sendEmdashError(reply, err, request.log);
   }
 }
@@ -147,6 +160,7 @@ export async function emdashRenewPreview({ request, reply, projectId, wpPipeline
       pipeline: formatReview(updated),
     });
   } catch (err) {
+    await onSiteMismatch(projectId, wpPipelineId, err, request.log);
     if (err instanceof CmsBridgeError && err.status !== 404 && err.status !== 400) {
       // Same contract as the WP handler: HTTP 200 + success:false so edge proxies keep CORS.
       return reply.send({ success: false, code: err.code, message: err.message });
@@ -171,6 +185,7 @@ export async function emdashChangeType({ request, reply, projectId, wpPipelineId
     const pipeline = await mirrorAndFormat(projectId, res.review, formatReview, request.log);
     return reply.send({ success: true, pipeline });
   } catch (err) {
+    await onSiteMismatch(projectId, wpPipelineId, err, request.log);
     return sendEmdashError(reply, err, request.log);
   }
 }
@@ -201,7 +216,8 @@ async function emdashDeleteInner({ request, reply, projectId, wpPipelineId }) {
       );
     } catch (err) {
       // NOT_FOUND / INVALID_TRANSITION: already gone or closed on the site; still wipe the OS row.
-      const tolerated = err instanceof CmsBridgeError && (err.code === 'NOT_FOUND' || err.code === 'INVALID_TRANSITION');
+      const tolerated =
+        err instanceof CmsBridgeError && (err.code === 'NOT_FOUND' || err.code === 'INVALID_TRANSITION' || err.code === 'SITE_MISMATCH');
       if (!tolerated) {
         if (err instanceof CmsBridgeError && err.retryable) {
           return reply.status(502).send({ code: err.code, message: err.message || 'Unable to cancel the review on the EmDash site.' });

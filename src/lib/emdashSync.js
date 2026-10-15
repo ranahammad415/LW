@@ -25,6 +25,7 @@ import {
   loadEmdashConnection,
   mirrorEmdashReview,
   backfillEmdashHistory,
+  closeForeignReview,
   prismaCmsStore,
 } from './cmsStore.js';
 import { isCmsKeyCryptoConfigured } from './cmsKeyCrypto.js';
@@ -90,7 +91,7 @@ export async function syncEmdashPipelines({ projectId, interactive = false, noRe
             const row = await mirrorEmdashReview(id, review, { log });
             if (row?.id) {
               const count = await prisma.wpContentReviewEvent.count({ where: { contentReviewId: row.id } });
-              if (count === 0) await backfillEmdashHistory(id, review);
+              if (count === 0) await backfillEmdashHistory(id, review, { log });
             }
             synced += 1;
           } catch (err) {
@@ -259,9 +260,14 @@ export async function healReviews(projectId, reviewIds, log) {
       const res = await emdashRoutes.pipelineGet(conn, { reviewId }, { retryDelays: INTERACTIVE_RETRY_DELAYS_MS });
       if (res?.review) {
         await mirrorEmdashReview(projectId, res.review, { log });
-        healed += await backfillEmdashHistory(projectId, res.review);
+        healed += await backfillEmdashHistory(projectId, res.review, { log });
       }
     } catch (err) {
+      if (err?.code === 'SITE_MISMATCH') {
+        // v1.0.5: the review belongs to a previous pairing; close the OS row (history kept), never retry.
+        const row = await prisma.wpContentReview.findFirst({ where: { projectId, cmsReviewId: reviewId }, select: { wpPipelineId: true } }).catch(() => null);
+        if (row) await closeForeignReview(projectId, row.wpPipelineId).catch(() => {});
+      }
       log?.warn?.({ err: { code: err?.code, message: err?.message }, projectId, reviewId }, 'EmDash heal failed');
     }
   }

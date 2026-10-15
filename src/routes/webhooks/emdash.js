@@ -423,7 +423,12 @@ export async function emdashWebhookRoutes(app, opts = {}) {
     // 409 COUNTER_REGRESSION, nothing stored, project flagged "re-pair needed".
     const regression = await store.findCounterRegression(
       project.id,
-      batch.events.filter((e) => !validateEvent(e) && (e.siteId === undefined || e.siteId === project.cmsSiteId)),
+      batch.events.filter(
+        (e) =>
+          !validateEvent(e) &&
+          (e.siteId === undefined || e.siteId === project.cmsSiteId) &&
+          (e.review?.siteId === undefined || e.review?.siteId === null || e.review.siteId === project.cmsSiteId)
+      ),
       project.cmsSiteId
     );
     if (regression) {
@@ -485,6 +490,12 @@ export async function processEventBatch({ store, project, events, log }) {
     // siteId (e.g. the site's previous pairing) is never applied. No siteId = older plugin = current site.
     if (ev.siteId !== undefined && ev.siteId !== project.cmsSiteId) {
       rejected.push({ eventId: ev.eventId, code: 'VALIDATION', retryable: false, message: 'Event belongs to another siteId' });
+      continue;
+    }
+    // v1.0.5: the Review inside a pipeline_* envelope carries its own siteId; never mirror a foreign one.
+    if (ev.review && ev.review.siteId !== undefined && ev.review.siteId !== null && ev.review.siteId !== project.cmsSiteId) {
+      log?.warn?.({ projectId: project.id, eventId: ev.eventId, reviewId: ev.review.reviewId }, 'EmDash event Review for another siteId rejected');
+      rejected.push({ eventId: ev.eventId, code: 'VALIDATION', retryable: false, message: 'Review belongs to another siteId' });
       continue;
     }
     if (seenInBatch.has(ev.eventId)) {

@@ -31,6 +31,7 @@ vi.mock('../../../src/lib/cmsStore.js', () => ({
   loadEmdashConnection: async () => ({ project: h.project, conn: { siteUrl: 'https://s.example', siteId: 'site_current01', inbound: {} } }),
   mirrorEmdashReview: async () => null,
   backfillEmdashHistory: async () => 0,
+  closeForeignReview: async () => true,
   prismaCmsStore: {
     flagRepairNeeded: async (pid, reason) => {
       h.flagged.push({ pid, reason });

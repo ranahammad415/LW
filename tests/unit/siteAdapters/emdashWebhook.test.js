@@ -312,7 +312,7 @@ describe('POST /handshake — pairing', () => {
     const json = res.json();
     expect(json).toMatchObject({ ok: true, contract: 1, siteId: SITE, projectId: PROJECT_ID, keys: { keyId: 1 } });
     expect(json.keys.inbound).toMatch(/^aosk1_[A-Za-z0-9_-]{43}$/);
-    expect(json.contractRevision).toBe('1.0.4');
+    expect(json.contractRevision).toBe('1.0.5');
     expect(json.counterFloor).toEqual({ reviewNo: 0, entryNo: 0 });
     expect(store.lastPairing).toEqual({ siteId: SITE, siteUrl: null, cursorBefore: null });
     expect(json.pms[0].memberId).toBe('8f14e45f-ceea-467a-9575-5f3c1b2a7d90');
@@ -854,5 +854,19 @@ describe('contract v1.0.4', () => {
     store.creds.clear();
     const r = await post(EV, eventsBody([ex('events.request').events[2]]), { secret: keys.outbound, keyId: 1 });
     expect(r.statusCode).toBe(503);
+  });
+});
+
+describe('contract v1.0.5: Review inside an event envelope', () => {
+  it('an event whose Review belongs to another siteId is rejected (never applied)', async () => {
+    addProject();
+    const keys = pairKeys();
+    const [e1] = ex('events.request').events;
+    const ev = { ...e1, review: { ...e1.review, siteId: 'site_previous01' } };
+    const res = await post(EV, eventsBody([ev]), { secret: keys.outbound, keyId: 1 });
+    expect(res.json().rejected).toEqual([{ eventId: ev.eventId, code: 'VALIDATION', retryable: false, message: 'Review belongs to another siteId' }]);
+    expect(store.applied).toHaveLength(0);
+    const ok = { ...e1, review: { ...e1.review, siteId: SITE } };
+    expect((await post(EV, eventsBody([ok]), { secret: keys.outbound, keyId: 1 })).json().accepted).toEqual([e1.eventId]);
   });
 });

@@ -575,9 +575,53 @@ export async function applyEmdashContentEvent(project, ev) {
  * No notifications and no cmsSeq advance (only the event stream advances cmsSeq).
  * Never regresses a published row; never overwrites an OS assignee.
  */
+/**
+ * Contract v1.0.5: every Review carries the siteId it belongs to. A Review stamped for another siteId
+ * (e.g. the site's previous pairing) is never mirrored. No siteId = older plugin = current behaviour.
+ * Logs at warn level with ids only.
+ */
+export async function isForeignReview(projectId, review, log) {
+  if (!review || review.siteId === undefined || review.siteId === null) return false;
+  const project = await prisma.project.findUnique({ where: { id: projectId }, select: { cmsSiteId: true } });
+  if (project && review.siteId === project.cmsSiteId) return false;
+  (log?.warn ? log : console).warn?.(
+    { projectId, reviewId: review.reviewId, reviewSiteId: review.siteId, currentSiteId: project?.cmsSiteId ?? null },
+    'EmDash Review for another siteId skipped'
+  );
+  return true;
+}
+
+/**
+ * v1.0.5 §18(b): on 409 SITE_MISMATCH the review belongs to a previous pairing. The contract says "drop the
+ * mirror row, keep the history rows"; deleting the row would cascade its history, so the row is closed
+ * instead (cancelled + hidden from queues) and a timeline line records why. Idempotent.
+ */
+export async function closeForeignReview(projectId, wpPipelineId) {
+  const row = await prisma.wpContentReview.findUnique({
+    where: { projectId_wpPipelineId: { projectId, wpPipelineId: Number(wpPipelineId) } },
+    select: { id: true, revisionNumber: true, lastEventType: true },
+  });
+  if (!row || row.lastEventType === 'pipeline_site_mismatch') return false;
+  await prisma.wpContentReview.update({
+    where: { id: row.id },
+    data: { status: 'cancelled', isPublished: true, lastEventType: 'pipeline_site_mismatch' },
+  });
+  await prisma.wpContentReviewEvent.create({
+    data: {
+      contentReviewId: row.id,
+      eventType: 'pipeline_site_mismatch',
+      status: 'cancelled',
+      revisionNumber: row.revisionNumber || 1,
+      message: 'This review belongs to a previous site pairing; closed in Agency OS.',
+    },
+  });
+  return true;
+}
+
 export async function mirrorEmdashReview(projectId, review, { log } = {}) {
   const m = reviewToMirrorData(review);
   if (!m.wpPipelineId) return null;
+  if (await isForeignReview(projectId, review, log)) return null;
   if (await isPipelineTombstoned(projectId, m.wpPipelineId)) return null;
   const existing = await prisma.wpContentReview.findUnique({
     where: { projectId_wpPipelineId: { projectId, wpPipelineId: m.wpPipelineId } },
@@ -638,9 +682,10 @@ export async function mirrorEmdashReview(projectId, review, { log } = {}) {
  * Fill timeline gaps from a Review's `history` (pipeline-get heal, contract §6.3):
  * create WpContentReviewEvent rows for history seqs the OS has not stored yet.
  */
-export async function backfillEmdashHistory(projectId, review) {
+export async function backfillEmdashHistory(projectId, review, { log } = {}) {
   const m = reviewToMirrorData(review);
   if (!m.wpPipelineId || !m.history.length) return 0;
+  if (await isForeignReview(projectId, review, log)) return 0;
   const row = await prisma.wpContentReview.findUnique({
     where: { projectId_wpPipelineId: { projectId, wpPipelineId: m.wpPipelineId } },
     select: { id: true },

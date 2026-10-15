@@ -17,7 +17,7 @@ import crypto from 'node:crypto';
 export const CONTRACT_NAME = 'agency-os-bridge';
 export const CONTRACT_VERSION = 1;
 /** Errata level implemented by this OS (informational; X-AOS-Contract stays 1). */
-export const CONTRACT_REVISION = '1.0.4';
+export const CONTRACT_REVISION = '1.0.5';
 export const SUPPORTED_CONTRACTS = Object.freeze([1]);
 export const PLUGIN_ID = 'agency-os-bridge';
 export const SITE_ROUTE_PREFIX = '/_emdash/api/plugins/agency-os-bridge/';
@@ -361,6 +361,8 @@ export const ERROR_CODES = Object.freeze({
   HUMAN_ONLY: { status: 403, retryable: false },
   NOT_FOUND: { status: 404, retryable: false },
   REPLAY: { status: 409, retryable: false },
+  /** v1.0.5 §18(a): the review belongs to another siteId (a previous pairing). */
+  SITE_MISMATCH: { status: 409, retryable: false },
   /** v1.0.2 C1: the site's counters went backwards (lost storage): re-pair as a new siteId. */
   COUNTER_REGRESSION: { status: 409, retryable: false },
   IDEMPOTENCY_MISMATCH: { status: 409, retryable: false },

@@ -69,7 +69,8 @@ beforeAll(() => {
 });
 beforeEach(() => {
   db.calls = [];
-  db.overrides = {};
+  // Reviews in the v1.0.5 examples are stamped with this siteId; the project is paired to it.
+  db.overrides = { 'project.findUnique': async () => ({ cmsSiteId: 'site_9f3c2a7b41d0' }) };
 });
 
 describe('nonce store (DB unique index; PM2-safe)', () => {
@@ -368,5 +369,29 @@ describe('e2e Phase 1 OS issues', () => {
     await prismaCmsStore.disconnect('p1');
     expect(calls('cmsCredential.deleteMany')[0].args).toEqual({ where: { projectId: 'p1' } });
     expect(calls('project.update').at(-1).args.data).toMatchObject({ cmsPairedAt: null, cmsKeyId: null });
+  });
+});
+
+describe('contract v1.0.5: Reviews scoped by siteId', () => {
+  const review = () => ({ ...ex('review.response').review, seq: 9 });
+  it('a Review for another siteId is never mirrored or backfilled; same siteId and no siteId proceed', async () => {
+    db.overrides['project.findUnique'] = async () => ({ cmsSiteId: 'site_current01' });
+    db.overrides['wpContentReview.findUnique'] = async () => ({ id: 'r1', status: 'pending_pm_review', isPublished: false });
+    db.overrides['wpContentReview.updateMany'] = async () => ({ count: 1 });
+    const warn = vi.fn();
+    expect(await mirrorEmdashReview('p1', { ...review(), siteId: 'site_previous1' }, { log: { warn } })).toBeNull();
+    expect(await backfillEmdashHistory('p1', { ...review(), siteId: 'site_previous1', history: [{ seq: 1, type: 'pipeline_submitted', at: '2026-10-15T11:00:00Z', status: 'pending_pm_review' }] }, { log: { warn } })).toBe(0);
+    expect(calls('wpContentReview.updateMany')).toHaveLength(0);
+    expect(calls('wpContentReview.upsert')).toHaveLength(0);
+    expect(calls('wpContentReviewEvent.create')).toHaveLength(0);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(warn.mock.calls[0][0])).not.toMatch(/PreviewUrl|aosk1_/);
+
+    await mirrorEmdashReview('p1', { ...review(), siteId: 'site_current01' });
+    expect(calls('wpContentReview.updateMany')).toHaveLength(1);
+    const before = calls('wpContentReview.updateMany').length;
+    const { siteId, ...legacy } = review();
+    await mirrorEmdashReview('p1', legacy);
+    expect(calls('wpContentReview.updateMany').length).toBe(before + 1);
   });
 });

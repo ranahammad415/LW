@@ -202,3 +202,33 @@ describe('e2e issue 3: EmDash access equals the WP rule (no stricter, no looser)
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe('contract v1.0.5: Review in a pipeline-* response', () => {
+  it('a response Review for another siteId is not mirrored', async () => {
+    emdashProject();
+    const base = db.overrides['project.findUnique'];
+    db.overrides['project.findUnique'] = async (args) => (args.select?.cmsSiteId && !args.select?.name ? { cmsSiteId: 'site_9f3c2a7b41d0' } : base(args));
+    const resp = ex('review.response');
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify({ ...resp, review: { ...resp.review, siteId: 'site_other0001' } }), { status: 200 }));
+    const r = await app.inject({ method: 'POST', url: `/api/pm/pipeline/${PID}/42/review`, payload: { decision: 'approved' } });
+    expect(r.statusCode).toBe(200);
+    expect(r.json().pipeline).toBeNull();
+    expect(db.calls.find((c) => c.key === 'wpContentReview.updateMany' || c.key === 'wpContentReview.upsert')).toBeUndefined();
+  });
+});
+
+describe('contract v1.0.5: 409 SITE_MISMATCH', () => {
+  it('maps to an actionable 409 and closes the OS row (history kept, no retry)', async () => {
+    emdashProject();
+    const body = JSON.parse(require('node:fs').readFileSync(require('node:path').join(__dirname, '../../fixtures/cms-contract/examples/error.response--site-mismatch.json'), 'utf8'));
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify(body), { status: 409 }));
+    const r = await app.inject({ method: 'POST', url: `/api/pm/pipeline/${PID}/42/review`, payload: { decision: 'approved' } });
+    expect(r.statusCode).toBe(409);
+    expect(r.json()).toMatchObject({ code: 'SITE_MISMATCH', message: expect.stringMatching(/previous site pairing/) });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const upd = db.calls.find((c) => c.key === 'wpContentReview.update');
+    expect(upd.args.data).toMatchObject({ status: 'cancelled', isPublished: true, lastEventType: 'pipeline_site_mismatch' });
+    expect(db.calls.find((c) => c.key === 'wpContentReview.delete')).toBeUndefined();
+    expect(db.calls.find((c) => c.key === 'wpContentReviewEvent.create').args.data.eventType).toBe('pipeline_site_mismatch');
+  });
+});
