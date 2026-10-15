@@ -96,6 +96,8 @@ function createMemoryStore() {
       s.lastPairing = { siteId, siteUrl, cursorBefore: proj.cmsLastCursor };
       if (siteId && proj.cmsSiteId !== siteId) proj.cmsLastCursor = null;
       if (siteId) proj.cmsSiteId = siteId;
+      const prevCred = s.creds.get(projectId);
+      s.pairedKeyId = prevCred ? prevCred.keyId + 1 : 1;
       if (siteUrl) proj.wpUrl = siteUrl;
       s.creds.set(projectId, {
         projectId,
@@ -106,6 +108,7 @@ function createMemoryStore() {
         pendingKeyId: null,
       });
       Object.assign(s.projects.get(projectId), { cmsPairedAt: now, cmsContractVersion: contract, cmsKeyId: 1 });
+      return { keyId: s.pairedKeyId };
     },
     async recordHeartbeat({ projectId }) {
       s.heartbeats += 1;
@@ -777,5 +780,18 @@ describe('contract v1.0.3 counterFloor', () => {
     const hb = await post(HS, handshakeBody('heartbeat'), { secret: outbound, keyId: 1 });
     expect(hb.statusCode).toBe(200);
     expect(hb.json().counterFloor).toEqual({ reviewNo: 57, entryNo: 212 });
+  });
+});
+
+describe('contract v1.0.3 §16(b) re-pair', () => {
+  it('a same-siteId re-pair continues key ids (current + 1); the old outbound key stops working', async () => {
+    addProject();
+    const { outbound: oldOut } = pairKeys();
+    const code = addCode();
+    const res = await post(HS, handshakeBody('pair'), { secret: pairingSigningKey(code), keyId: 'pairing' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().keys.keyId).toBe(2);
+    const stale = await post(HS, handshakeBody('heartbeat'), { secret: oldOut, keyId: 1 });
+    expect(stale.statusCode).toBe(401);
   });
 });

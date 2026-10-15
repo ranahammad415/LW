@@ -268,6 +268,7 @@ CREATE TABLE IF NOT EXISTS `cmseventreceipt` (
   `id` VARCHAR(191) NOT NULL,
   `projectId` VARCHAR(191) NOT NULL,
   `eventId` VARCHAR(64) NOT NULL,
+  `siteId` VARCHAR(64) NULL,
   `type` VARCHAR(64) NOT NULL,
   `cursor` INTEGER NULL,
   `seq` INTEGER NULL,
@@ -292,6 +293,13 @@ CREATE TABLE IF NOT EXISTS `cmsnonce` (
 
 -- Columns/indexes added after the tables above were first written (keeps re-runs idempotent).
 SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'cmseventreceipt' AND COLUMN_NAME = 'siteId');
+SET @sql := IF(@col = 0,
+  'ALTER TABLE `cmseventreceipt` ADD COLUMN `siteId` VARCHAR(64) NULL',
+  'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'cmspairingcode' AND COLUMN_NAME = 'siteUrl');
 SET @sql := IF(@col = 0,
   'ALTER TABLE `cmspairingcode` ADD COLUMN `siteUrl` VARCHAR(500) NULL',
@@ -299,9 +307,9 @@ SET @sql := IF(@col = 0,
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 SET @idx := (SELECT COUNT(*) FROM information_schema.STATISTICS
-  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'cmseventreceipt' AND INDEX_NAME = 'cmseventreceipt_projectId_cursor_idx');
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'cmseventreceipt' AND INDEX_NAME = 'cmseventreceipt_projectId_siteId_cursor_idx');
 SET @sql := IF(@idx = 0,
-  'CREATE INDEX `cmseventreceipt_projectId_cursor_idx` ON `cmseventreceipt`(`projectId`, `cursor`)',
+  'CREATE INDEX `cmseventreceipt_projectId_siteId_cursor_idx` ON `cmseventreceipt`(`projectId`, `siteId`, `cursor`)',
   'SELECT 1');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 

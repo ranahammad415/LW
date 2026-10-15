@@ -52,9 +52,10 @@ function memoryNonceCache() {
 }
 
 describe('contract §3.5 signature vectors', () => {
-  it('has the 8 request and 2 response vectors listed in contract.md', () => {
+  it('has the 8 request and 3 response vectors listed in contract.md (v1.0.3 adds counterFloor)', () => {
     expect(vectors.requests).toHaveLength(8);
-    expect(vectors.responses).toHaveLength(2);
+    expect(vectors.responses).toHaveLength(3);
+    expect(vectors.responses.some((r) => r.body.includes('"counterFloor"'))).toBe(true);
   });
 
   it.each(vectors.requests.map((v) => [v.name, v]))('request vector: %s', (_name, v) => {

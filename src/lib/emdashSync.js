@@ -278,7 +278,7 @@ export async function replayEmdashEvents(projectId, { log, maxPages = 1 } = {}) 
       }
       // Same v1.0.2 C1 check as /events: replayed events with known eventIds are duplicates, never
       // regressions; a new eventId reusing a stored counter stops the replay and flags re-pair.
-      const regression = await prismaCmsStore.findCounterRegression(project.id, chunk);
+      const regression = await prismaCmsStore.findCounterRegression(project.id, chunk, project.cmsSiteId);
       if (regression) {
         await prismaCmsStore.flagRepairNeeded(project.id, regression, log);
         return { applied, regression };

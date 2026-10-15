@@ -173,6 +173,21 @@
       }
     },
     {
+      "name": "pairing response with counterFloor (v1.0.3), signed with pairingSigningKey(code)",
+      "secret": "pairing signing key",
+      "status": 200,
+      "requestPath": "/api/webhooks/emdash/handshake",
+      "requestNonce": "55555555-6666-4777-8888-999999999999",
+      "body": "{\"ok\":true,\"contract\":1,\"siteId\":\"site_9f3c2a7b41d0\",\"counterFloor\":{\"reviewNo\":42,\"entryNo\":118},\"keys\":{\"keyId\":1,\"inbound\":\"aosk1_fp_X5pa6uAaNxcPnJsvZkCaJQv4tX5T0j3UoZzndQLE\",\"outbound\":\"aosk1_O9FJkHcJu47W4g1qqob6gmxImoTv7uIB8dn3aHnBS3g\"}}",
+      "bodySha256": "07cf045db918f652c67eb766a2991ee0d5a7e0fca40f1d1eb8f38ffc3864d526",
+      "canonical": "v1-response\n200\n/api/webhooks/emdash/handshake\n55555555-6666-4777-8888-999999999999\n1792065607\n07cf045db918f652c67eb766a2991ee0d5a7e0fca40f1d1eb8f38ffc3864d526",
+      "headers": {
+        "x-aos-response-key-id": "pairing",
+        "x-aos-response-timestamp": "1792065607",
+        "x-aos-response-signature": "v1=49a7b2f38501f18af8b92964b8e31b7cff6050589f3af577a8e87c2b5137f1cb"
+      }
+    },
+    {
       "name": "heartbeat response with rotate, signed with current inbound key 1",
       "secret": "inbound key 1",
       "status": 200,

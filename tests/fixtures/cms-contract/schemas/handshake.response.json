@@ -31,7 +31,25 @@
     "contractRevision": {
       "type": "string",
       "pattern": "^1\\.\\d+\\.\\d+$",
-      "description": "v1.0.1: errata level the OS implements (informational)"
+      "description": "v1.0.1+: errata level the OS implements (informational)"
+    },
+    "counterFloor": {
+      "type": "object",
+      "properties": {
+        "reviewNo": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "entryNo": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "reviewNo",
+        "entryNo"
+      ],
+      "description": "v1.0.3, optional: highest reviewNo/entryNo the OS already holds for the PROJECT. The site sets its next numbers to max(local next, floor + 1) and never lowers a counter. Absent = no-op."
     },
     "serverTime": {
       "type": "integer",

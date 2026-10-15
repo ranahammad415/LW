@@ -241,7 +241,7 @@ export async function emdashWebhookRoutes(app, opts = {}) {
 
     const inbound = generateKey();
     const outbound = generateKey();
-    await store.completePairing({
+    const paired = await store.completePairing({
       projectId: project.id,
       siteId: code.siteId,
       siteUrl: code.siteUrl || null,
@@ -263,7 +263,8 @@ export async function emdashWebhookRoutes(app, opts = {}) {
       serverTime: Math.floor(now / 1000),
       os: { version: OS_VERSION, capabilities: { clientReviewFromOs: false, seoProfiles: false } },
       pms: await store.listPms(project),
-      keys: { keyId: 1, inbound, outbound },
+      // v1.0.3 §16(b): key ids continue across re-pairs (current id + 1); first pairing = 1.
+      keys: { keyId: paired?.keyId || 1, inbound, outbound },
       // v1.0.3 (additive): the plugin seeds its surrogate counters to max(local, floor) + 1.
       counterFloor: await store.getCounterFloor(project.id),
     });
@@ -396,7 +397,7 @@ export async function emdashWebhookRoutes(app, opts = {}) {
     // v1.0.2 C1: a NEW eventId reusing a stored cursor, a stored (review, seq) of another event, or a
     // known reviewNo/entryNo mapped to another ULID means the site lost its storage. Whole request:
     // 409 COUNTER_REGRESSION, nothing stored, project flagged "re-pair needed".
-    const regression = await store.findCounterRegression(project.id, batch.events.filter((e) => !validateEvent(e)));
+    const regression = await store.findCounterRegression(project.id, batch.events.filter((e) => !validateEvent(e)), project.cmsSiteId);
     if (regression) {
       await store.flagRepairNeeded(project.id, regression, request.log);
       request.log.warn({ projectId: project.id, regression }, 'EmDash counter regression');
@@ -464,7 +465,7 @@ export async function processEventBatch({ store, project, events, log }) {
       }
     }
 
-    const claim = await store.claimReceipt(project.id, ev);
+    const claim = await store.claimReceipt(project.id, ev, project.cmsSiteId);
     seenInBatch.add(ev.eventId);
     if (claim === 'duplicate') {
       duplicate.push(ev.eventId);

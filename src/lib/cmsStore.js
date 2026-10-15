@@ -173,10 +173,13 @@ export const prismaCmsStore = {
   async completePairing({ projectId, siteId, siteUrl = null, siteInfo, contract, inbound, outbound, now = new Date() }) {
     const before = await prisma.project.findUnique({ where: { id: projectId }, select: { cmsSiteId: true } });
     const siteChanged = !!siteId && before?.cmsSiteId !== siteId;
+    // v1.0.3 §16(b): key ids continue across a re-pair (current id + 1); the first pairing gets 1.
+    const existing = await prisma.cmsCredential.findUnique({ where: { projectId }, select: { keyId: true, pendingKeyId: true } });
+    const keyId = existing ? Math.max(existing.keyId || 0, existing.pendingKeyId || 0) + 1 : 1;
     const inboundKeyEnc = encryptCmsSecret(inbound, cmsAad(projectId, 'inbound'));
     const outboundKeyEnc = encryptCmsSecret(outbound, cmsAad(projectId, 'outbound'));
     const cred = {
-      keyId: 1,
+      keyId,
       inboundKeyEnc,
       outboundKeyEnc,
       prevKeyId: null,
@@ -190,15 +193,14 @@ export const prismaCmsStore = {
       rotatedAt: null,
     };
     await prisma.$transaction([
-      // A new siteId starts its own cursor/seq space: drop the old site's receipts so its counters are
-      // not read as a regression (contract v1.0.2 C1). Same siteId: receipts stay (idempotency).
-      ...(siteChanged ? [prisma.cmsEventReceipt.deleteMany({ where: { projectId } })] : []),
+      // Receipts are scoped per siteId (v1.0.3 §16(b)): a new siteId starts with none and the old
+      // site's receipts stay for history; the regression check only looks at the current siteId.
       prisma.cmsCredential.upsert({ where: { projectId }, update: cred, create: { projectId, ...cred } }),
       prisma.project.update({
         where: { id: projectId },
         data: {
           ...siteInfoProjectData(siteInfo, contract, now),
-          cmsKeyId: 1,
+          cmsKeyId: keyId,
           cmsPairedAt: now,
           ...(siteId ? { cmsSiteId: siteId } : {}),
           ...(siteUrl ? { wpUrl: siteUrl } : {}),
@@ -208,6 +210,7 @@ export const prismaCmsStore = {
         },
       }),
     ]);
+    return { keyId };
   },
 
   async recordHeartbeat({ projectId, siteInfo, contract, now = new Date() }) {
@@ -281,9 +284,10 @@ export const prismaCmsStore = {
   },
 
   /** Claim an eventId for processing. 'new' | 'duplicate'. */
-  async claimReceipt(projectId, ev) {
+  async claimReceipt(projectId, ev, siteId = null) {
     const data = {
       projectId,
+      siteId: siteId ? String(siteId).slice(0, 64) : null,
       eventId: String(ev.eventId),
       type: String(ev.type).slice(0, 64),
       cursor: Number.isInteger(ev.cursor) ? ev.cursor : null,
@@ -321,7 +325,7 @@ export const prismaCmsStore = {
    * regression): a stored receipt with the same cursor, or the same (review, seq), but another eventId;
    * or a known reviewNo/entryNo mapped to another ULID. Returns a reason string or null.
    */
-  async findCounterRegression(projectId, events) {
+  async findCounterRegression(projectId, events, siteId = null) {
     const ids = events.map((e) => String(e.eventId));
     if (!ids.length) return null;
     const known = new Set(
@@ -332,7 +336,7 @@ export const prismaCmsStore = {
     const cursors = fresh.map((e) => e.cursor).filter(Number.isInteger);
     if (cursors.length) {
       const hit = await prisma.cmsEventReceipt.findFirst({
-        where: { projectId, cursor: { in: cursors }, eventId: { notIn: ids } },
+        where: { projectId, ...(siteId ? { siteId } : {}), cursor: { in: cursors }, eventId: { notIn: ids } },
         select: { cursor: true },
       });
       if (hit) return `cursor ${hit.cursor} already belongs to another event`;
@@ -340,7 +344,7 @@ export const prismaCmsStore = {
     for (const e of fresh) {
       if (e.type?.startsWith('pipeline_') && e.review?.reviewId && Number.isInteger(e.seq)) {
         const seqHit = await prisma.cmsEventReceipt.findFirst({
-          where: { projectId, cmsReviewId: String(e.review.reviewId), seq: e.seq, eventId: { notIn: ids } },
+          where: { projectId, ...(siteId ? { siteId } : {}), cmsReviewId: String(e.review.reviewId), seq: e.seq, eventId: { notIn: ids } },
           select: { id: true },
         });
         if (seqHit) return `seq ${e.seq} of review ${e.review.reviewId} already belongs to another event`;

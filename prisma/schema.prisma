@@ -589,6 +589,8 @@ model CmsEventReceipt {
   id          String   @id @default(uuid())
   projectId   String
   eventId     String   @db.VarChar(64)
+  /// Site the event came from (v1.0.3: receipts are per siteId; a new siteId starts empty, old rows stay).
+  siteId      String?  @db.VarChar(64)
   type        String   @db.VarChar(64)
   cursor      Int?
   seq         Int?
@@ -601,7 +603,7 @@ model CmsEventReceipt {
 
   @@unique([projectId, eventId])
   @@index([projectId, receivedAt])
-  @@index([projectId, cursor])
+  @@index([projectId, siteId, cursor])
   @@index([projectId, cmsReviewId, seq])
   @@map("cmseventreceipt")
 }

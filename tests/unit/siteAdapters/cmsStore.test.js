@@ -255,11 +255,15 @@ describe('review fixes in the Prisma store', () => {
     expect(upd.modifiedAt.toISOString()).toBe(new Date(ev.entry.updatedAt).toISOString());
   });
 
-  it('S11/S12: same siteId keeps cmsLastCursor and receipts; a new siteId clears both and applies the pending URL', async () => {
+  it('S11/S12 + v1.0.3 §16(b): same siteId keeps cmsLastCursor and receipts and continues key ids; a new siteId resets the cursor, old receipts stay', async () => {
     db.overrides['project.findUnique'] = async () => ({ cmsSiteId: 'site_same0001' });
-    await prismaCmsStore.completePairing({ projectId: 'p1', siteId: 'site_same0001', siteUrl: 'https://a.example', siteInfo: {}, contract: 1, inbound: 'i', outbound: 'o' });
+    db.overrides['cmsCredential.findUnique'] = async () => ({ keyId: 3, pendingKeyId: null });
+    const r = await prismaCmsStore.completePairing({ projectId: 'p1', siteId: 'site_same0001', siteUrl: 'https://a.example', siteInfo: {}, contract: 1, inbound: 'i', outbound: 'o' });
+    expect(r).toEqual({ keyId: 4 });
+    expect(calls('cmsCredential.upsert').at(-1).args.update.keyId).toBe(4);
     let data = calls('project.update').at(-1).args.data;
     expect(data).not.toHaveProperty('cmsLastCursor');
+    expect(data.cmsKeyId).toBe(4);
     expect(data).toMatchObject({ cmsSiteId: 'site_same0001', wpUrl: 'https://a.example', cmsRepairNeededAt: null });
     expect(calls('cmsEventReceipt.deleteMany')).toHaveLength(0);
 
@@ -267,7 +271,9 @@ describe('review fixes in the Prisma store', () => {
     data = calls('project.update').at(-1).args.data;
     expect(data).toMatchObject({ cmsSiteId: 'site_new00001', cmsLastCursor: null });
     expect(data).not.toHaveProperty('wpUrl');
-    expect(calls('cmsEventReceipt.deleteMany')[0].args).toEqual({ where: { projectId: 'p1' } });
+    expect(calls('cmsEventReceipt.deleteMany')).toHaveLength(0); // receipts are per siteId and stay for history
+    db.overrides['cmsCredential.findUnique'] = async () => null;
+    expect(await prismaCmsStore.completePairing({ projectId: 'p2', siteId: 'site_first001', siteInfo: {}, contract: 1, inbound: 'i', outbound: 'o' })).toEqual({ keyId: 1 });
   });
 
   it('v1.0.2 C1: findCounterRegression ignores known eventIds and detects cursor / seq / surrogate reuse', async () => {
@@ -277,7 +283,9 @@ describe('review fixes in the Prisma store', () => {
 
     db.overrides['cmsEventReceipt.findMany'] = async () => [];
     db.overrides['cmsEventReceipt.findFirst'] = async (args) => (args.where.cursor ? { cursor: 56 } : null);
-    expect(await prismaCmsStore.findCounterRegression('p1', [e1])).toMatch(/cursor 56/);
+    expect(await prismaCmsStore.findCounterRegression('p1', [e1], 'site_current01')).toMatch(/cursor 56/);
+    // v1.0.3: only the current siteId's receipts count (a new siteId starts empty).
+    expect(calls('cmsEventReceipt.findFirst').at(-1).args.where.siteId).toBe('site_current01');
 
     db.overrides['cmsEventReceipt.findFirst'] = async (args) => (args.where.seq ? { id: 'x' } : null);
     expect(await prismaCmsStore.findCounterRegression('p1', [e1])).toMatch(/seq 3/);
