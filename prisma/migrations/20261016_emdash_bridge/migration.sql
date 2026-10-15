@@ -84,6 +84,20 @@ SET @sql := IF(@col = 0,
   'SELECT 1');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
+SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'project' AND COLUMN_NAME = 'cmsRepairNeededAt');
+SET @sql := IF(@col = 0,
+  'ALTER TABLE `project` ADD COLUMN `cmsRepairNeededAt` DATETIME(3) NULL',
+  'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'project' AND COLUMN_NAME = 'cmsRepairReason');
+SET @sql := IF(@col = 0,
+  'ALTER TABLE `project` ADD COLUMN `cmsRepairReason` VARCHAR(300) NULL',
+  'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 SET @idx := (SELECT COUNT(*) FROM information_schema.STATISTICS
   WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'project' AND INDEX_NAME = 'project_cmsSiteId_key');
 SET @sql := IF(@idx = 0,
@@ -192,6 +206,13 @@ SET @sql := IF(@idx = 0,
   'SELECT 1');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
+SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'wpcontentreview' AND COLUMN_NAME = 'cmsMirrorSeq');
+SET @sql := IF(@col = 0,
+  'ALTER TABLE `wpcontentreview` ADD COLUMN `cmsMirrorSeq` INTEGER NULL',
+  'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- ── wpcontentreviewevent ────────────────────────────────────────────────────
 SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'wpcontentreviewevent' AND COLUMN_NAME = 'cmsSeq');
@@ -227,6 +248,7 @@ CREATE TABLE IF NOT EXISTS `cmspairingcode` (
   `id` VARCHAR(191) NOT NULL,
   `projectId` VARCHAR(191) NOT NULL,
   `siteId` VARCHAR(64) NOT NULL,
+  `siteUrl` VARCHAR(500) NULL,
   `verifier` VARCHAR(64) NOT NULL,
   `signingKeyEnc` TEXT NULL,
   `expiresAt` DATETIME(3) NOT NULL,
@@ -268,6 +290,28 @@ CREATE TABLE IF NOT EXISTS `cmsnonce` (
   PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
+-- Columns/indexes added after the tables above were first written (keeps re-runs idempotent).
+SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'cmspairingcode' AND COLUMN_NAME = 'siteUrl');
+SET @sql := IF(@col = 0,
+  'ALTER TABLE `cmspairingcode` ADD COLUMN `siteUrl` VARCHAR(500) NULL',
+  'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @idx := (SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'cmseventreceipt' AND INDEX_NAME = 'cmseventreceipt_projectId_cursor_idx');
+SET @sql := IF(@idx = 0,
+  'CREATE INDEX `cmseventreceipt_projectId_cursor_idx` ON `cmseventreceipt`(`projectId`, `cursor`)',
+  'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @idx := (SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'cmseventreceipt' AND INDEX_NAME = 'cmseventreceipt_projectId_cmsReviewId_seq_idx');
+SET @sql := IF(@idx = 0,
+  'CREATE INDEX `cmseventreceipt_projectId_cmsReviewId_seq_idx` ON `cmseventreceipt`(`projectId`, `cmsReviewId`, `seq`)',
+  'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- ── Notification template: cms_connection_lost (OWNERs; contract §4) ───────
 INSERT IGNORE INTO `notificationtemplate`
   (`id`, `slug`, `name`, `description`, `category`, `subject`, `bodyHtml`, `bodyText`, `inAppMessage`, `variables`, `isActive`, `emailAgencyOwner`, `emailPm`, `emailClientManager`, `emailClientViewer`, `createdAt`, `updatedAt`)
@@ -278,3 +322,14 @@ VALUES
    'The EmDash site for {{projectName}} has not contacted Agency OS since {{lastSeenAt}}. Check that the site is up and the Agency OS bridge plugin is active and paired.',
    'Site connection lost: {{projectName}} (last seen {{lastSeenAt}})',
    JSON_ARRAY('projectName','lastSeenAt','actionUrl'), 1, 1, 0, 0, 0, NOW(3), NOW(3));
+
+-- ── Notification template: cms_repair_needed (OWNERs; contract v1.0.2 C1) ──
+INSERT IGNORE INTO `notificationtemplate`
+  (`id`, `slug`, `name`, `description`, `category`, `subject`, `bodyHtml`, `bodyText`, `inAppMessage`, `variables`, `isActive`, `emailAgencyOwner`, `emailPm`, `emailClientManager`, `emailClientViewer`, `createdAt`, `updatedAt`)
+VALUES
+  (UUID(), 'cms_repair_needed', 'Site Needs Re-pairing', 'An EmDash site''s counters went backwards (lost plugin storage)', 'pipeline',
+   'Re-pair needed: {{projectName}}',
+   '<p>The EmDash site for <strong>{{projectName}}</strong> sent events that conflict with what Agency OS already stored ({{reason}}). The site probably lost its plugin storage. Its events are refused until it is paired again as a new site (Website tab, "Re-pair as a new site").</p>',
+   'The EmDash site for {{projectName}} sent events that conflict with stored data ({{reason}}). Re-pair it as a new site from the Website tab.',
+   'Re-pair needed: {{projectName}}',
+   JSON_ARRAY('projectName','reason','actionUrl'), 1, 1, 0, 0, 0, NOW(3), NOW(3));

@@ -23,7 +23,7 @@ import {
 import { normalizePipelineWebhook, wordpressAdapter } from '../../../src/lib/siteAdapters/wordpress.js';
 import { getAdapter, cmsLabel } from '../../../src/lib/siteAdapters/index.js';
 import { verifyRequest } from '../../../src/lib/siteAdapters/signing.js';
-import { encryptCmsSecret } from '../../../src/lib/cmsKeyCrypto.js';
+import { encryptCmsSecret, cmsAad } from '../../../src/lib/cmsKeyCrypto.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ex = (name) =>
@@ -182,10 +182,12 @@ describe('siteRequest: signed POST to /_emdash/api/plugins/agency-os-bridge/<rou
 });
 
 describe('connection and gates', () => {
+  const PID = 'p-emdash-1';
   const credential = () => ({
+    projectId: PID,
     keyId: 1,
-    inboundKeyEnc: encryptCmsSecret(K.inbound1),
-    outboundKeyEnc: encryptCmsSecret(K.outbound1),
+    inboundKeyEnc: encryptCmsSecret(K.inbound1, cmsAad(PID, 'inbound')),
+    outboundKeyEnc: encryptCmsSecret(K.outbound1, cmsAad(PID, 'outbound')),
   });
   const project = { cmsType: 'EMDASH', wpUrl: 'https://oasispoolspas.com/', cmsSiteId: K.siteId, cmsContractVersion: 1 };
 
@@ -207,8 +209,8 @@ describe('connection and gates', () => {
         ...credential(),
         keyId: 2,
         prevKeyId: 1,
-        inboundKeyPrevEnc: encryptCmsSecret('p-in'),
-        outboundKeyPrevEnc: encryptCmsSecret('p-out'),
+        inboundKeyPrevEnc: encryptCmsSecret('p-in', cmsAad(PID, 'inbound')),
+        outboundKeyPrevEnc: encryptCmsSecret('p-out', cmsAad(PID, 'outbound')),
         prevExpiresAt: new Date(Date.now() - 1000),
       },
       Date.now()

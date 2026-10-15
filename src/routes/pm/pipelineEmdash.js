@@ -176,7 +176,16 @@ export async function emdashChangeType({ request, reply, projectId, wpPipelineId
 }
 
 /** DELETE .../:wpPipelineId (OWNER): best-effort pipeline-cancel force, then tombstone + delete in the OS. */
-export async function emdashDelete({ request, reply, projectId, wpPipelineId }) {
+export async function emdashDelete(args) {
+  try {
+    return await emdashDeleteInner(args);
+  } catch (err) {
+    // Never leak raw errors to the client (review C3).
+    return sendEmdashError(args.reply, err, args.request.log);
+  }
+}
+
+async function emdashDeleteInner({ request, reply, projectId, wpPipelineId }) {
   const pipelineId = Number(wpPipelineId);
   const existing = await prisma.wpContentReview.findUnique({
     where: { projectId_wpPipelineId: { projectId, wpPipelineId: pipelineId } },

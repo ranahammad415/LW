@@ -7,11 +7,9 @@
  * The pairing code is never stored: only its verifier and the AES-GCM encrypted pairing signing key
  * (deleted on use, burn or expiry). EmDash features fail closed without CMS_KEY_ENCRYPTION_KEY.
  */
-import dns from 'node:dns/promises';
-import net from 'node:net';
 import { prisma } from '../lib/prisma.js';
 import { ensureProjectAccess } from '../lib/ensureProjectAccess.js';
-import { encryptCmsSecret, isCmsKeyCryptoConfigured } from '../lib/cmsKeyCrypto.js';
+import { encryptCmsSecret, isCmsKeyCryptoConfigured, cmsAad } from '../lib/cmsKeyCrypto.js';
 import {
   PAIRING_CODE_TTL_SEC,
   CONTRACT_REVISION,
@@ -24,60 +22,13 @@ import {
 } from '../lib/siteAdapters/signing.js';
 import { emdashRoutes, CmsBridgeError } from '../lib/siteAdapters/emdash.js';
 import { loadEmdashConnection } from '../lib/cmsStore.js';
+import { validateSiteUrl } from '../lib/siteAdapters/netGuard.js';
 
 const STALE_AFTER_MS = 24 * 60 * 60 * 1000;
 const KEY_MISSING_MESSAGE =
   'CMS_KEY_ENCRYPTION_KEY is not set on Agency OS. Ask the administrator to set it (32+ random characters) before connecting EmDash sites.';
 
-function isPrivateIp(ip) {
-  if (net.isIPv4(ip)) {
-    const [a, b] = ip.split('.').map(Number);
-    return (
-      a === 10 || a === 127 || a === 0 ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      (a === 100 && b >= 64 && b <= 127)
-    );
-  }
-  const v = ip.toLowerCase();
-  return v === '::1' || v === '::' || v.startsWith('fc') || v.startsWith('fd') || v.startsWith('fe80') || v.startsWith('::ffff:127.') || v.startsWith('::ffff:10.') || v.startsWith('::ffff:192.168.');
-}
-
-/**
- * The OS only ever calls the URL stored here (never one sent by the site), so it is
- * validated once: https (http://localhost allowed outside production), no query/fragment,
- * and in production the host must resolve to public addresses only (SSRF, plan §6).
- */
-export async function validateSiteUrl(raw, { env = process.env, lookup = dns.lookup } = {}) {
-  let u;
-  try {
-    u = new URL(String(raw || '').trim());
-  } catch {
-    return { ok: false, message: 'Enter the full site URL, e.g. https://example.com' };
-  }
-  const isProd = env.NODE_ENV === 'production';
-  const localHost = ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
-  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && localHost && !isProd)) {
-    return { ok: false, message: 'The site URL must use https://' };
-  }
-  if (u.search || u.hash || u.username || u.password) {
-    return { ok: false, message: 'The site URL must not carry a query string, fragment or credentials' };
-  }
-  if (isProd) {
-    if (localHost) return { ok: false, message: 'The site URL must be a public https address' };
-    try {
-      const addrs = await lookup(u.hostname, { all: true });
-      if (!addrs.length || addrs.some((a) => isPrivateIp(a.address))) {
-        return { ok: false, message: 'The site URL must resolve to a public address' };
-      }
-    } catch {
-      return { ok: false, message: 'The site URL host could not be resolved' };
-    }
-  }
-  const path = u.pathname.replace(/\/+$/, '');
-  return { ok: true, url: `${u.origin}${path}`.slice(0, 500) };
-}
+export { validateSiteUrl };
 
 export async function projectCmsRoutes(app) {
   async function loadForStaff(request, reply) {
@@ -113,7 +64,10 @@ export async function projectCmsRoutes(app) {
     const site = await validateSiteUrl(request.body?.siteUrl || project.wpUrl);
     if (!site.ok) return reply.status(400).send({ message: site.message });
 
-    const siteId = project.cmsSiteId || generateSiteId();
+    // Counters never reset on the site (contract v1.0.2 C1): re-pairing reuses the project's siteId.
+    // `newSite: true` (site lost its plugin storage / fresh install) mints a new siteId instead.
+    const newSite = request.body?.newSite === true;
+    const siteId = !newSite && project.cmsSiteId ? project.cmsSiteId : generateSiteId();
     const code = createPairingCode(siteId);
     const now = new Date();
     const expiresAt = new Date(now.getTime() + PAIRING_CODE_TTL_SEC * 1000);
@@ -124,13 +78,15 @@ export async function projectCmsRoutes(app) {
         where: { projectId: project.id, usedAt: null, burnedAt: null },
         data: { burnedAt: now, signingKeyEnc: null },
       }),
-      prisma.project.update({ where: { id: project.id }, data: { cmsSiteId: siteId, wpUrl: site.url } }),
+      // Project.wpUrl / cmsSiteId change only when pairing completes, so a live credential keeps
+      // talking to the current site until the new one has paired (review S11).
       prisma.cmsPairingCode.create({
         data: {
           projectId: project.id,
           siteId,
+          siteUrl: site.url,
           verifier: pairingVerifier(code),
-          signingKeyEnc: encryptCmsSecret(pairingSigningKey(code)),
+          signingKeyEnc: encryptCmsSecret(pairingSigningKey(code), cmsAad(project.id, 'pairing')),
           expiresAt,
           createdById: request.user.id,
         },
@@ -143,6 +99,7 @@ export async function projectCmsRoutes(app) {
       code,
       siteId,
       siteUrl: site.url,
+      newSite: siteId !== project.cmsSiteId,
       expiresAt: expiresAt.toISOString(),
       ttlSeconds: PAIRING_CODE_TTL_SEC,
       message: 'Paste this code into the site admin (Plugins → Agency OS bridge → Pair). It is shown only once and expires in 15 minutes.',
@@ -163,8 +120,8 @@ export async function projectCmsRoutes(app) {
       where: { projectId: project.id, keyId: cred.keyId },
       data: {
         pendingKeyId,
-        inboundKeyPendingEnc: encryptCmsSecret(generateKey()),
-        outboundKeyPendingEnc: encryptCmsSecret(generateKey()),
+        inboundKeyPendingEnc: encryptCmsSecret(generateKey(), cmsAad(project.id, 'inbound')),
+        outboundKeyPendingEnc: encryptCmsSecret(generateKey(), cmsAad(project.id, 'outbound')),
         pendingCreatedAt: new Date(),
       },
     });
@@ -192,7 +149,7 @@ export async function projectCmsRoutes(app) {
       ? await prisma.cmsPairingCode.findFirst({
           where: { projectId: project.id },
           orderBy: { createdAt: 'desc' },
-          select: { expiresAt: true, usedAt: true, burnedAt: true, failedAttempts: true, createdAt: true },
+          select: { expiresAt: true, usedAt: true, burnedAt: true, failedAttempts: true, createdAt: true, siteId: true, siteUrl: true },
         })
       : null;
     const lastSeenMs = project.cmsLastSeenAt ? new Date(project.cmsLastSeenAt).getTime() : null;
@@ -217,6 +174,9 @@ export async function projectCmsRoutes(app) {
       capabilities: project.cmsCapabilities || null,
       health: project.cmsHealth || null,
       lastCursor: project.cmsLastCursor ?? null,
+      repairNeeded: project.cmsRepairNeededAt
+        ? { at: project.cmsRepairNeededAt, reason: project.cmsRepairReason || null }
+        : null,
       encryptionConfigured: isCmsKeyCryptoConfigured(),
       pairingCode: lastCode
         ? {
@@ -225,6 +185,8 @@ export async function projectCmsRoutes(app) {
             used: !!lastCode.usedAt,
             burned: !!lastCode.burnedAt,
             failedAttempts: lastCode.failedAttempts,
+            siteId: lastCode.siteId,
+            siteUrl: lastCode.siteUrl || null,
           }
         : null,
       live: null,

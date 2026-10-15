@@ -16,7 +16,7 @@ export async function wpWebhookRoutes(app) {
     }
 
     const project = await prisma.project.findFirst({
-      where: { wpApiKey: apiKey },
+      where: { wpApiKey: apiKey, cmsType: 'WORDPRESS' }, // EmDash projects never accept WP webhooks (review C2)
       select: { id: true, wpUrl: true, name: true },
     });
     if (!project) {
@@ -290,7 +290,7 @@ export async function wpWebhookRoutes(app) {
     }
 
     const project = await prisma.project.findFirst({
-      where: { wpApiKey: apiKey },
+      where: { wpApiKey: apiKey, cmsType: 'WORDPRESS' }, // EmDash projects never accept WP webhooks (review C2)
       select: { id: true, leadPmId: true, name: true },
     });
     if (!project) {
@@ -395,7 +395,7 @@ export async function wpWebhookRoutes(app) {
     }
 
     const project = await prisma.project.findFirst({
-      where: { wpApiKey: apiKey },
+      where: { wpApiKey: apiKey, cmsType: 'WORDPRESS' }, // EmDash projects never accept WP webhooks (review C2)
       select: { id: true },
     });
     if (!project) {

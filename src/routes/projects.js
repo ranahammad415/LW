@@ -3,6 +3,7 @@ import { createProjectBodySchema } from '../schemas/projects.js';
 import { generateChat, isAiConfigured } from '../lib/ai.js';
 import { syncProjectPages } from '../lib/wpSync.js';
 import { wpPageTimeline, wpCreateUpdateDraft } from '../lib/siteAdapters/wordpress.js';
+import { validateSiteUrl } from '../lib/siteAdapters/netGuard.js';
 import { ensureProjectAccess } from '../lib/ensureProjectAccess.js';
 import { notify } from '../lib/notificationService.js';
 import { resolveCycle } from '../lib/workCycle.js';
@@ -625,7 +626,40 @@ export async function projectRoutes(app) {
         if (!['WORDPRESS', 'EMDASH'].includes(body.cmsType)) {
           return reply.status(400).send({ message: 'cmsType must be WORDPRESS or EMDASH' });
         }
-        data.cmsType = body.cmsType;
+        if (body.cmsType !== project.cmsType) {
+          // Moving a project between CMSs with data in place would mix WP and EmDash ids in the same
+          // tables (the WP → EmDash migration flow is Phase 3). Only empty projects may switch (review C2).
+          const [reviews, pages] = await Promise.all([
+            prisma.wpContentReview.count({ where: { projectId: id } }),
+            prisma.wpPage.count({ where: { projectId: id } }),
+          ]);
+          if (reviews > 0 || pages > 0 || project.wpApiKey) {
+            return reply.status(409).send({
+              code: 'CMS_SWITCH_BLOCKED',
+              message:
+                'This project already has WordPress data (pages, content reviews or an API key). Switching the site CMS is only possible on a project without that data; the WordPress → EmDash migration flow comes later.',
+            });
+          }
+          data.cmsType = body.cmsType;
+        }
+      }
+      const targetCms = data.cmsType || project.cmsType;
+      if (targetCms === 'EMDASH') {
+        // The EmDash site URL is pinned by pairing (contract §4 / v1.0.1 O9); OS → site calls go only there.
+        if (body.wpUrl !== undefined && project.cmsType === 'EMDASH' && (data.wpUrl || null) !== (project.wpUrl || null)) {
+          return reply.status(400).send({ code: 'REPAIR_REQUIRED', message: 'Domain change needs re-pairing; create a new pairing code' });
+        }
+        if (body.wpApiKey !== undefined && data.wpApiKey) {
+          return reply.status(400).send({ message: 'EmDash projects do not use a WordPress API key' });
+        }
+        if (data.cmsType === 'EMDASH') {
+          const url = data.wpUrl !== undefined ? data.wpUrl : project.wpUrl;
+          if (url) {
+            const site = await validateSiteUrl(url);
+            if (!site.ok) return reply.status(400).send({ message: site.message });
+            data.wpUrl = site.url;
+          }
+        }
       }
       if (Object.keys(data).length === 0) {
         return reply.send({

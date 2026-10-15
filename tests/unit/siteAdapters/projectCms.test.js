@@ -32,7 +32,7 @@ vi.mock('../../../src/lib/ensureProjectAccess.js', () => ({
 
 import { projectCmsRoutes, validateSiteUrl } from '../../../src/routes/projectCms.js';
 import { parsePairingCode, pairingVerifier, pairingSigningKey } from '../../../src/lib/siteAdapters/signing.js';
-import { decryptCmsSecret } from '../../../src/lib/cmsKeyCrypto.js';
+import { decryptCmsSecret, cmsAad } from '../../../src/lib/cmsKeyCrypto.js';
 
 let app;
 const PID = '7d0c6c55-1111-4222-8333-944444444444';
@@ -85,17 +85,23 @@ describe('POST /:id/cms/pairing-code', () => {
     const created = db.calls.find((c) => c.key === 'cmsPairingCode.create').args.data;
     expect(created.verifier).toBe(pairingVerifier(code));
     expect(JSON.stringify(created)).not.toContain(code);
-    expect(decryptCmsSecret(created.signingKeyEnc)).toBe(pairingSigningKey(code));
+    expect(decryptCmsSecret(created.signingKeyEnc, cmsAad(PID, 'pairing'))).toBe(pairingSigningKey(code));
     // Earlier unused codes for the project are burned (signing key deleted).
     const burn = db.calls.find((c) => c.key === 'cmsPairingCode.updateMany').args;
     expect(burn).toMatchObject({ where: { projectId: PID, usedAt: null, burnedAt: null }, data: { signingKeyEnc: null } });
-    expect(db.calls.find((c) => c.key === 'project.update').args.data).toMatchObject({ cmsSiteId: siteId, wpUrl: 'https://oasispoolspas.com' });
+    // Review S11: the URL/siteId are stored on the code and applied only when pairing completes.
+    expect(db.calls.find((c) => c.key === 'project.update')).toBeUndefined();
+    expect(created).toMatchObject({ siteId, siteUrl: 'https://oasispoolspas.com' });
   });
 
   it('keeps an existing siteId, refuses WordPress projects, other PMs and CLIENTs', async () => {
     db.overrides['project.findUnique'] = async () => project({ cmsSiteId: 'site_existing01' });
     const res = await app.inject({ method: 'POST', url: `/api/projects/${PID}/cms/pairing-code`, payload: {} });
-    expect(res.json().siteId).toBe('site_existing01');
+    expect(res.json()).toMatchObject({ siteId: 'site_existing01', newSite: false });
+    // v1.0.2 C1: only an explicit newSite mints a new siteId (site lost its storage).
+    const fresh = await app.inject({ method: 'POST', url: `/api/projects/${PID}/cms/pairing-code`, payload: { newSite: true } });
+    expect(fresh.json().siteId).not.toBe('site_existing01');
+    expect(fresh.json().newSite).toBe(true);
 
     db.overrides['project.findUnique'] = async () => project({ cmsType: 'WORDPRESS' });
     expect((await app.inject({ method: 'POST', url: `/api/projects/${PID}/cms/pairing-code`, payload: {} })).statusCode).toBe(400);
@@ -129,8 +135,8 @@ describe('rotate-keys and health', () => {
     const r = await app.inject({ method: 'POST', url: `/api/projects/${PID}/cms/rotate-keys` });
     expect(r.json()).toMatchObject({ success: true, currentKeyId: 3, pendingKeyId: 4 });
     const data = db.calls.find((c) => c.key === 'cmsCredential.updateMany').args.data;
-    expect(decryptCmsSecret(data.inboundKeyPendingEnc)).toMatch(/^aosk1_/);
-    expect(decryptCmsSecret(data.outboundKeyPendingEnc)).toMatch(/^aosk1_/);
+    expect(decryptCmsSecret(data.inboundKeyPendingEnc, cmsAad(PID, 'inbound'))).toMatch(/^aosk1_/);
+    expect(decryptCmsSecret(data.outboundKeyPendingEnc, cmsAad(PID, 'outbound'))).toMatch(/^aosk1_/);
   });
 
   it('reports stored health without secrets', async () => {

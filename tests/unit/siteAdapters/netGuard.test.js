@@ -1,0 +1,89 @@
+/**
+ * Review S2/S7 + contract v1.0.2 C2: private-address guard, connect-time lookup refusal,
+ * no redirect following, no signing with an empty key.
+ */
+import { describe, it, expect, afterEach } from 'vitest';
+import http from 'node:http';
+import { isPrivateIp, guardedLookup, guardedFetch, validateSiteUrl } from '../../../src/lib/siteAdapters/netGuard.js';
+import { siteRequest } from '../../../src/lib/siteAdapters/emdash.js';
+import { computeSignature, signResponse, errorBody } from '../../../src/lib/siteAdapters/signing.js';
+
+const ORIGINAL_ENV = process.env.NODE_ENV;
+afterEach(() => {
+  process.env.NODE_ENV = ORIGINAL_ENV;
+});
+
+describe('isPrivateIp', () => {
+  it.each([
+    '0.1.2.3', '10.0.0.1', '100.64.0.1', '127.0.0.1', '169.254.169.254', '172.16.0.1', '192.0.0.8', '192.168.1.1',
+    '198.18.0.1', '198.19.255.255', '224.0.0.1', '240.0.0.1', '255.255.255.255',
+    '::', '::1', '::ffff:127.0.0.1', '::ffff:7f00:1', '::FFFF:A9FE:A9FE', '64:ff9b::a9fe:a9fe', 'fec0::1', 'fd12::1',
+    'fe80::1', 'ff02::1', '[::1]', 'localhost', '',
+  ])('blocks %s', (a) => {
+    expect(isPrivateIp(a)).toBe(true);
+  });
+  it.each(['93.184.216.34', '8.8.8.8', '1.1.1.1', '2606:4700::1111', '2001:4860:4860::8888'])('allows public %s', (a) => {
+    expect(isPrivateIp(a)).toBe(false);
+  });
+});
+
+describe('validateSiteUrl (pairing + cmsType switch)', () => {
+  it('refuses private resolutions and IP literals in production', async () => {
+    const env = { NODE_ENV: 'production' };
+    expect((await validateSiteUrl('https://rebind.example', { env, lookup: async () => [{ address: '::ffff:10.0.0.1' }] })).ok).toBe(false);
+    expect((await validateSiteUrl('https://169.254.169.254', { env, lookup: async () => [{ address: '169.254.169.254' }] })).ok).toBe(false);
+    expect((await validateSiteUrl('https://ex.com', { env, lookup: async () => [{ address: '93.184.216.34' }] })).ok).toBe(true);
+  });
+});
+
+describe('guardedLookup (connect time, DNS rebinding)', () => {
+  it('refuses a private address in production and allows it in development', async () => {
+    process.env.NODE_ENV = 'production';
+    const err = await new Promise((resolve) => guardedLookup('localhost', {}, (e) => resolve(e)));
+    expect(err?.code).toBe('EAI_BLOCKED');
+    process.env.NODE_ENV = 'test';
+    const ok = await new Promise((resolve) => guardedLookup('localhost', {}, (e, addr) => resolve(e ? null : addr)));
+    expect(typeof ok).toBe('string');
+  });
+});
+
+describe('no redirects (v1.0.2 C2)', () => {
+  it('guardedFetch returns the 3xx instead of following it, and siteRequest turns it into UPSTREAM_UNAVAILABLE (final)', async () => {
+    process.env.NODE_ENV = 'test';
+    let hits = 0;
+    const server = http.createServer((req, res) => {
+      hits += 1;
+      res.writeHead(302, { location: 'http://127.0.0.1:1/elsewhere' });
+      res.end();
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const { port } = server.address();
+    try {
+      const res = await guardedFetch(`http://localhost:${port}/x`, { method: 'POST', body: '{}', headers: {} });
+      expect(res.status).toBe(302);
+      const conn = { siteUrl: `http://localhost:${port}`, siteId: 'site_abcdefgh', inbound: { current: { id: 1, secret: 'aosk1_test' }, prev: null } };
+      await expect(siteRequest(conn, 'health', {}, { retryDelays: [1, 1], sleep: async () => {} })).rejects.toMatchObject({
+        code: 'UPSTREAM_UNAVAILABLE',
+        retryable: false,
+        details: { redirect: true },
+      });
+      expect(hits).toBe(2); // one guardedFetch above + one siteRequest attempt, no retries
+    } finally {
+      server.close();
+    }
+  });
+});
+
+describe('signing hardening', () => {
+  it('S7: refuses to sign with a missing or empty key', () => {
+    expect(() => computeSignature('', 'x')).toThrow(/empty key/);
+    expect(() => computeSignature(undefined, 'x')).toThrow(/empty key/);
+    expect(() => signResponse({ secret: '', keyId: 1, status: 200, path: '/a', requestNonce: 'n', body: '' })).toThrow();
+  });
+  it('v1.0.2: COUNTER_REGRESSION is 409 and not retryable', () => {
+    expect(errorBody('COUNTER_REGRESSION', 'x')).toEqual({
+      status: 409,
+      body: { ok: false, error: { code: 'COUNTER_REGRESSION', message: 'x', retryable: false } },
+    });
+  });
+});

@@ -39,7 +39,8 @@ const MAX_INVENTORY_PAGES = 50;
 const RECEIPT_RETENTION_DAYS = 90;
 const CONNECTION_LOST_MS = 24 * 60 * 60 * 1000;
 
-function retryOpts(interactive) {
+function retryOpts(interactive, noRetry = false) {
+  if (noRetry) return { retryDelays: [], timeoutMs: 5000 };
   return { retryDelays: interactive ? INTERACTIVE_RETRY_DELAYS_MS : READ_RETRY_DELAYS_MS };
 }
 
@@ -57,7 +58,7 @@ async function pairedEmdashProjectIds(projectId) {
 }
 
 /** Pull reviews for one or all paired EmDash projects. Returns { synced, errors }. */
-export async function syncEmdashPipelines({ projectId, interactive = false, log } = {}) {
+export async function syncEmdashPipelines({ projectId, interactive = false, noRetry = false, log } = {}) {
   if (!isCmsKeyCryptoConfigured()) return { synced: 0, errors: 0, skipped: 'CMS_KEY_ENCRYPTION_KEY missing' };
   const ids = await pairedEmdashProjectIds(projectId);
   let synced = 0;
@@ -67,7 +68,7 @@ export async function syncEmdashPipelines({ projectId, interactive = false, log 
       const { conn } = await loadEmdashConnection(id);
       let cursor = null;
       for (let page = 0; page < MAX_LIST_PAGES; page += 1) {
-        const res = await emdashRoutes.pipelineList(conn, { status: 'any', limit: 100, cursor }, retryOpts(interactive));
+        const res = await emdashRoutes.pipelineList(conn, { status: 'any', limit: 100, cursor }, retryOpts(interactive, noRetry));
         const items = Array.isArray(res?.items) ? res.items : [];
         for (const review of items) {
           try {
@@ -274,6 +275,13 @@ export async function replayEmdashEvents(projectId, { log, maxPages = 1 } = {}) 
           }
         }
         chunk.push(ev);
+      }
+      // Same v1.0.2 C1 check as /events: replayed events with known eventIds are duplicates, never
+      // regressions; a new eventId reusing a stored counter stops the replay and flags re-pair.
+      const regression = await prismaCmsStore.findCounterRegression(project.id, chunk);
+      if (regression) {
+        await prismaCmsStore.flagRepairNeeded(project.id, regression, log);
+        return { applied, regression };
       }
       const r = await processEventBatch({ store: prismaCmsStore, project, events: chunk, log });
       applied += r.accepted.length;

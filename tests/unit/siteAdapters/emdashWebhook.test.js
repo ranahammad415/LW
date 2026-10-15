@@ -20,7 +20,7 @@ import {
   verifyResponse,
   generateKey,
 } from '../../../src/lib/siteAdapters/signing.js';
-import { encryptCmsSecret, decryptCmsSecret } from '../../../src/lib/cmsKeyCrypto.js';
+import { encryptCmsSecret, decryptCmsSecret, cmsAad } from '../../../src/lib/cmsKeyCrypto.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ex = (name) =>
@@ -30,6 +30,10 @@ const SITE = 'site_9f3c2a7b41d0';
 const PROJECT_ID = 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d';
 const HS = '/api/webhooks/emdash/handshake';
 const EV = '/api/webhooks/emdash/events';
+const encIn = (v, pid = PROJECT_ID) => encryptCmsSecret(v, cmsAad(pid, 'inbound'));
+const encOut = (v, pid = PROJECT_ID) => encryptCmsSecret(v, cmsAad(pid, 'outbound'));
+const decIn = (v, pid = PROJECT_ID) => decryptCmsSecret(v, cmsAad(pid, 'inbound'));
+const decOut = (v, pid = PROJECT_ID) => decryptCmsSecret(v, cmsAad(pid, 'outbound'));
 
 function createMemoryStore() {
   const s = {
@@ -44,8 +48,15 @@ function createMemoryStore() {
     heartbeats: 0,
     nonces: new Map(),
     failApplyFor: null,
+    staleFor: null,
+    cursors: new Map(),
+    lastClaims: new Map(),
+    repairNotices: 0,
   };
   Object.assign(s, {
+    async findProjectById(id) {
+      return s.projects.get(id) || null;
+    },
     async findProjectBySiteId(siteId) {
       return [...s.projects.values()].find((p) => p.cmsSiteId === siteId) || null;
     },
@@ -58,7 +69,7 @@ function createMemoryStore() {
       );
     },
     decryptSigningKey(code) {
-      return decryptCmsSecret(code.signingKeyEnc);
+      return decryptCmsSecret(code.signingKeyEnc, cmsAad(code.projectId, 'pairing'));
     },
     async recordPairingFailure(id) {
       const c = s.codes.find((x) => x.id === id);
@@ -76,11 +87,17 @@ function createMemoryStore() {
       c.signingKeyEnc = null;
       return true;
     },
-    async completePairing({ projectId, contract, inbound, outbound, now }) {
+    async completePairing({ projectId, siteId, siteUrl, contract, inbound, outbound, now }) {
+      const proj = s.projects.get(projectId);
+      s.lastPairing = { siteId, siteUrl, cursorBefore: proj.cmsLastCursor };
+      if (siteId && proj.cmsSiteId !== siteId) proj.cmsLastCursor = null;
+      if (siteId) proj.cmsSiteId = siteId;
+      if (siteUrl) proj.wpUrl = siteUrl;
       s.creds.set(projectId, {
+        projectId,
         keyId: 1,
-        inboundKeyEnc: encryptCmsSecret(inbound),
-        outboundKeyEnc: encryptCmsSecret(outbound),
+        inboundKeyEnc: encIn(inbound),
+        outboundKeyEnc: encOut(outbound),
         prevKeyId: null,
         pendingKeyId: null,
       });
@@ -95,10 +112,11 @@ function createMemoryStore() {
       if (!c || c.keyId !== fromKeyId || c.pendingKeyId == null) return null;
       const next = {
         keyId: c.pendingKeyId,
-        inbound: decryptCmsSecret(c.inboundKeyPendingEnc),
-        outbound: decryptCmsSecret(c.outboundKeyPendingEnc),
+        inbound: decIn(c.inboundKeyPendingEnc),
+        outbound: decOut(c.outboundKeyPendingEnc),
       };
       s.creds.set(projectId, {
+        projectId,
         keyId: c.pendingKeyId,
         inboundKeyEnc: c.inboundKeyPendingEnc,
         outboundKeyEnc: c.outboundKeyPendingEnc,
@@ -122,11 +140,30 @@ function createMemoryStore() {
     },
     async claimReceipt(pid, ev) {
       const k = `${pid}:${ev.eventId}`;
-      if (s.receipts.has(k)) return 'duplicate';
+      if (s.receipts.has(k)) return s.receipts.get(k) === 'pending' ? 'in_flight' : 'duplicate';
       s.receipts.set(k, 'pending');
+      s.lastClaims.set(ev.eventId, ev);
       return 'new';
     },
+    async findCounterRegression(pid, events) {
+      for (const e of events) {
+        if (s.receipts.has(`${pid}:${e.eventId}`)) continue;
+        const owner = s.cursors.get(e.cursor);
+        if (owner && owner !== e.eventId) return `cursor ${e.cursor} already belongs to another event`;
+      }
+      return null;
+    },
+    async flagRepairNeeded(pid, reason) {
+      const proj = s.projects.get(pid);
+      if (proj.cmsRepairNeededAt) return false;
+      proj.cmsRepairNeededAt = new Date();
+      proj.cmsRepairReason = reason;
+      s.repairNotices += 1;
+      return true;
+    },
     async finalizeReceipt(pid, eid, outcome) {
+      const ev = s.lastClaims.get(eid);
+      if (ev) s.cursors.set(ev.cursor, eid);
       s.receipts.set(`${pid}:${eid}`, outcome);
     },
     async releaseReceipt(pid, eid) {
@@ -151,6 +188,7 @@ function createMemoryStore() {
     },
     async applyPipelineEvent(project, n) {
       if (s.failApplyFor === n.eventType) throw new Error('db down');
+      if (s.staleFor === n.eventType) return { skipped: 'stale_seq' };
       s.applied.push(n);
       s.reviewSeq.set(n.cms.reviewId, n.cms.seq);
     },
@@ -188,7 +226,7 @@ function addCode({ expiresInMs = 900_000 } = {}) {
     projectId: PROJECT_ID,
     siteId: SITE,
     verifier: pairingVerifier(code),
-    signingKeyEnc: encryptCmsSecret(pairingSigningKey(code)),
+    signingKeyEnc: encryptCmsSecret(pairingSigningKey(code), cmsAad(PROJECT_ID, 'pairing')),
     expiresAt: new Date(nowMs + expiresInMs),
     failedAttempts: 0,
     usedAt: null,
@@ -201,9 +239,10 @@ function pairKeys() {
   const inbound = generateKey();
   const outbound = generateKey();
   store.creds.set(PROJECT_ID, {
+    projectId: PROJECT_ID,
     keyId: 1,
-    inboundKeyEnc: encryptCmsSecret(inbound),
-    outboundKeyEnc: encryptCmsSecret(outbound),
+    inboundKeyEnc: encIn(inbound),
+    outboundKeyEnc: encOut(outbound),
     prevKeyId: null,
     pendingKeyId: null,
   });
@@ -261,7 +300,8 @@ describe('POST /handshake — pairing', () => {
     const json = res.json();
     expect(json).toMatchObject({ ok: true, contract: 1, siteId: SITE, projectId: PROJECT_ID, keys: { keyId: 1 } });
     expect(json.keys.inbound).toMatch(/^aosk1_[A-Za-z0-9_-]{43}$/);
-    expect(json.contractRevision).toBe('1.0.1');
+    expect(json.contractRevision).toBe('1.0.2');
+    expect(store.lastPairing).toEqual({ siteId: SITE, siteUrl: null, cursorBefore: null });
     expect(json.pms[0].memberId).toBe('8f14e45f-ceea-467a-9575-5f3c1b2a7d90');
     const sig = verifyResponse({
       status: 200,
@@ -275,8 +315,8 @@ describe('POST /handshake — pairing', () => {
     expect(sig.ok).toBe(true);
     // Stored keys equal the issued ones; the code is used and its signing key deleted.
     const cred = store.creds.get(PROJECT_ID);
-    expect(decryptCmsSecret(cred.inboundKeyEnc)).toBe(json.keys.inbound);
-    expect(decryptCmsSecret(cred.outboundKeyEnc)).toBe(json.keys.outbound);
+    expect(decIn(cred.inboundKeyEnc)).toBe(json.keys.inbound);
+    expect(decOut(cred.outboundKeyEnc)).toBe(json.keys.outbound);
     expect(store.codes[0].usedAt).toBeTruthy();
     expect(store.codes[0].signingKeyEnc).toBeNull();
   });
@@ -355,11 +395,13 @@ describe('POST /handshake — pairing', () => {
   it('refuses mode=heartbeat signed with the pairing key and a body siteId that differs from X-AOS-Site', async () => {
     addProject();
     const code = addCode();
+    // v1.0.1 / review S8: every pairing-path failure except 426/413 is PAIRING_CODE_INVALID.
     const r1 = await post(HS, handshakeBody('heartbeat'), { secret: pairingSigningKey(code), keyId: 'pairing' });
-    expect(r1.json().error.code).toBe('VALIDATION');
+    expect(r1.statusCode).toBe(401);
+    expect(r1.json().error.code).toBe('PAIRING_CODE_INVALID');
     const code2 = addCode();
     const r2 = await post(HS, handshakeBody('pair', { siteId: 'site_other00000' }), { secret: pairingSigningKey(code2), keyId: 'pairing' });
-    expect(r2.json().error.code).toBe('VALIDATION');
+    expect(r2.json().error.code).toBe('PAIRING_CODE_INVALID');
   });
 
   it('answers 426 when there is no common contract', async () => {
@@ -398,8 +440,8 @@ describe('POST /handshake — heartbeat and rotation', () => {
     const nextOut = generateKey();
     Object.assign(store.creds.get(PROJECT_ID), {
       pendingKeyId: 2,
-      inboundKeyPendingEnc: encryptCmsSecret(nextIn),
-      outboundKeyPendingEnc: encryptCmsSecret(nextOut),
+      inboundKeyPendingEnc: encIn(nextIn),
+      outboundKeyPendingEnc: encOut(nextOut),
     });
     const r = await post(HS, handshakeBody('heartbeat'), { secret: outbound, keyId: 1 });
     expect(r.statusCode).toBe(200);
@@ -588,5 +630,126 @@ describe('POST /events', () => {
       keyId: 1,
     });
     expect(mismatch.statusCode).toBe(400);
+  });
+});
+
+describe('review fixes (S3, S4, S5, S8, S9, v1.0.2 C1)', () => {
+  let keys;
+  beforeEach(() => {
+    addProject();
+    keys = pairKeys();
+  });
+  const send = (events, opts = {}) => post(EV, eventsBody(events), { secret: keys.outbound, keyId: 1, ...opts });
+
+  it('S3: the per-IP flood guard answers 429 RATE_LIMITED (retryable) with Retry-After, not VALIDATION', async () => {
+    const rateLimit = (await import('@fastify/rate-limit')).default;
+    const limited = Fastify();
+    limited.setValidatorCompiler(() => (data) => ({ value: data }));
+    await limited.register(rateLimit, { global: true, max: 1000, timeWindow: '1 minute' });
+    await limited.register(emdashWebhookRoutes, {
+      prefix: '/api/webhooks/emdash',
+      store,
+      now: () => nowMs,
+      onHeal,
+      routeRateLimit: { max: 1, timeWindow: '1 minute' },
+    });
+    await limited.ready();
+    const body = eventsBody([ex('events.request').events[2]]);
+    const mk = () =>
+      limited.inject({
+        method: 'POST',
+        url: EV,
+        payload: body,
+        headers: signRequest({ secret: keys.outbound, keyId: 1, siteId: SITE, path: EV, body, timestamp: Math.floor(nowMs / 1000) }),
+      });
+    expect((await mk()).statusCode).toBe(200);
+    const second = await mk();
+    expect(second.statusCode).toBe(429);
+    expect(second.json().error).toMatchObject({ code: 'RATE_LIMITED', retryable: true });
+    expect(Number(second.headers['retry-after'])).toBeGreaterThan(0);
+    await limited.close();
+  });
+
+  it('S4: an event still pending on another instance is rejected INTERNAL retryable and kept out of lastCursor', async () => {
+    const [e1, e2] = ex('events.request').events;
+    store.receipts.set(`${PROJECT_ID}:${e2.eventId}`, 'pending');
+    store.reviewSeq.set(e1.review.reviewId, 2);
+    const res = await send([e1, e2]);
+    const json = res.json();
+    expect(json.accepted).toEqual([e1.eventId]);
+    expect(json.duplicate).toEqual([]);
+    expect(json.rejected).toEqual([{ eventId: e2.eventId, code: 'INTERNAL', retryable: true, message: 'Event is being processed; retry later' }]);
+    expect(json.lastCursor).toBe(e1.cursor);
+  });
+
+  it('S5: losing the atomic seq claim is recorded as stale, without heal', async () => {
+    const [e1] = ex('events.request').events;
+    store.staleFor = 'pipeline_pm_approved';
+    const res = await send([e1]);
+    expect(res.json().accepted).toEqual([e1.eventId]);
+    expect(store.receipts.get(`${PROJECT_ID}:${e1.eventId}`)).toBe('stale');
+    await new Promise((r) => setImmediate(r));
+    expect(onHeal).not.toHaveBeenCalled();
+  });
+
+  it('S8: a replayed pairing request gets 401 PAIRING_CODE_INVALID, not 409 REPLAY', async () => {
+    store.creds.clear();
+    store.projects.get(PROJECT_ID).cmsPairedAt = null;
+    const code = addCode();
+    const body = handshakeBody('pair', { supportedContracts: [2] }); // 426 after a valid signature: nonce is stored
+    const nonce = 'efefefef-0101-4232-8a8a-565656565656';
+    const first = await post(HS, body, { secret: pairingSigningKey(code), keyId: 'pairing', nonce });
+    expect(first.statusCode).toBe(426);
+    const replay = await post(HS, body, { secret: pairingSigningKey(code), keyId: 'pairing', nonce });
+    expect(replay.statusCode).toBe(401);
+    expect(replay.json().error.code).toBe('PAIRING_CODE_INVALID');
+  });
+
+  it('S9: CMS_WEBHOOK_MAX_SKEW_SEC is clamped to 300 s', async () => {
+    const saved = process.env.CMS_WEBHOOK_MAX_SKEW_SEC;
+    process.env.CMS_WEBHOOK_MAX_SKEW_SEC = '900';
+    const other = Fastify();
+    other.setValidatorCompiler(() => (data) => ({ value: data }));
+    await other.register(emdashWebhookRoutes, { prefix: '/api/webhooks/emdash', store, now: () => nowMs, onHeal });
+    await other.ready();
+    const body = eventsBody([ex('events.request').events[2]]);
+    const r = await other.inject({
+      method: 'POST',
+      url: EV,
+      payload: body,
+      headers: signRequest({ secret: keys.outbound, keyId: 1, siteId: SITE, path: EV, body, timestamp: Math.floor(nowMs / 1000) - 600 }),
+    });
+    if (saved === undefined) delete process.env.CMS_WEBHOOK_MAX_SKEW_SEC;
+    else process.env.CMS_WEBHOOK_MAX_SKEW_SEC = saved;
+    expect(r.statusCode).toBe(401);
+    expect(r.json().error.code).toBe('STALE_TIMESTAMP');
+    await other.close();
+  });
+
+  it('v1.0.2 C1: a NEW eventId reusing a stored cursor → whole request 409 COUNTER_REGRESSION, nothing stored, flagged once', async () => {
+    const events = ex('events.request').events;
+    expect((await send(events)).statusCode).toBe(200);
+    const appliedBefore = store.applied.length;
+    const imposter = { ...events[2], eventId: '01JAC8A0B1C2D3E4F5G6H7J8ZY', snapshotText: undefined };
+    delete imposter.snapshotText;
+    const fresh = { ...events[2], eventId: '01JAC8A0B1C2D3E4F5G6H7J8ZX', cursor: 99 };
+    delete fresh.snapshotText;
+    const r = await send([fresh, imposter]);
+    expect(r.statusCode).toBe(409);
+    expect(r.json().error).toMatchObject({ code: 'COUNTER_REGRESSION', retryable: false });
+    expect(store.receipts.has(`${PROJECT_ID}:${fresh.eventId}`)).toBe(false);
+    expect(store.applied.length).toBe(appliedBefore);
+    expect(store.projects.get(PROJECT_ID).cmsRepairNeededAt).toBeTruthy();
+    await send([imposter], {});
+    expect(store.repairNotices).toBe(1);
+  });
+
+  it('v1.0.2 C1: re-sending known events (replay, outbox retry) is duplicate, never a regression', async () => {
+    const events = ex('events.request').events;
+    await send(events);
+    const again = await send(events);
+    expect(again.statusCode).toBe(200);
+    expect(again.json().duplicate).toEqual(events.map((e) => e.eventId));
+    expect(store.projects.get(PROJECT_ID).cmsRepairNeededAt).toBeFalsy();
   });
 });

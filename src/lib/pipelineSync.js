@@ -15,14 +15,25 @@ import { syncEmdashPipelines } from './emdashSync.js';
  * pull fresh preview URLs after one expires); omit it for the full sweep.
  * Returns { synced: number, errors: number }
  */
-export async function syncPipelineFromWp({ projectId } = {}) {
+/** Client-portal EmDash pulls: at most once per 60 s per project per instance (review C4). */
+const CLIENT_EMDASH_PULL_MS = 60_000;
+const lastClientEmdashPull = new Map();
+
+export async function syncPipelineFromWp({ projectId, source } = {}) {
   // EmDash project (refresh / client read of one project): pull through the EmDash adapter.
   // The full sweep below stays WordPress-only; EmDash has its own leader-only interval
   // (lib/emdashSync.js startEmdashSyncInterval).
   if (projectId) {
     const target = await prisma.project.findUnique({ where: { id: projectId }, select: { cmsType: true } });
     if (target?.cmsType === 'EMDASH') {
-      const r = await syncEmdashPipelines({ projectId, interactive: true });
+      if (source === 'client') {
+        const last = lastClientEmdashPull.get(projectId) || 0;
+        if (Date.now() - last < CLIENT_EMDASH_PULL_MS) return { synced: 0, errors: 0, throttled: true };
+        lastClientEmdashPull.set(projectId, Date.now());
+        if (lastClientEmdashPull.size > 5000) lastClientEmdashPull.clear();
+      }
+      // Client page loads fail fast (no retry); the leader interval and events keep the mirror fresh.
+      const r = await syncEmdashPipelines({ projectId, interactive: true, noRetry: source === 'client' });
       return { synced: r.synced, errors: r.errors };
     }
   }
@@ -304,7 +315,7 @@ export async function syncClientProjectsFromWp(projectIds, logger) {
   const results = await Promise.all(
     ids.map(async (projectId) => {
       try {
-        return await syncPipelineFromWp({ projectId });
+        return await syncPipelineFromWp({ projectId, source: 'client' });
       } catch (err) {
         logger?.warn?.({ err, projectId }, 'Client pipeline WP sync failed');
         return { synced: 0, errors: 1 };

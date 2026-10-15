@@ -34,10 +34,15 @@ vi.mock('../../../src/lib/prisma.js', () => {
   return { prisma };
 });
 vi.mock('../../../src/lib/notificationService.js', () => ({ notify: vi.fn(async () => {}), notifyTest: vi.fn(async () => []) }));
+// OS → site calls go through netGuard.guardedFetch by default; route it to the test's fetch mock.
+vi.mock('../../../src/lib/siteAdapters/netGuard.js', async (orig) => ({
+  ...(await orig()),
+  guardedFetch: (...args) => globalThis.fetch(...args),
+}));
 vi.mock('../../../src/lib/contentMapSync.js', () => ({ mirrorPipelineToMaps: vi.fn(async () => {}), reconcileProjectMapsSafe: vi.fn() }));
 
 import { pmPipelineRoutes } from '../../../src/routes/pm/pipeline.js';
-import { encryptCmsSecret } from '../../../src/lib/cmsKeyCrypto.js';
+import { encryptCmsSecret, cmsAad } from '../../../src/lib/cmsKeyCrypto.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ex = (name) =>
@@ -77,9 +82,10 @@ function emdashProject() {
       ? { id: PID, name: 'Oasis', cmsType: 'EMDASH', wpUrl: 'https://oasispoolspas.com', cmsSiteId: 'site_9f3c2a7b41d0', cmsContractVersion: 1, cmsPairedAt: new Date() }
       : { wpUrl: 'https://oasispoolspas.com', wpApiKey: null, leadPmId: 'pm-1', cmsType: 'EMDASH', name: 'Oasis', clientId: 'c1' };
   db.overrides['cmsCredential.findUnique'] = async () => ({
+    projectId: PID,
     keyId: 1,
-    inboundKeyEnc: encryptCmsSecret('aosk1_fp_X5pa6uAaNxcPnJsvZkCaJQv4tX5T0j3UoZzndQLE'),
-    outboundKeyEnc: encryptCmsSecret('aosk1_O9FJkHcJu47W4g1qqob6gmxImoTv7uIB8dn3aHnBS3g'),
+    inboundKeyEnc: encryptCmsSecret('aosk1_fp_X5pa6uAaNxcPnJsvZkCaJQv4tX5T0j3UoZzndQLE', cmsAad(PID, 'inbound')),
+    outboundKeyEnc: encryptCmsSecret('aosk1_O9FJkHcJu47W4g1qqob6gmxImoTv7uIB8dn3aHnBS3g', cmsAad(PID, 'outbound')),
   });
   db.overrides['wpContentReview.findUnique'] = async () => ({
     id: 'r1',
@@ -115,8 +121,10 @@ describe('EmDash projects', () => {
     expect(init.headers['x-aos-signature']).toMatch(/^v1=[0-9a-f]{64}$/);
     expect(init.headers['x-aos-idempotency-key']).toBeTruthy();
     expect(JSON.parse(init.body)).toMatchObject({ reviewId: '01JAC7Q2HV5M8N3P4R6S9T0W1X', decision: 'approved', override: true, actor: { kind: 'human', role: 'OWNER' } });
-    const upsert = db.calls.find((c) => c.key === 'wpContentReview.upsert');
-    expect(upsert.args.update.cmsSeq).toBeUndefined();
+    // Mirror from the response: cmsMirrorSeq only, never cmsSeq (the event still notifies once).
+    const mirror = db.calls.find((c) => c.key === 'wpContentReview.updateMany');
+    expect(mirror.args.data.cmsSeq).toBeUndefined();
+    expect(mirror.args.data.cmsMirrorSeq).toBe(ex('review.response').review.seq);
   });
 
   it('a PM who does not lead the project is refused before any site call', async () => {
@@ -168,5 +176,17 @@ describe('WordPress projects are unchanged', () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe('https://wp.example/wp-json/lwa/v1/pipeline/7/pm-review');
     expect(JSON.parse(init.body)).toEqual({ decision: 'approved', comment: 'x', as_admin: true, reviewer: 'Agency Owner' });
+  });
+});
+
+describe('review C3: EmDash delete never leaks raw errors', () => {
+  it('a DB failure inside the EmDash delete becomes a JSON 500', async () => {
+    emdashProject();
+    db.overrides['wpContentReview.findUnique'] = async () => {
+      throw new Error('db exploded: secret detail');
+    };
+    const r = await app.inject({ method: 'DELETE', url: `/api/pm/pipeline/${PID}/42` });
+    expect(r.statusCode).toBe(500);
+    expect(r.json()).toEqual({ message: 'EmDash request failed' });
   });
 });

@@ -113,7 +113,8 @@ export async function emdashWebhookRoutes(app, opts = {}) {
   const rateLimit = createRateLimiter(
     Number(opts.eventsPerMin || process.env.CMS_EVENTS_RATE_PER_MIN) || 300
   );
-  const maxSkewSec = Number(process.env.CMS_WEBHOOK_MAX_SKEW_SEC) || undefined;
+  // Clamped to the contract's 300 s so the 600 s nonce TTL always covers 2 x skew (review S9).
+  const maxSkewSec = Math.min(300, Math.max(30, Number(process.env.CMS_WEBHOOK_MAX_SKEW_SEC) || 300));
 
   // Raw body for hashing; scoped to this plugin (encapsulated), so no other route changes.
   app.removeAllContentTypeParsers();
@@ -125,14 +126,32 @@ export async function emdashWebhookRoutes(app, opts = {}) {
     if (err?.code === 'FST_ERR_CTP_BODY_TOO_LARGE' || err?.statusCode === 413) {
       return sendError(reply, 'PAYLOAD_TOO_LARGE', `Request body exceeds ${MAX_EVENTS_BODY_BYTES} bytes; split the batch`);
     }
-    if (err?.statusCode && err.statusCode < 500) {
+    const status = err?.statusCode;
+    if (status === 429) {
+      // @fastify/rate-limit (per-IP flood guard): retryable, with Retry-After (contract v1.0.2 C3).
+      const after = Number(reply.getHeader('retry-after')) || Math.ceil(Number(err?.ttl || 60000) / 1000) || 60;
+      reply.header('retry-after', String(after));
+      return sendError(reply, 'RATE_LIMITED', 'Too many requests', { retryAfterSec: after });
+    }
+    if (status === 400) {
       return sendError(reply, 'VALIDATION', err.message || 'Invalid request');
+    }
+    if (status && status < 500) {
+      const { body } = errorBody('VALIDATION', err.message || 'Request refused');
+      return reply.status(status).type('application/json').send(JSON.stringify(body));
     }
     request.log.error({ err }, 'EmDash webhook failed');
     return sendError(reply, 'INTERNAL', 'Internal error');
   });
 
-  const routeOpts = { bodyLimit: MAX_EVENTS_BODY_BYTES };
+  // Own per-IP flood limit instead of the global 300/min (many sites can share one host IP and
+  // outboxes retry); the per-project /events limit below is the contract one (review S3).
+  const routeOpts = {
+    bodyLimit: MAX_EVENTS_BODY_BYTES,
+    config: {
+      rateLimit: opts.routeRateLimit || { max: Number(process.env.CMS_WEBHOOK_IP_RATE_PER_MIN) || 1200, timeWindow: '1 minute' },
+    },
+  };
 
   const resolveOutbound = async (siteId, keyId, now) => {
     const project = await store.findProjectBySiteId(siteId);
@@ -196,27 +215,42 @@ export async function emdashWebhookRoutes(app, opts = {}) {
         }
         return sendError(reply, 'PAIRING_CODE_INVALID', 'Pairing code is invalid, expired or already used', details);
       }
-      return sendError(reply, v.code, v.message, v.details);
+      // v1.0.1: on the pairing path every failure except 426 (413 is answered by the error handler)
+      // is 401 PAIRING_CODE_INVALID, including replayed and malformed requests (review S8).
+      if (v.code === 'CONTRACT_UNSUPPORTED') return sendError(reply, v.code, v.message, v.details);
+      return sendError(reply, 'PAIRING_CODE_INVALID', 'Pairing code is invalid, expired or already used');
     }
+    const invalid = (reason) => sendError(reply, 'PAIRING_CODE_INVALID', `Pairing request refused: ${reason}`);
 
     const parsed = parseJson(body);
-    if (!parsed.ok || !parsed.value || typeof parsed.value !== 'object') return sendError(reply, 'VALIDATION', 'Body must be JSON');
+    if (!parsed.ok || !parsed.value || typeof parsed.value !== 'object') return invalid('body must be JSON');
     const info = parsed.value;
-    if (info.mode !== 'pair') return sendError(reply, 'VALIDATION', 'mode must be "pair" when signed with the pairing key');
-    if (info.siteId !== v.siteId) return sendError(reply, 'VALIDATION', 'Body siteId must equal X-AOS-Site');
+    if (info.mode !== 'pair') return invalid('mode must be "pair" when signed with the pairing key');
+    if (info.siteId !== v.siteId) return invalid('body siteId must equal X-AOS-Site');
     const contract = negotiateContract(info.supportedContracts);
     if (!contract) {
       return sendError(reply, 'CONTRACT_UNSUPPORTED', 'No common contract version', { supported: [...SUPPORTED_CONTRACTS] });
     }
 
-    const project = await store.findProjectBySiteId(v.siteId);
+    // The code (not Project.cmsSiteId) names the project: a re-pair as a NEW siteId switches
+    // Project.cmsSiteId only when pairing completes, so the old credential keeps working until then.
+    const project = await store.findProjectById(code.projectId);
     if (!project || project.cmsType !== 'EMDASH' || !(await store.consumePairingCode(code.id, new Date(now)))) {
       return sendError(reply, 'PAIRING_CODE_INVALID', 'Pairing code is invalid, expired or already used');
     }
 
     const inbound = generateKey();
     const outbound = generateKey();
-    await store.completePairing({ projectId: project.id, siteInfo: info, contract, inbound, outbound, now: new Date(now) });
+    await store.completePairing({
+      projectId: project.id,
+      siteId: code.siteId,
+      siteUrl: code.siteUrl || null,
+      siteInfo: info,
+      contract,
+      inbound,
+      outbound,
+      now: new Date(now),
+    });
     request.log.info({ projectId: project.id, siteId: v.siteId }, 'EmDash site paired');
 
     const responseBody = JSON.stringify({
@@ -290,6 +324,10 @@ export async function emdashWebhookRoutes(app, opts = {}) {
   }
 
   function sendSigned(reply, { secret, keyId, path, nonce, body, now }) {
+    if (!secret) {
+      // Never sign with an empty key (review S7).
+      return sendError(reply, 'INTERNAL', 'No signing key available for this response');
+    }
     const headers = signResponse({
       secret,
       keyId,
@@ -350,6 +388,16 @@ export async function emdashWebhookRoutes(app, opts = {}) {
     if (!Number.isInteger(batch.contract) || batch.contract < 1) return sendError(reply, 'VALIDATION', 'contract is required');
     if (!Array.isArray(batch.events) || batch.events.length < 1 || batch.events.length > MAX_EVENTS_PER_BATCH) {
       return sendError(reply, 'VALIDATION', `events must hold 1..${MAX_EVENTS_PER_BATCH} items`);
+    }
+
+    // v1.0.2 C1: a NEW eventId reusing a stored cursor, a stored (review, seq) of another event, or a
+    // known reviewNo/entryNo mapped to another ULID means the site lost its storage. Whole request:
+    // 409 COUNTER_REGRESSION, nothing stored, project flagged "re-pair needed".
+    const regression = await store.findCounterRegression(project.id, batch.events.filter((e) => !validateEvent(e)));
+    if (regression) {
+      await store.flagRepairNeeded(project.id, regression, request.log);
+      request.log.warn({ projectId: project.id, regression }, 'EmDash counter regression');
+      return sendError(reply, 'COUNTER_REGRESSION', `${regression}: re-pair this site as a new siteId`);
     }
 
     const result = await processEventBatch({ store, project, events: batch.events, log: request.log });
@@ -420,6 +468,12 @@ export async function processEventBatch({ store, project, events, log }) {
       storedCursor = Math.max(storedCursor, ev.cursor);
       continue;
     }
+    if (claim === 'in_flight') {
+      // v1.0.2 C4: being processed by another OS instance. Not final: the site re-sends it later.
+      seenInBatch.delete(ev.eventId);
+      rejected.push({ eventId: ev.eventId, code: 'INTERNAL', retryable: true, message: 'Event is being processed; retry later' });
+      continue;
+    }
 
     try {
       let outcome = 'stored';
@@ -439,10 +493,15 @@ export async function processEventBatch({ store, project, events, log }) {
               override: ev.override === true,
               snapshotText: ev.snapshotText,
             });
-            await store.applyPipelineEvent(project, normalized, log);
-            if (ev.seq > stored + 1) heal.add(r.reviewId);
-            seqs.set(r.reviewId, ev.seq);
-            outcome = 'applied';
+            const applied = await store.applyPipelineEvent(project, normalized, log);
+            if (applied?.skipped === 'stale_seq') {
+              // Lost the atomic seq claim to a newer event (another instance): stale, no notification.
+              outcome = 'stale';
+            } else {
+              if (ev.seq > stored + 1) heal.add(r.reviewId);
+              seqs.set(r.reviewId, ev.seq);
+              outcome = 'applied';
+            }
           }
         }
       } else if (ev.type.startsWith('content.')) {

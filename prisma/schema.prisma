@@ -492,6 +492,10 @@ model Project {
   cmsLastCursor      Int?
   /// EmDash: when cms_connection_lost was last sent (cleared by the next handshake).
   cmsLostNotifiedAt  DateTime?
+  /// EmDash: set when the site's counters went backwards (COUNTER_REGRESSION, contract v1.0.2 C1):
+  /// the site lost its storage and must re-pair as a new siteId. Cleared by the next pairing.
+  cmsRepairNeededAt  DateTime?
+  cmsRepairReason    String?       @db.VarChar(300)
   createdAt          DateTime      @default(now())
   updatedAt          DateTime      @default(now()) @updatedAt
 
@@ -562,6 +566,8 @@ model CmsPairingCode {
   id             String    @id @default(uuid())
   projectId      String
   siteId         String    @db.VarChar(64)
+  /// Site URL to apply to Project.wpUrl when this code completes pairing (validated at creation).
+  siteUrl        String?   @db.VarChar(500)
   verifier       String    @unique @db.VarChar(64)
   signingKeyEnc  String?   @db.Text
   expiresAt      DateTime
@@ -595,6 +601,8 @@ model CmsEventReceipt {
 
   @@unique([projectId, eventId])
   @@index([projectId, receivedAt])
+  @@index([projectId, cursor])
+  @@index([projectId, cmsReviewId, seq])
   @@map("cmseventreceipt")
 }
 
@@ -1159,8 +1167,11 @@ model WpContentReview {
   cmsEntryId         String?   @db.VarChar(64)
   /// EmDash draft revision under review.
   cmsRevisionId      String?   @db.VarChar(64)
-  /// Highest per-review event seq applied (contract §6.3 ordering).
+  /// Highest per-review event seq applied (contract §6.3 ordering). Only the event stream advances it.
   cmsSeq             Int?
+  /// Seq of the last Review mirrored from an OS-call response / pull. Blocks status rollback by a late
+  /// lower-seq event while that event still creates its timeline row and notification once.
+  cmsMirrorSeq       Int?
   /// EmDash admin edit URL (the "Publish in site admin" link).
   cmsEditUrl         String?   @db.VarChar(1000)
   /// EmDash (contract v1.0.1 §5.4): token-free preview link state { pm, client: { state, issuedAt, expiresAt } }.

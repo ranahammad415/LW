@@ -34,30 +34,56 @@ function getKey(env = process.env) {
   return crypto.createHash('sha256').update(raw, 'utf8').digest();
 }
 
-/** @param {string} plaintext */
-export function encryptCmsSecret(plaintext) {
+const TAG_BYTES = 16;
+
+/**
+ * Associated data binding a ciphertext to its project and purpose ('inbound' | 'outbound' | 'pairing'),
+ * so a value copied to another project or purpose does not decrypt (review S10). Purpose, not column:
+ * a key pair moves pending → current → prev between columns during rotation.
+ */
+export function cmsAad(projectId, purpose) {
+  if (!projectId || !purpose) throw new Error('cmsAad needs projectId and purpose');
+  return `agency-os-cms:v1:${projectId}:${purpose}`;
+}
+
+/**
+ * @param {string} plaintext
+ * @param {string} aad  from cmsAad(projectId, purpose)
+ */
+export function encryptCmsSecret(plaintext, aad) {
+  if (!aad) throw new Error('encryptCmsSecret needs associated data (cmsAad)');
   const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', getKey(), iv);
+  const cipher = crypto.createCipheriv('aes-256-gcm', getKey(), iv, { authTagLength: TAG_BYTES });
+  cipher.setAAD(Buffer.from(aad, 'utf8'));
   const enc = Buffer.concat([cipher.update(String(plaintext), 'utf8'), cipher.final()]);
   const tag = cipher.getAuthTag();
   return `${iv.toString('base64')}.${tag.toString('base64')}.${enc.toString('base64')}`;
 }
 
-/** @param {string} payload */
-export function decryptCmsSecret(payload) {
+/**
+ * @param {string} payload
+ * @param {string} aad  the same cmsAad used to encrypt
+ */
+export function decryptCmsSecret(payload, aad) {
+  if (!aad) throw new Error('decryptCmsSecret needs associated data (cmsAad)');
   const [ivB64, tagB64, dataB64] = String(payload || '').split('.');
   if (!ivB64 || !tagB64 || dataB64 === undefined) throw new Error('Invalid encrypted CMS secret payload');
-  const decipher = crypto.createDecipheriv('aes-256-gcm', getKey(), Buffer.from(ivB64, 'base64'));
-  decipher.setAuthTag(Buffer.from(tagB64, 'base64'));
+  const key = getKey();
+  const iv = Buffer.from(ivB64, 'base64');
+  const tag = Buffer.from(tagB64, 'base64');
+  if (iv.length !== 12 || tag.length !== TAG_BYTES) throw new Error('Invalid encrypted CMS secret payload');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv, { authTagLength: TAG_BYTES });
+  decipher.setAAD(Buffer.from(aad, 'utf8'));
+  decipher.setAuthTag(tag);
   const dec = Buffer.concat([decipher.update(Buffer.from(dataB64, 'base64')), decipher.final()]);
   return dec.toString('utf8');
 }
 
 /** Decrypt or return null (missing / undecryptable value). Never logs the value. */
-export function tryDecryptCmsSecret(payload) {
+export function tryDecryptCmsSecret(payload, aad) {
   if (!payload) return null;
   try {
-    return decryptCmsSecret(payload);
+    return decryptCmsSecret(payload, aad);
   } catch (err) {
     if (err instanceof CmsKeyConfigError) throw err;
     return null;

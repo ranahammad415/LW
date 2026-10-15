@@ -160,6 +160,12 @@ const templates = [
     bodyText: 'The EmDash site for {{projectName}} has not contacted Agency OS since {{lastSeenAt}}. Check that the site is up and the Agency OS bridge plugin is active and paired.',
     inAppMessage: 'Site connection lost: {{projectName}} (last seen {{lastSeenAt}})',
     variables: ['projectName', 'lastSeenAt', 'actionUrl'] },
+  { slug: 'cms_repair_needed', name: 'Site Needs Re-pairing', description: "An EmDash site's counters went backwards (lost plugin storage)", category: 'pipeline',
+    subject: 'Re-pair needed: {{projectName}}',
+    bodyHtml: '<p>The EmDash site for <strong>{{projectName}}</strong> sent events that conflict with what Agency OS already stored ({{reason}}). The site probably lost its plugin storage. Its events are refused until it is paired again as a new site (Website tab, "Re-pair as a new site").</p>',
+    bodyText: 'The EmDash site for {{projectName}} sent events that conflict with stored data ({{reason}}). Re-pair it as a new site from the Website tab.',
+    inAppMessage: 'Re-pair needed: {{projectName}}',
+    variables: ['projectName', 'reason', 'actionUrl'] },
 
   // ── Content Map Category ──
   { slug: 'content_map_submitted', name: 'Content Map Submitted', description: 'When a content map is submitted for client review', category: 'content_map',

@@ -137,7 +137,7 @@ export async function applyReviewEvent({ project, event: n, log }) {
     : {};
 
   // Upsert the content review record
-  const review = await prisma.wpContentReview.upsert({
+  const upsertArgs = {
     where: {
       projectId_wpPipelineId: { projectId: project.id, wpPipelineId },
     },
@@ -214,7 +214,15 @@ export async function applyReviewEvent({ project, event: n, log }) {
       ...(isPublishEvent || isCancelEvent ? { isPublished: true, publishedAt: new Date() } : {}),
       ...cmsData,
     },
-  });
+  };
+
+  let review;
+  if (isEmdash && Number.isInteger(n.cms?.seq)) {
+    review = await applyEmdashReviewWrite(upsertArgs, n.cms.seq);
+    if (!review) return { skipped: 'stale_seq' };
+  } else {
+    review = await prisma.wpContentReview.upsert(upsertArgs);
+  }
 
   // Reflect pipeline progress on any matching content map node.
   mirrorPipelineToMaps(project.id, review, log).catch(() => {});
@@ -562,4 +570,42 @@ async function notifyForReviewEvent({ project, n, review, alreadyPublished, port
     }
   }
   return null;
+}
+
+function isUniqueViolation(err) {
+  return err && (err.code === 'P2002' || /Unique constraint/i.test(String(err.message || '')));
+}
+
+/**
+ * EmDash review write with an atomic per-review seq claim (review S5, C7):
+ * 1. New row → create with cmsSeq = seq (a concurrent create falls through to the claim).
+ * 2. Existing row → `updateMany where cmsSeq IS NULL OR cmsSeq < seq` sets cmsSeq. count 0 → another
+ *    instance applied a newer event: stale, no event row, no notification (returns null).
+ * 3. Review state is written only when seq >= cmsMirrorSeq, so a late event can never roll back a
+ *    state the mirror (OS-call response / pull) already saw at a higher seq. The event row and
+ *    notifications still happen once, because only the event stream advances cmsSeq.
+ */
+async function applyEmdashReviewWrite(upsertArgs, seq) {
+  const where = upsertArgs.where;
+  let row = await prisma.wpContentReview.findUnique({ where, select: { id: true } });
+  if (!row) {
+    try {
+      return await prisma.wpContentReview.create({ data: upsertArgs.create });
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
+      row = await prisma.wpContentReview.findUnique({ where, select: { id: true } });
+      if (!row) throw err;
+    }
+  }
+  const claim = await prisma.wpContentReview.updateMany({
+    where: { id: row.id, OR: [{ cmsSeq: null }, { cmsSeq: { lt: seq } }] },
+    data: { cmsSeq: seq },
+  });
+  if (claim.count !== 1) return null;
+  const { cmsSeq: _ignored, ...stateData } = upsertArgs.update;
+  await prisma.wpContentReview.updateMany({
+    where: { id: row.id, OR: [{ cmsMirrorSeq: null }, { cmsMirrorSeq: { lte: seq } }] },
+    data: stateData,
+  });
+  return prisma.wpContentReview.findUnique({ where: { id: row.id } });
 }

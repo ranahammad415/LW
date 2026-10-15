@@ -52,7 +52,7 @@ import { prismaCmsStore, applyEmdashContentEvent, mirrorEmdashReview, backfillEm
 import { applyReviewEvent } from '../../../src/lib/reviewEvents.js';
 import { normalizeReviewEvent } from '../../../src/lib/siteAdapters/emdash.js';
 import { normalizePipelineWebhook } from '../../../src/lib/siteAdapters/wordpress.js';
-import { decryptCmsSecret } from '../../../src/lib/cmsKeyCrypto.js';
+import { decryptCmsSecret, cmsAad } from '../../../src/lib/cmsKeyCrypto.js';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -96,7 +96,11 @@ describe('event receipts', () => {
     db.overrides['cmsEventReceipt.create'] = async () => {
       throw unique();
     };
+    // Completed receipt → duplicate; a fresh pending claim → in flight elsewhere (v1.0.2 C4, review S4).
+    db.overrides['cmsEventReceipt.findUnique'] = async () => ({ outcome: 'applied' });
     expect(await prismaCmsStore.claimReceipt('p1', ev)).toBe('duplicate');
+    db.overrides['cmsEventReceipt.findUnique'] = async () => ({ outcome: 'pending' });
+    expect(await prismaCmsStore.claimReceipt('p1', ev)).toBe('in_flight');
     // A claim left `pending` by a crashed worker can be re-taken (CAS on receivedAt).
     db.overrides['cmsEventReceipt.updateMany'] = async () => ({ count: 1 });
     expect(await prismaCmsStore.claimReceipt('p1', ev)).toBe('new');
@@ -134,8 +138,8 @@ describe('pairing codes', () => {
     const up = calls('cmsCredential.upsert')[0].args;
     expect(up.create.keyId).toBe(1);
     expect(up.create.inboundKeyEnc).not.toContain('aosk1_in');
-    expect(decryptCmsSecret(up.create.inboundKeyEnc)).toBe('aosk1_in');
-    expect(decryptCmsSecret(up.create.outboundKeyEnc)).toBe('aosk1_out');
+    expect(decryptCmsSecret(up.create.inboundKeyEnc, cmsAad('p1', 'inbound'))).toBe('aosk1_in');
+    expect(decryptCmsSecret(up.create.outboundKeyEnc, cmsAad('p1', 'outbound'))).toBe('aosk1_out');
     const proj = calls('project.update')[0].args.data;
     expect(proj).toMatchObject({ cmsKeyId: 1, cmsContractVersion: 1, cmsPluginVersion: '1.0.0' });
     expect(proj.cmsCapabilities.publishFromOs).toBe(false);
@@ -147,23 +151,37 @@ describe('applyReviewEvent: one upsert for both CMSs', () => {
   const project = { id: 'p1', leadPmId: 'pm1', name: 'Oasis' };
 
   it('EmDash: writes cms* columns + cmsSeq and skips the WP stale-rewind guard (seq already ordered)', async () => {
-    db.overrides['wpContentReview.findUnique'] = async () => ({ isPublished: false, assignedWorkerId: null, status: 'client_approved', clientReviewedAt: '2026-10-15 12:00:00' });
+    db.overrides['wpContentReview.findUnique'] = async () => ({ id: 'r1', isPublished: false, assignedWorkerId: null, status: 'client_approved', clientReviewedAt: '2026-10-15 12:00:00' });
+    db.overrides['wpContentReview.updateMany'] = async () => ({ count: 1 });
     const ev = ex('events.request').events[1]; // pipeline_sent_to_client, seq 4
     const n = normalizeReviewEvent(ev.review, { eventType: ev.type, seq: ev.seq });
     const r = await applyReviewEvent({ project, event: n });
     expect(r.skipped).toBeUndefined();
-    const up = calls('wpContentReview.upsert')[0].args;
-    expect(up.where.projectId_wpPipelineId).toEqual({ projectId: 'p1', wpPipelineId: 42 });
+    // Atomic seq claim first (review S5), then the state write gated by cmsMirrorSeq (C7).
+    const [claim, state] = calls('wpContentReview.updateMany').map((c) => c.args);
+    expect(claim.where).toEqual({ id: 'r1', OR: [{ cmsSeq: null }, { cmsSeq: { lt: 4 } }] });
+    expect(claim.data).toEqual({ cmsSeq: 4 });
+    expect(state.where).toEqual({ id: 'r1', OR: [{ cmsMirrorSeq: null }, { cmsMirrorSeq: { lte: 4 } }] });
+    expect(calls('wpContentReview.upsert')).toHaveLength(0);
+    const up = { update: state.data };
     expect(up.update).toMatchObject({
       status: 'pending_client_review',
       wpPostId: 118,
       cmsReviewId: '01JAC7Q2HV5M8N3P4R6S9T0W1X',
       cmsEntryId: '01JAB4M9ZQ7X3K2V8N5T6R1W0C',
-      cmsSeq: 4,
       clientPreviewUrl: ev.review.clientPreviewUrl,
       pmDecision: 'approved',
     });
     expect(calls('wpContentReviewEvent.create')[0].args.data).toMatchObject({ eventType: 'pipeline_sent_to_client', cmsSeq: 4 });
+  });
+
+  it('EmDash: losing the atomic seq claim is a silent stale skip (no event row, no notification)', async () => {
+    db.overrides['wpContentReview.findUnique'] = async () => ({ id: 'r1', isPublished: false, assignedWorkerId: null, status: 'pending_client_review' });
+    db.overrides['wpContentReview.updateMany'] = async () => ({ count: 0 });
+    const ev = ex('events.request').events[0];
+    const r = await applyReviewEvent({ project, event: normalizeReviewEvent(ev.review, { eventType: ev.type, seq: ev.seq }) });
+    expect(r).toEqual({ skipped: 'stale_seq' });
+    expect(calls('wpContentReviewEvent.create')).toHaveLength(0);
   });
 
   it('WordPress: the stale client-rewind guard still applies and no cms* columns are written', async () => {
@@ -199,11 +217,20 @@ describe('content events and mirror', () => {
     await mirrorEmdashReview('p1', { ...review, seq: 5 });
     expect(calls('wpContentReview.upsert')).toHaveLength(0);
 
-    db.overrides['wpContentReview.findUnique'] = async () => ({ id: 'r1', isPublished: true, publishedAt: new Date(), cmsSeq: 2 });
+    db.overrides['wpContentReview.findUnique'] = async () => ({ id: 'r1', isPublished: false, cmsSeq: 2, cmsMirrorSeq: 7 });
     await mirrorEmdashReview('p1', { ...review, seq: 5 });
-    const up = calls('wpContentReview.upsert')[0].args;
-    expect(up.update).toMatchObject({ status: 'published', isPublished: true });
-    expect(up.update.cmsSeq).toBeUndefined();
+    expect(calls('wpContentReview.updateMany')).toHaveLength(0); // older than the last mirror (C7)
+
+    db.overrides['wpContentReview.findUnique'] = async () => ({ id: 'r1', isPublished: true, publishedAt: new Date(), cmsSeq: 2 });
+    db.overrides['wpContentReview.updateMany'] = async () => ({ count: 1 });
+    await mirrorEmdashReview('p1', { ...review, seq: 5 });
+    const up = calls('wpContentReview.updateMany')[0].args;
+    expect(up.data).toMatchObject({ status: 'published', isPublished: true, cmsMirrorSeq: 5 });
+    expect(up.data.cmsSeq).toBeUndefined();
+    expect(up.where.AND).toEqual([
+      { OR: [{ cmsSeq: null }, { cmsSeq: { lte: 5 } }] },
+      { OR: [{ cmsMirrorSeq: null }, { cmsMirrorSeq: { lte: 5 } }] },
+    ]);
   });
 
   it('backfills only history seqs the OS has not stored', async () => {
@@ -215,5 +242,60 @@ describe('content events and mirror', () => {
     expect(seqs).not.toContain(1);
     expect(created).toBe(seqs.length);
     expect(seqs.length).toBeGreaterThan(0);
+  });
+});
+
+describe('review fixes in the Prisma store', () => {
+  it('S6: content.deleted stores the deletion time as modifiedAt', async () => {
+    db.overrides['wpPage.findUnique'] = async () => ({ id: 'pg1', title: 'T', contentHash: 'h', content: '' });
+    const ev = ex('events.request--deleted').events.find((e) => e.type === 'content.deleted');
+    await applyEmdashContentEvent({ id: 'p1', wpUrl: 'https://oasispoolspas.com' }, ev);
+    const upd = calls('wpPage.update')[0].args.data;
+    expect(upd.status).toBe('deleted');
+    expect(upd.modifiedAt.toISOString()).toBe(new Date(ev.entry.updatedAt).toISOString());
+  });
+
+  it('S11/S12: same siteId keeps cmsLastCursor and receipts; a new siteId clears both and applies the pending URL', async () => {
+    db.overrides['project.findUnique'] = async () => ({ cmsSiteId: 'site_same0001' });
+    await prismaCmsStore.completePairing({ projectId: 'p1', siteId: 'site_same0001', siteUrl: 'https://a.example', siteInfo: {}, contract: 1, inbound: 'i', outbound: 'o' });
+    let data = calls('project.update').at(-1).args.data;
+    expect(data).not.toHaveProperty('cmsLastCursor');
+    expect(data).toMatchObject({ cmsSiteId: 'site_same0001', wpUrl: 'https://a.example', cmsRepairNeededAt: null });
+    expect(calls('cmsEventReceipt.deleteMany')).toHaveLength(0);
+
+    await prismaCmsStore.completePairing({ projectId: 'p1', siteId: 'site_new00001', siteUrl: null, siteInfo: {}, contract: 1, inbound: 'i', outbound: 'o' });
+    data = calls('project.update').at(-1).args.data;
+    expect(data).toMatchObject({ cmsSiteId: 'site_new00001', cmsLastCursor: null });
+    expect(data).not.toHaveProperty('wpUrl');
+    expect(calls('cmsEventReceipt.deleteMany')[0].args).toEqual({ where: { projectId: 'p1' } });
+  });
+
+  it('v1.0.2 C1: findCounterRegression ignores known eventIds and detects cursor / seq / surrogate reuse', async () => {
+    const [e1, e2] = ex('events.request').events;
+    db.overrides['cmsEventReceipt.findMany'] = async () => [{ eventId: e1.eventId }, { eventId: e2.eventId }];
+    expect(await prismaCmsStore.findCounterRegression('p1', [e1, e2])).toBeNull();
+
+    db.overrides['cmsEventReceipt.findMany'] = async () => [];
+    db.overrides['cmsEventReceipt.findFirst'] = async (args) => (args.where.cursor ? { cursor: 56 } : null);
+    expect(await prismaCmsStore.findCounterRegression('p1', [e1])).toMatch(/cursor 56/);
+
+    db.overrides['cmsEventReceipt.findFirst'] = async (args) => (args.where.seq ? { id: 'x' } : null);
+    expect(await prismaCmsStore.findCounterRegression('p1', [e1])).toMatch(/seq 3/);
+
+    db.overrides['cmsEventReceipt.findFirst'] = async () => null;
+    db.overrides['wpContentReview.findUnique'] = async () => ({ cmsReviewId: '01OTHERREVIEW' });
+    expect(await prismaCmsStore.findCounterRegression('p1', [e1])).toMatch(/reviewNo 42/);
+  });
+
+  it('flagRepairNeeded is a CAS: notifies OWNERs once', async () => {
+    const { notify } = await import('../../../src/lib/notificationService.js');
+    notify.mockClear();
+    db.overrides['project.updateMany'] = async () => ({ count: 1 });
+    db.overrides['user.findMany'] = async () => [{ id: 'o1' }];
+    expect(await prismaCmsStore.flagRepairNeeded('p1', 'cursor 5 reused')).toBe(true);
+    db.overrides['project.updateMany'] = async () => ({ count: 0 });
+    expect(await prismaCmsStore.flagRepairNeeded('p1', 'cursor 5 reused')).toBe(false);
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0][0]).toMatchObject({ slug: 'cms_repair_needed', recipientIds: ['o1'] });
   });
 });

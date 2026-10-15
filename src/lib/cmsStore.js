@@ -7,7 +7,8 @@
  * (CmsNonce, CmsEventReceipt) or compare-and-set `updateMany ... count === 1`.
  */
 import { prisma } from './prisma.js';
-import { encryptCmsSecret, decryptCmsSecret } from './cmsKeyCrypto.js';
+import { notify } from './notificationService.js';
+import { encryptCmsSecret, decryptCmsSecret, cmsAad } from './cmsKeyCrypto.js';
 import { applyReviewEvent } from './reviewEvents.js';
 import { isPipelineTombstoned } from './pipelineReviewGuard.js';
 import { reconcileProjectMapsSafe, mirrorPipelineToMaps } from './contentMapSync.js';
@@ -101,6 +102,10 @@ function siteInfoProjectData(siteInfo, contract, now) {
 }
 
 export const prismaCmsStore = {
+  async findProjectById(id) {
+    return prisma.project.findUnique({ where: { id }, select: PROJECT_CMS_SELECT });
+  },
+
   async findProjectBySiteId(siteId) {
     return prisma.project.findUnique({ where: { cmsSiteId: siteId }, select: PROJECT_CMS_SELECT });
   },
@@ -118,7 +123,7 @@ export const prismaCmsStore = {
   },
 
   decryptSigningKey(code) {
-    return decryptCmsSecret(code.signingKeyEnc);
+    return decryptCmsSecret(code.signingKeyEnc, cmsAad(code.projectId, 'pairing'));
   },
 
   /** Count one failed pairing attempt; burn the code (delete the signing key) at 5. */
@@ -147,9 +152,16 @@ export const prismaCmsStore = {
     return r.count === 1;
   },
 
-  async completePairing({ projectId, siteInfo, contract, inbound, outbound, now = new Date() }) {
-    const inboundKeyEnc = encryptCmsSecret(inbound);
-    const outboundKeyEnc = encryptCmsSecret(outbound);
+  /**
+   * Install keys and switch the project to the paired site. Counters never reset on the site (contract
+   * v1.0.2 C1), so cmsLastCursor is kept when the siteId is unchanged and cleared only for a new siteId.
+   * The site URL stored on the pairing code is applied only now (review S11).
+   */
+  async completePairing({ projectId, siteId, siteUrl = null, siteInfo, contract, inbound, outbound, now = new Date() }) {
+    const before = await prisma.project.findUnique({ where: { id: projectId }, select: { cmsSiteId: true } });
+    const siteChanged = !!siteId && before?.cmsSiteId !== siteId;
+    const inboundKeyEnc = encryptCmsSecret(inbound, cmsAad(projectId, 'inbound'));
+    const outboundKeyEnc = encryptCmsSecret(outbound, cmsAad(projectId, 'outbound'));
     const cred = {
       keyId: 1,
       inboundKeyEnc,
@@ -165,10 +177,22 @@ export const prismaCmsStore = {
       rotatedAt: null,
     };
     await prisma.$transaction([
+      // A new siteId starts its own cursor/seq space: drop the old site's receipts so its counters are
+      // not read as a regression (contract v1.0.2 C1). Same siteId: receipts stay (idempotency).
+      ...(siteChanged ? [prisma.cmsEventReceipt.deleteMany({ where: { projectId } })] : []),
       prisma.cmsCredential.upsert({ where: { projectId }, update: cred, create: { projectId, ...cred } }),
       prisma.project.update({
         where: { id: projectId },
-        data: { ...siteInfoProjectData(siteInfo, contract, now), cmsKeyId: 1, cmsPairedAt: now },
+        data: {
+          ...siteInfoProjectData(siteInfo, contract, now),
+          cmsKeyId: 1,
+          cmsPairedAt: now,
+          ...(siteId ? { cmsSiteId: siteId } : {}),
+          ...(siteUrl ? { wpUrl: siteUrl } : {}),
+          ...(siteChanged ? { cmsLastCursor: null } : {}),
+          cmsRepairNeededAt: null,
+          cmsRepairReason: null,
+        },
       }),
     ]);
   },
@@ -205,8 +229,8 @@ export const prismaCmsStore = {
     await prisma.project.update({ where: { id: projectId }, data: { cmsKeyId: cred.pendingKeyId } });
     return {
       keyId: cred.pendingKeyId,
-      inbound: decryptCmsSecret(cred.inboundKeyPendingEnc),
-      outbound: decryptCmsSecret(cred.outboundKeyPendingEnc),
+      inbound: decryptCmsSecret(cred.inboundKeyPendingEnc, cmsAad(projectId, 'inbound')),
+      outbound: decryptCmsSecret(cred.outboundKeyPendingEnc, cmsAad(projectId, 'outbound')),
     };
   },
 
@@ -268,8 +292,90 @@ export const prismaCmsStore = {
         },
         data: { receivedAt: new Date() },
       });
-      return r.count === 1 ? 'new' : 'duplicate';
+      if (r.count === 1) return 'new';
+      // Only a completed receipt is a duplicate; a fresh pending claim is in flight on another
+      // instance (contract v1.0.2 C4, review S4).
+      const row = await prisma.cmsEventReceipt.findUnique({
+        where: { projectId_eventId: { projectId, eventId: data.eventId } },
+        select: { outcome: true },
+      });
+      return row && row.outcome !== 'pending' ? 'duplicate' : 'in_flight';
     }
+  },
+
+  /**
+   * Contract v1.0.2 C1 regression check for NEW eventIds (a known eventId is a duplicate, never a
+   * regression): a stored receipt with the same cursor, or the same (review, seq), but another eventId;
+   * or a known reviewNo/entryNo mapped to another ULID. Returns a reason string or null.
+   */
+  async findCounterRegression(projectId, events) {
+    const ids = events.map((e) => String(e.eventId));
+    if (!ids.length) return null;
+    const known = new Set(
+      (await prisma.cmsEventReceipt.findMany({ where: { projectId, eventId: { in: ids } }, select: { eventId: true } })).map((r) => r.eventId)
+    );
+    const fresh = events.filter((e) => !known.has(String(e.eventId)));
+    if (!fresh.length) return null;
+    const cursors = fresh.map((e) => e.cursor).filter(Number.isInteger);
+    if (cursors.length) {
+      const hit = await prisma.cmsEventReceipt.findFirst({
+        where: { projectId, cursor: { in: cursors }, eventId: { notIn: ids } },
+        select: { cursor: true },
+      });
+      if (hit) return `cursor ${hit.cursor} already belongs to another event`;
+    }
+    for (const e of fresh) {
+      if (e.type?.startsWith('pipeline_') && e.review?.reviewId && Number.isInteger(e.seq)) {
+        const seqHit = await prisma.cmsEventReceipt.findFirst({
+          where: { projectId, cmsReviewId: String(e.review.reviewId), seq: e.seq, eventId: { notIn: ids } },
+          select: { id: true },
+        });
+        if (seqHit) return `seq ${e.seq} of review ${e.review.reviewId} already belongs to another event`;
+      }
+      if (Number.isInteger(e.review?.reviewNo) && e.review?.reviewId) {
+        const r = await prisma.wpContentReview.findUnique({
+          where: { projectId_wpPipelineId: { projectId, wpPipelineId: e.review.reviewNo } },
+          select: { cmsReviewId: true },
+        });
+        if (r?.cmsReviewId && r.cmsReviewId !== e.review.reviewId) return `reviewNo ${e.review.reviewNo} is mapped to another review`;
+      }
+      const entry = e.entry || (e.review ? { entryNo: e.review.entryNo, entryId: e.review.entryId } : null);
+      if (Number.isInteger(entry?.entryNo) && entry?.entryId) {
+        const p = await prisma.wpPage.findUnique({
+          where: { projectId_wpPostId: { projectId, wpPostId: entry.entryNo } },
+          select: { cmsEntryId: true },
+        });
+        if (p?.cmsEntryId && p.cmsEntryId !== entry.entryId) return `entryNo ${entry.entryNo} is mapped to another entry`;
+      }
+    }
+    return null;
+  },
+
+  /** Flag "re-pair needed" once (CAS) and tell OWNERs. Cleared by the next successful pairing. */
+  async flagRepairNeeded(projectId, reason, log) {
+    const claim = await prisma.project.updateMany({
+      where: { id: projectId, cmsRepairNeededAt: null },
+      data: { cmsRepairNeededAt: new Date(), cmsRepairReason: String(reason).slice(0, 300) },
+    });
+    if (claim.count !== 1) return false;
+    try {
+      const [project, owners] = await Promise.all([
+        prisma.project.findUnique({ where: { id: projectId }, select: { name: true } }),
+        prisma.user.findMany({ where: { role: 'OWNER', isActive: true }, select: { id: true } }),
+      ]);
+      if (owners.length) {
+        await notify({
+          slug: 'cms_repair_needed',
+          recipientIds: owners.map((o) => o.id),
+          variables: { projectName: project?.name || '', reason: String(reason).slice(0, 300) },
+          actionUrl: `/portal/admin/projects/${projectId}?tab=wp`,
+          metadata: { projectId },
+        });
+      }
+    } catch (err) {
+      log?.warn?.({ err, projectId }, 'cms_repair_needed notify failed');
+    }
+    return true;
   },
 
   async finalizeReceipt(projectId, eventId, outcome) {
@@ -350,7 +456,9 @@ export async function applyEmdashContentEvent(project, ev) {
 
   if (ev.type === 'content.deleted') {
     if (existing) {
-      await prisma.wpPage.update({ where: { id: existing.id }, data: { status: 'deleted', syncedAt: now } });
+      // modifiedAt = deletion time, so a late older content.saved cannot resurrect the page (review S6).
+      const deletedAt = data.modifiedAt || now;
+      await prisma.wpPage.update({ where: { id: existing.id }, data: { status: 'deleted', modifiedAt: deletedAt, syncedAt: now } });
       await prisma.wpPageSnapshot.create({
         data: {
           wpPageId: existing.id,
@@ -431,10 +539,12 @@ export async function mirrorEmdashReview(projectId, review, { log } = {}) {
   if (await isPipelineTombstoned(projectId, m.wpPipelineId)) return null;
   const existing = await prisma.wpContentReview.findUnique({
     where: { projectId_wpPipelineId: { projectId, wpPipelineId: m.wpPipelineId } },
-    select: { id: true, isPublished: true, publishedAt: true, assignedWorkerId: true, cmsSeq: true },
+    select: { id: true, isPublished: true, publishedAt: true, assignedWorkerId: true, cmsSeq: true, cmsMirrorSeq: true },
   });
-  // A response/pull older than what the event stream already applied must not rewind the mirror.
-  if (existing && Number.isInteger(m.seq) && Number.isInteger(existing.cmsSeq) && m.seq < existing.cmsSeq) {
+  // A response/pull older than what the event stream (cmsSeq) or an earlier mirror (cmsMirrorSeq)
+  // already applied must not rewind the mirror (review C7).
+  const hasSeq = Number.isInteger(m.seq);
+  if (existing && hasSeq && ((Number.isInteger(existing.cmsSeq) && m.seq < existing.cmsSeq) || (Number.isInteger(existing.cmsMirrorSeq) && m.seq < existing.cmsMirrorSeq))) {
     return existing;
   }
   const data = { ...m.data };
@@ -443,6 +553,24 @@ export async function mirrorEmdashReview(projectId, review, { log } = {}) {
     if (data.status !== 'cancelled') data.status = 'published';
   }
   if (data.isPublished && !existing?.publishedAt) data.publishedAt = new Date();
+  // cmsMirrorSeq (never cmsSeq): later events with seq <= this still create their event row and
+  // notify once, but cannot roll the status back below what the mirror saw.
+  if (hasSeq) data.cmsMirrorSeq = m.seq;
+  if (existing && hasSeq) {
+    const r = await prisma.wpContentReview.updateMany({
+      where: {
+        id: existing.id,
+        AND: [
+          { OR: [{ cmsSeq: null }, { cmsSeq: { lte: m.seq } }] },
+          { OR: [{ cmsMirrorSeq: null }, { cmsMirrorSeq: { lte: m.seq } }] },
+        ],
+      },
+      data,
+    });
+    const row = await prisma.wpContentReview.findUnique({ where: { id: existing.id } });
+    if (r.count === 1 && row) mirrorPipelineToMaps(projectId, row, log).catch(() => {});
+    return row;
+  }
   const review_ = await prisma.wpContentReview.upsert({
     where: { projectId_wpPipelineId: { projectId, wpPipelineId: m.wpPipelineId } },
     update: data,

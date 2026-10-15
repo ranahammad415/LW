@@ -1186,7 +1186,7 @@ export async function pmPipelineRoutes(app) {
           return reply.status(404).send({ message: 'Project not found' });
         }
         if (project.cmsType === 'EMDASH') {
-          return emdashDelete({ request, reply, projectId, wpPipelineId });
+          return await emdashDelete({ request, reply, projectId, wpPipelineId });
         }
 
         const existing = await prisma.wpContentReview.findUnique({

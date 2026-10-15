@@ -15,7 +15,8 @@ import {
   signedPathFor,
   ERROR_CODES,
 } from './signing.js';
-import { decryptCmsSecret } from '../cmsKeyCrypto.js';
+import { decryptCmsSecret, cmsAad } from '../cmsKeyCrypto.js';
+import { guardedFetch } from './netGuard.js';
 import { STATUS_LABELS } from '../pipelineFormat.js';
 
 export const EMDASH_USER_AGENT = 'Localwaves-AgencyOS/1.0 (agency-os-bridge)';
@@ -71,6 +72,8 @@ export function assertContractSupported(project) {
  */
 export function credentialToRings(credential, now = Date.now()) {
   if (!credential) return null;
+  const aIn = cmsAad(credential.projectId, 'inbound');
+  const aOut = cmsAad(credential.projectId, 'outbound');
   const prevAlive =
     credential.prevKeyId != null &&
     credential.inboundKeyPrevEnc &&
@@ -79,15 +82,15 @@ export function credentialToRings(credential, now = Date.now()) {
   const prevExpiresAt = credential.prevExpiresAt ? new Date(credential.prevExpiresAt).getTime() : null;
   return {
     inbound: {
-      current: { id: credential.keyId, secret: decryptCmsSecret(credential.inboundKeyEnc) },
+      current: { id: credential.keyId, secret: decryptCmsSecret(credential.inboundKeyEnc, aIn) },
       prev: prevAlive
-        ? { id: credential.prevKeyId, secret: decryptCmsSecret(credential.inboundKeyPrevEnc), expiresAt: prevExpiresAt }
+        ? { id: credential.prevKeyId, secret: decryptCmsSecret(credential.inboundKeyPrevEnc, aIn), expiresAt: prevExpiresAt }
         : null,
     },
     outbound: {
-      current: { id: credential.keyId, secret: decryptCmsSecret(credential.outboundKeyEnc) },
+      current: { id: credential.keyId, secret: decryptCmsSecret(credential.outboundKeyEnc, aOut) },
       prev: prevAlive
-        ? { id: credential.prevKeyId, secret: decryptCmsSecret(credential.outboundKeyPrevEnc), expiresAt: prevExpiresAt }
+        ? { id: credential.prevKeyId, secret: decryptCmsSecret(credential.outboundKeyPrevEnc, aOut), expiresAt: prevExpiresAt }
         : null,
     },
   };
@@ -163,7 +166,8 @@ export function errorFromResponse(status, json) {
  */
 export async function siteRequest(conn, route, body = {}, opts = {}) {
   const {
-    fetchImpl = globalThis.fetch,
+    // guardedFetch: connect-time private-IP refusal (DNS rebinding) and no redirect following.
+    fetchImpl = guardedFetch,
     timeoutMs = DEFAULT_TIMEOUT_MS,
     retryDelays = READ_RETRY_DELAYS_MS,
     sleep = sleepMs,
@@ -194,9 +198,21 @@ export async function siteRequest(conn, route, body = {}, opts = {}) {
     let err = null;
     let json = null;
     try {
-      res = await fetchImpl(url, { method: 'POST', headers, body: raw, signal: AbortSignal.timeout(timeoutMs) });
+      res = await fetchImpl(url, { method: 'POST', headers, body: raw, redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) });
+      if (res.status >= 300 && res.status < 400) {
+        // Never follow a redirect with a signed request (SSRF; the signature is bound to the path).
+        // v1.0.2 C2: a 3xx is UPSTREAM_UNAVAILABLE, not retryable until an OWNER fixes the URL / re-pairs.
+        throw new CmsBridgeError({
+          status: 502,
+          code: 'UPSTREAM_UNAVAILABLE',
+          message: 'The EmDash site answered with a redirect (HTTP ' + res.status + '). If the site moved, create a new pairing code for the new address.',
+          retryable: false,
+          details: { redirect: true },
+        });
+      }
       json = await res.json().catch(() => null);
     } catch (e) {
+      if (e instanceof CmsBridgeError) throw e;
       const isTimeout = e?.name === 'TimeoutError' || e?.name === 'AbortError';
       err = new CmsBridgeError({
         status: 502,
