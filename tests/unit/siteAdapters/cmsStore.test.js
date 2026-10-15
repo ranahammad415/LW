@@ -259,6 +259,9 @@ describe('review fixes in the Prisma store', () => {
     const upd = calls('wpPage.update')[0].args.data;
     expect(upd.status).toBe('deleted');
     expect(upd.modifiedAt.toISOString()).toBe(new Date(ev.entry.updatedAt).toISOString());
+    // v1.0.7 §20(2): delete resets the per-version state.
+    expect(upd).toMatchObject({ cmsHasPendingDraft: false, cmsDraftTitle: null });
+    expect(ev.entry.hasPendingDraft).toBe(false);
   });
 
   it('S11/S12 + v1.0.3 §16(b): same siteId keeps cmsLastCursor and receipts and continues key ids; a new siteId resets the cursor, old receipts stay', async () => {

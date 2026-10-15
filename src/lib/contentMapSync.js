@@ -213,7 +213,10 @@ export function enrichPage(page, { siteHost = null } = {}) {
  * Invert the outbound link map so each path knows who links to it.
  * A live page with zero inbound internal links is an orphan.
  */
-export function computeInboundLinks(enrichedPages) {
+export function computeInboundLinks(enrichedPages, { templateLinkedPaths = null } = {}) {
+  // EmDash (v1.0.7 §20(1)): outlines hold content links only, so home and the template-linked paths (site-info
+  // navigation) count as linked. WordPress pages are unchanged (null).
+  const templateLinked = templateLinkedPaths ? new Set(['/', ...templateLinkedPaths]) : null;
   const allLinksKnown = enrichedPages.every((item) => item.enrichment.linksKnown !== false);
   const inbound = new Map();
   for (const item of enrichedPages) {
@@ -228,6 +231,9 @@ export function computeInboundLinks(enrichedPages) {
     item.enrichment.inboundPaths = sources ? [...sources].slice(0, 50) : [];
     // Orphan status needs every page's links: unknown (null) while any EmDash page lacks an outline.
     item.enrichment.isOrphan = allLinksKnown ? item.isLive && item.enrichment.internalLinksIn === 0 : null;
+    if (item.enrichment.isOrphan && templateLinked && item.page?.cmsEntryId && templateLinked.has(item.path)) {
+      item.enrichment.isOrphan = false;
+    }
   }
   return enrichedPages;
 }
@@ -297,7 +303,13 @@ export async function buildSiteInventory(projectId, opts = {}) {
     };
   });
 
-  computeInboundLinks(items);
+  let templateLinkedPaths = null;
+  if (pages.some((p) => p.cmsEntryId)) {
+    const project = await prisma.project.findUnique({ where: { id: projectId }, select: { cmsHealth: true } });
+    const nav = Array.isArray(project?.cmsHealth?.navigation) ? project.cmsHealth.navigation : [];
+    templateLinkedPaths = nav.map((p) => normalizePath(p)).filter(Boolean);
+  }
+  computeInboundLinks(items, { templateLinkedPaths });
   return { items, siteHost, byPath: new Map(items.map((i) => [i.path, i])) };
 }
 

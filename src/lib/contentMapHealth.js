@@ -343,6 +343,11 @@ export async function loadNodeDetail(nodeId) {
         content: true,
         modifiedAt: true,
         syncedAt: true,
+        // EmDash: no HTML body; enrichPage reads the stored word count and outline (v1.0.6).
+        cmsEntryId: true,
+        cmsWordCount: true,
+        cmsOutline: true,
+        cmsHasPendingDraft: true,
       },
     });
   }

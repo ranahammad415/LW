@@ -78,6 +78,28 @@ async function listPms(project) {
   return users.map((u) => ({ memberId: u.id, name: String(u.name || 'Agency OS user').slice(0, 200) }));
 }
 
+/** v1.0.7 site-info.navigation: unique site-relative paths, ≤ 200, each ≤ 300 chars; null when absent. */
+export function sanitizeNavigation(nav) {
+  if (!Array.isArray(nav)) return null;
+  const out = [];
+  for (const p of nav) {
+    if (typeof p !== 'string' || !p.startsWith('/') || p.startsWith('//') || p.length > 300 || out.includes(p)) continue;
+    out.push(p);
+    if (out.length === 200) break;
+  }
+  return out;
+}
+
+function sanitizeAbsoluteUrl(v) {
+  if (typeof v !== 'string' || v.length > 500) return null;
+  try {
+    const u = new URL(v);
+    return u.protocol === 'https:' || u.protocol === 'http:' ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 function siteInfoProjectData(siteInfo, contract, now) {
   const health = siteInfo?.health && typeof siteInfo.health === 'object' ? siteInfo.health : {};
   return {
@@ -93,6 +115,9 @@ function siteInfoProjectData(siteInfo, contract, now) {
       contractRevision: typeof siteInfo?.contractRevision === 'string' ? siteInfo.contractRevision.slice(0, 16) : null,
       // v1.0.4 §17(d): false = the site has no preview secret; review links will not open.
       previewConfigured: typeof siteInfo?.previewConfigured === 'boolean' ? siteInfo.previewConfigured : null,
+      // v1.0.7 §20: template-linked paths (orphan logic) and the advertised sitemap URL (validated again on use).
+      navigation: sanitizeNavigation(siteInfo?.navigation),
+      sitemapUrl: sanitizeAbsoluteUrl(siteInfo?.sitemapUrl),
       // site-info only (errata v1.0.1 adds framework.blockSchemas): stored for later use, not relied on.
       ...(siteInfo?.framework && typeof siteInfo.framework === 'object' ? { framework: siteInfo.framework } : {}),
       ...(Array.isArray(siteInfo?.plugins) ? { plugins: siteInfo.plugins.slice(0, 50) } : {}),
@@ -512,7 +537,11 @@ export async function applyEmdashContentEvent(project, ev) {
     if (existing) {
       // modifiedAt = deletion time, so a late older content.saved cannot resurrect the page (review S6).
       const deletedAt = data.modifiedAt || now;
-      await prisma.wpPage.update({ where: { id: existing.id }, data: { status: 'deleted', modifiedAt: deletedAt, syncedAt: now } });
+      // v1.0.7 §20(2): a deleted entry has no pending draft; reset the per-version state whatever the site sent.
+      await prisma.wpPage.update({
+        where: { id: existing.id },
+        data: { status: 'deleted', modifiedAt: deletedAt, syncedAt: now, cmsHasPendingDraft: false, cmsDraftTitle: null },
+      });
       await prisma.wpPageSnapshot.create({
         data: {
           wpPageId: existing.id,

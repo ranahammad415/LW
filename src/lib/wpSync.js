@@ -224,26 +224,22 @@ const SITEMAP_PATHS = ['/sitemap.xml', '/sitemap_index.xml', '/wp-sitemap.xml'];
  * Fetches the sitemap XML, extracts <loc> URLs, and inserts any new ones
  * as SitemapNode records. Returns { imported, total, error? }.
  */
-/** Astro sites usually publish /sitemap-index.xml (@astrojs/sitemap). */
-const EMDASH_SITEMAP_PATHS = ['/sitemap-index.xml', '/sitemap.xml', '/sitemap-0.xml'];
-
 export async function autoSyncSitemap(projectId, { emdash = false } = {}) {
   const project = await prisma.project.findUnique({
     where: { id: projectId },
-    select: { id: true, wpUrl: true },
+    select: { id: true, wpUrl: true, cmsType: true, cmsHealth: true },
   });
   if (!project?.wpUrl) {
     return { imported: 0, total: 0, error: 'No wpUrl configured' };
   }
+  if (emdash || project.cmsType === 'EMDASH') return autoSyncEmdashSitemap(project);
 
   const baseUrl = String(project.wpUrl).trim().replace(/\/$/, '');
   let xmlText = null;
 
-  // EmDash: Astro sitemap paths and the SSRF-guarded fetch (pinned site URL); WordPress unchanged.
-  const fetchFn = emdash ? (await import('./siteAdapters/netGuard.js')).guardedFetch : fetch;
-  for (const path of emdash ? EMDASH_SITEMAP_PATHS : SITEMAP_PATHS) {
+  for (const path of SITEMAP_PATHS) {
     try {
-      const res = await fetchFn(`${baseUrl}${path}`, {
+      const res = await fetch(`${baseUrl}${path}`, {
         signal: AbortSignal.timeout(15000),
         headers: { 'User-Agent': 'Localwaves-AgencyOS/1.0 (+https://localwaves; sitemap sync)' },
       });
@@ -303,4 +299,33 @@ export async function autoSyncSitemap(projectId, { emdash = false } = {}) {
   }
 
   return { imported: toInsert.length, removed: toRemoveUrls.length, total: urls.length };
+}
+
+/**
+ * EmDash: site-advertised `sitemapUrl` (v1.0.7, same host) or the usual Astro paths; follows <sitemapindex> children
+ * within bounds, all through guardedFetch (lib/siteAdapters/emdashSitemap.js). Sitemap files are never stored as
+ * pages. Removals only after a complete walk.
+ */
+async function autoSyncEmdashSitemap(project) {
+  const { collectSitemapUrls } = await import('./siteAdapters/emdashSitemap.js');
+  const r = await collectSitemapUrls(project.wpUrl, { sitemapUrl: project.cmsHealth?.sitemapUrl || null });
+  if (!r.found) return { imported: 0, total: 0, error: 'No sitemap found' };
+  const projectId = project.id;
+  const existing = await prisma.sitemapNode.findMany({ where: { projectId }, select: { url: true } });
+  const existingSet = new Set(existing.map((e) => e.url));
+  const toInsert = r.urls.filter((u) => !existingSet.has(u));
+  if (toInsert.length > 0) {
+    await prisma.sitemapNode.createMany({ data: toInsert.map((u) => ({ projectId, url: u, pageType: 'PAGE' })) });
+  }
+  let removed = 0;
+  if (r.complete && r.urls.length > 0) {
+    // Also drops sitemap-file URLs stored by the earlier single-file sync.
+    const remoteSet = new Set(r.urls);
+    const toRemoveUrls = existing.map((e) => e.url).filter((u) => !remoteSet.has(u));
+    if (toRemoveUrls.length > 0) {
+      await prisma.sitemapNode.deleteMany({ where: { projectId, url: { in: toRemoveUrls } } });
+      removed = toRemoveUrls.length;
+    }
+  }
+  return { imported: toInsert.length, removed, total: r.urls.length, sitemapsFetched: r.sitemapsFetched, complete: r.complete };
 }
