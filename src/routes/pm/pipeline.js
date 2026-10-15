@@ -23,6 +23,25 @@ import {
   wpCancelForce,
 } from '../../lib/siteAdapters/wordpress.js';
 import { syncEmdashPipelines } from '../../lib/emdashSync.js';
+import { emdashReviewExtras } from '../../lib/siteAdapters/clientReview.js';
+import {
+  submitEmdashClientDecision,
+  refreshEmdashSuggestions,
+  loadClientReviewContext,
+  listSuggestions,
+  clientReviewErrorResponse,
+} from '../../lib/emdashClientReview.js';
+
+/** Request suggestions → contract suggestionInput (field, optional blockKey for body). */
+function normalizeSuggestionInput(list) {
+  if (!Array.isArray(list)) return undefined;
+  return list.map((s) => ({
+    target: { field: s?.field, ...(s?.blockKey ? { blockKey: s.blockKey } : {}) },
+    quote: s?.quote,
+    proposedText: s?.proposedText,
+    note: s?.note,
+  }));
+}
 import {
   emdashPmReview,
   emdashPublish,
@@ -188,6 +207,8 @@ function formatReview(r) {
     previewLinks: r.cmsLinks || null,
     canPublishFromOs: !isEmdash,
     readyToPublish: isEmdash && effectiveStatus === 'client_approved',
+    // EmDash v1.1.0 (§21): client decision channel, suggestion counts, "decided by <owner> for the client".
+    ...emdashReviewExtras(r, r.project),
   };
 }
 
@@ -234,6 +255,7 @@ export async function pmPipelineRoutes(app) {
               select: {
                 name: true,
                 cmsType: true,
+                cmsCapabilities: true,
                 client: { select: { agencyName: true } },
               },
             },
@@ -273,6 +295,7 @@ export async function pmPipelineRoutes(app) {
               select: {
                 name: true,
                 cmsType: true,
+                cmsCapabilities: true,
                 client: { select: { agencyName: true } },
               },
             },
@@ -434,7 +457,7 @@ export async function pmPipelineRoutes(app) {
           where,
           include: {
             events: { orderBy: { createdAt: 'desc' } },
-            project: { select: { name: true, cmsType: true, client: { select: { agencyName: true } } } },
+            project: { select: { name: true, cmsType: true, cmsCapabilities: true, client: { select: { agencyName: true } } } },
           },
           orderBy: [{ wpUpdatedAt: 'desc' }, { updatedAt: 'desc' }],
         });
@@ -715,7 +738,7 @@ export async function pmPipelineRoutes(app) {
 
         const reviewInclude = {
           events: { orderBy: { createdAt: 'desc' }, take: 50 },
-          project: { select: { name: true, cmsType: true, client: { select: { agencyName: true } } } },
+          project: { select: { name: true, cmsType: true, cmsCapabilities: true, client: { select: { agencyName: true } } } },
         };
 
         const recordRenewFailed = async (message, code = 'WP_RENEW_FAILED') => {
@@ -1467,6 +1490,72 @@ export async function pmPipelineRoutes(app) {
         request.log.error(err);
         return reply.status(500).send({ message: 'Failed to delete comment' });
       }
+    }
+  );
+  // ── EmDash v1.1.0 (§21): client review from the OS ──
+
+  // POST /api/pm/pipeline/:projectId/:wpPipelineId/client-review — OWNER acting for the client (onBehalfOf)
+  app.post(
+    '/pipeline/:projectId/:wpPipelineId/client-review',
+    { onRequest: [app.verifyJwt, app.requireOwner] },
+    async (request, reply) => {
+      const { projectId, wpPipelineId } = request.params;
+      const row = await prisma.wpContentReview.findUnique({
+        where: { projectId_wpPipelineId: { projectId, wpPipelineId: Number(wpPipelineId) || 0 } },
+        select: { id: true, project: { select: { clientId: true } } },
+      });
+      if (!row) return reply.status(404).send({ message: 'Content review not found' });
+      const b = request.body || {};
+      try {
+        await submitEmdashClientDecision({
+          projectId,
+          rowId: row.id,
+          user: request.user,
+          input: { decision: b.decision, comment: b.comment, expectedRound: b.expectedRound, suggestions: normalizeSuggestionInput(b.suggestions) },
+          clientAccountId: row.project?.clientId || null,
+          log: request.log,
+        });
+        const full = await prisma.wpContentReview.findUnique({
+          where: { id: row.id },
+          include: {
+            events: { orderBy: { createdAt: 'desc' }, take: 50 },
+            project: { select: { name: true, cmsType: true, cmsCapabilities: true, client: { select: { agencyName: true } } } },
+          },
+        });
+        return reply.send({ success: true, pipeline: full ? formatReview(full) : null, suggestions: await listSuggestions(row.id) });
+      } catch (err) {
+        const { status, body } = clientReviewErrorResponse(err, request.log);
+        return reply.status(status).send(body);
+      }
+    }
+  );
+
+  // GET /api/pm/pipeline/:projectId/:wpPipelineId/suggestions[?refresh=1] — mirrored client suggestions
+  app.get(
+    '/pipeline/:projectId/:wpPipelineId/suggestions',
+    { onRequest: [app.verifyJwt, requirePmOrOwner] },
+    async (request, reply) => {
+      const { projectId, wpPipelineId } = request.params;
+      const project = await prisma.project.findUnique({ where: { id: projectId }, select: { leadPmId: true, cmsType: true } });
+      if (!project) return reply.status(404).send({ message: 'Project not found' });
+      if (request.user.role === 'PM' && project.leadPmId !== request.user.id) {
+        return reply.status(403).send({ message: 'Access denied' });
+      }
+      const row = await prisma.wpContentReview.findUnique({
+        where: { projectId_wpPipelineId: { projectId, wpPipelineId: Number(wpPipelineId) || 0 } },
+        select: { id: true, cmsReviewId: true },
+      });
+      if (!row) return reply.status(404).send({ message: 'Content review not found' });
+      let refreshError = null;
+      if (project.cmsType === 'EMDASH' && row.cmsReviewId && request.query?.refresh === '1') {
+        try {
+          await loadClientReviewContext(projectId, row.id); // capability + repair checks
+          await refreshEmdashSuggestions(projectId, row, { log: request.log });
+        } catch (err) {
+          refreshError = clientReviewErrorResponse(err, request.log).body.message;
+        }
+      }
+      return reply.send({ suggestions: await listSuggestions(row.id), ...(refreshError ? { refreshError } : {}) });
     }
   );
 }

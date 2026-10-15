@@ -53,7 +53,7 @@ function memoryNonceCache() {
 
 describe('contract §3.5 signature vectors', () => {
   it('has the 8 request and 3 response vectors listed in contract.md (v1.0.3 adds counterFloor)', () => {
-    expect(vectors.requests).toHaveLength(9); // v1.0.4 adds the disconnect handshake
+    expect(vectors.requests).toHaveLength(10); // v1.0.4 adds the disconnect handshake, v1.1.0 pipeline-client-review (vector 10)
     expect(vectors.responses).toHaveLength(3);
     expect(vectors.responses.some((r) => r.body.includes('"counterFloor"'))).toBe(true);
   });

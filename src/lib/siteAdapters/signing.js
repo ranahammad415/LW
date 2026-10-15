@@ -17,7 +17,7 @@ import crypto from 'node:crypto';
 export const CONTRACT_NAME = 'agency-os-bridge';
 export const CONTRACT_VERSION = 1;
 /** Errata level implemented by this OS (informational; X-AOS-Contract stays 1). */
-export const CONTRACT_REVISION = '1.0.7';
+export const CONTRACT_REVISION = '1.1.0';
 export const SUPPORTED_CONTRACTS = Object.freeze([1]);
 export const PLUGIN_ID = 'agency-os-bridge';
 export const SITE_ROUTE_PREFIX = '/_emdash/api/plugins/agency-os-bridge/';
@@ -373,6 +373,8 @@ export const ERROR_CODES = Object.freeze({
   SLUG_CHANGE_FORBIDDEN: { status: 409, retryable: false },
   ALREADY_EXISTS: { status: 409, retryable: false },
   PAYLOAD_TOO_LARGE: { status: 413, retryable: false },
+  /** v1.1.0 §21.2: more than 200 client suggestions on one review (all rounds). */
+  SUGGESTION_LIMIT: { status: 422, retryable: false },
   UNKNOWN_BLOCK: { status: 422, retryable: false },
   SCHEMA_INVALID: { status: 422, retryable: false },
   PUBLISH_BLOCKED: { status: 422, retryable: false },

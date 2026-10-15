@@ -130,8 +130,8 @@ describe('site-info v1.0.7 fields', () => {
     expect(sanitizeNavigation(undefined)).toBeNull();
   });
 
-  it('contractRevision is 1.0.7 and the deleted example carries hasPendingDraft:false without live', () => {
-    expect(CONTRACT_REVISION).toBe('1.0.7');
+  it('contractRevision is at least 1.0.7 and the deleted example carries hasPendingDraft:false without live', () => {
+    expect(CONTRACT_REVISION).toBe('1.1.0'); // v1.1.0 (§21) supersedes 1.0.7; the 1.0.7 rules still hold
     const del = fx('examples/events.request--deleted.json').events.find((e) => e.type === 'content.deleted');
     expect(del.entry.hasPendingDraft).toBe(false);
     expect(del.entry).not.toHaveProperty('live');

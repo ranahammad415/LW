@@ -270,6 +270,8 @@ export const emdashRoutes = {
   health: (conn, opts) => siteRequest(conn, 'health', {}, opts),
   inventory: (conn, q = {}, opts) => siteRequest(conn, 'inventory', compact({ status: 'any', limit: 100, ...q }), opts),
   entryGet: (conn, entryId, variant = 'draft', opts) => siteRequest(conn, 'entry-get', { entryId, variant }, opts),
+  /** v1.1.0 §21.3: text values of every block field + entry-level fields (OS portal content view). */
+  entryGetFields: (conn, entryId, variant = 'draft', opts) => siteRequest(conn, 'entry-get', { entryId, variant, includeFields: true }, opts),
   pipelineList: (conn, q = {}, opts) => siteRequest(conn, 'pipeline-list', compact({ status: 'any', limit: 100, ...q }), opts),
   pipelineGet: (conn, ref, opts) =>
     siteRequest(conn, 'pipeline-get', ref.reviewId ? { reviewId: ref.reviewId } : { entryId: ref.entryId }, opts),
@@ -280,7 +282,17 @@ export const emdashRoutes = {
   pipelineChangeType: (conn, body, opts) => siteRequest(conn, 'pipeline-change-type', body, opts),
   pipelineRotateLinks: (conn, body, opts) => siteRequest(conn, 'pipeline-rotate-links', compact(body), opts),
   eventsReplay: (conn, q, opts) => siteRequest(conn, 'events-replay', compact(q), opts),
+  /** v1.1.0 §21.2 (capability clientReviewFromOs). Mutation: idempotency key kept across retries. */
+  pipelineClientReview: (conn, body, opts) => siteRequest(conn, 'pipeline-client-review', compact(body), opts),
+  /** v1.1.0 §21.3: { reviewId, state?, round?, cursor?, limit<=100 } → { items, next }. */
+  pipelineSuggestions: (conn, q, opts) => siteRequest(conn, 'pipeline-suggestions', compact({ limit: 100, ...q }), opts),
 };
+
+/** v1.1.0 §21.1: the site implements client review from the OS (else: keep the review-link flow). */
+export function hasClientReviewFromOs(project) {
+  const caps = project?.cmsCapabilities && typeof project.cmsCapabilities === 'object' ? project.cmsCapabilities : {};
+  return caps.clientReviewFromOs === true;
+}
 
 function compact(obj) {
   const out = {};
@@ -370,8 +382,19 @@ export function normalizeReviewEvent(review, { eventType, seq, message = null, o
       revisionId: str(r.draftRevisionId, 64),
       seq: Number.isInteger(seq) ? seq : Number.isInteger(r.seq) ? r.seq : null,
       editUrl: str(r.editUrl, 1000),
+      // v1.1.0 §21: CAS rev (sent back as expectedRev), decision channel, suggestion counts.
+      rev: Number.isInteger(r.rev) ? r.rev : null,
+      clientDecisionSource: r.clientDecisionSource === 'os' || r.clientDecisionSource === 'review-link' ? r.clientDecisionSource : null,
+      suggestionCounts: suggestionCounts(r.suggestionCounts),
     },
   };
+}
+
+function suggestionCounts(c) {
+  if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+  const out = {};
+  for (const k of ['open', 'accepted', 'rejected', 'applied', 'closed']) out[k] = Number.isInteger(c[k]) && c[k] >= 0 ? c[k] : 0;
+  return out;
 }
 
 const LINK_STATES = new Set(['none', 'active', 'expired', 'revoked']);
@@ -432,6 +455,9 @@ export function reviewToMirrorData(review) {
       cmsRevisionId: n.cms.revisionId,
       cmsEditUrl: n.cms.editUrl,
       ...(n.cms.links ? { cmsLinks: n.cms.links } : {}),
+      ...(Number.isInteger(n.cms.rev) ? { cmsRev: n.cms.rev } : {}),
+      ...(n.cms.clientDecisionSource ? { cmsClientDecisionSource: n.cms.clientDecisionSource } : {}),
+      ...(n.cms.suggestionCounts ? { cmsSuggestionCounts: n.cms.suggestionCounts } : {}),
       ...(isPublished || isCancelled ? { isPublished: true } : {}),
     },
     postTitle: n.postTitle || 'Untitled',

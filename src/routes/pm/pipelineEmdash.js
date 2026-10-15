@@ -27,7 +27,7 @@ const INTERACTIVE = { retryDelays: INTERACTIVE_RETRY_DELAYS_MS, timeoutMs: 8000 
 
 const reviewInclude = {
   events: { orderBy: { createdAt: 'desc' }, take: 50 },
-  project: { select: { name: true, cmsType: true, client: { select: { agencyName: true } } } },
+  project: { select: { name: true, cmsType: true, cmsCapabilities: true, client: { select: { agencyName: true } } } },
 };
 
 /** Map a bridge/config error to an OS JSON response ({ message, code }). */

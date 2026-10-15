@@ -33,6 +33,7 @@ import {
 } from '../../lib/siteAdapters/signing.js';
 import { CmsKeyConfigError } from '../../lib/cmsKeyCrypto.js';
 import { credentialToRings, normalizeReviewEvent } from '../../lib/siteAdapters/emdash.js';
+import { suggestionEventMessage } from '../../lib/siteAdapters/clientReview.js';
 
 export const OS_VERSION = '2026.10.16';
 
@@ -57,6 +58,11 @@ function parseJson(buf) {
   }
 }
 
+/** Review-ordered events: pipeline_* and (v1.1.0) review.* carry seq and the embedded Review. */
+export function isReviewEventType(type) {
+  return typeof type === 'string' && (type.startsWith('pipeline_') || type.startsWith('review.'));
+}
+
 /** Per-event envelope check (contract common.json#/$defs/event). Returns an error message or null. */
 export function validateEvent(ev) {
   if (!ev || typeof ev !== 'object' || Array.isArray(ev)) return 'event must be an object';
@@ -68,14 +74,25 @@ export function validateEvent(ev) {
   if (ev.snapshotText !== undefined && (typeof ev.snapshotText !== 'string' || ev.snapshotText.length > MAX_SNAPSHOT_CHARS)) {
     return `snapshotText must be a string of at most ${MAX_SNAPSHOT_CHARS} chars`;
   }
-  if (ev.type.startsWith('pipeline_')) {
-    if (!Number.isInteger(ev.seq) || ev.seq < 1) return 'seq is required on pipeline_* events';
+  if (isReviewEventType(ev.type)) {
+    if (!Number.isInteger(ev.seq) || ev.seq < 1) return 'seq is required on pipeline_* / review.* events';
     const r = ev.review;
     if (!r || typeof r !== 'object') return 'review is required on pipeline_* events';
     if (typeof r.reviewId !== 'string' || !ID_RE.test(r.reviewId)) return 'review.reviewId is required';
     if (!Number.isInteger(r.reviewNo) || r.reviewNo < 1) return 'review.reviewNo is required';
     if (!Number.isInteger(r.entryNo) || r.entryNo < 1) return 'review.entryNo is required';
     if (typeof r.status !== 'string' || !r.status) return 'review.status is required';
+    // v1.1.0 §21.3: suggestion decisions carry the change; new suggestions ride on pipeline_client_* events.
+    if (ev.type.startsWith('review.suggestion_')) {
+      const sg = ev.suggestion;
+      if (!sg || typeof sg !== 'object' || typeof sg.suggestionId !== 'string' || !ID_RE.test(sg.suggestionId)) {
+        return 'suggestion.suggestionId is required on review.suggestion_* events';
+      }
+      if (!['accepted', 'rejected', 'applied'].includes(sg.state)) return 'suggestion.state is invalid';
+    }
+    if (ev.suggestions !== undefined && (!Array.isArray(ev.suggestions) || ev.suggestions.length > 200)) {
+      return 'suggestions must be an array of at most 200 items';
+    }
   } else if (ev.type.startsWith('content.')) {
     if (ev.seq !== undefined) return 'seq must be absent on content.* events';
     const e = ev.entry;
@@ -533,7 +550,7 @@ export async function processEventBatch({ store, project, events, log }) {
 
     try {
       let outcome = 'stored';
-      if (ev.type.startsWith('pipeline_')) {
+      if (isReviewEventType(ev.type)) {
         const r = ev.review;
         if (await store.isTombstoned(project.id, r.reviewNo)) {
           outcome = 'tombstoned';
@@ -542,10 +559,15 @@ export async function processEventBatch({ store, project, events, log }) {
           if (ev.seq <= stored) {
             outcome = 'stale';
           } else {
+            let message = ev.message;
+            if (!message && ev.type.startsWith('review.suggestion_')) {
+              const quote = await store.suggestionQuote?.(project.id, ev.suggestion?.suggestionId).catch(() => null);
+              message = suggestionEventMessage(ev, quote);
+            }
             const normalized = normalizeReviewEvent(r, {
               eventType: ev.type,
               seq: ev.seq,
-              message: ev.message,
+              message,
               override: ev.override === true,
               snapshotText: ev.snapshotText,
             });
@@ -560,6 +582,8 @@ export async function processEventBatch({ store, project, events, log }) {
             }
           }
         }
+        // v1.1.0: suggestions and the client-decision actor (ordered per suggestion; never on tombstoned rows).
+        if (outcome !== 'tombstoned') await store.applyReviewExtras?.(project, ev, outcome);
       } else if (ev.type.startsWith('content.')) {
         const e = ev.entry;
         const stored = updated.has(e.entryId) ? updated.get(e.entryId) : await store.getEntryUpdatedAt(project.id, e.entryId, e.entryNo);

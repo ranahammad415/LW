@@ -20,6 +20,12 @@ import {
   CmsBridgeError,
 } from './siteAdapters/emdash.js';
 import { KEY_ROTATION_OVERLAP_SEC, PAIRING_MAX_FAILED_ATTEMPTS } from './siteAdapters/signing.js';
+import {
+  suggestionToRow,
+  suggestionChangeToUpdate,
+  suggestionStateAdvances,
+  clientActorFromEvent,
+} from './siteAdapters/clientReview.js';
 
 /** Receipts stuck in `pending` longer than this (crashed worker) may be re-claimed. */
 const STALE_CLAIM_MS = 5 * 60 * 1000;
@@ -373,7 +379,7 @@ export const prismaCmsStore = {
       if (hit) return `cursor ${hit.cursor} already belongs to another event`;
     }
     for (const e of fresh) {
-      if (e.type?.startsWith('pipeline_') && e.review?.reviewId && Number.isInteger(e.seq)) {
+      if ((e.type?.startsWith('pipeline_') || e.type?.startsWith('review.')) && e.review?.reviewId && Number.isInteger(e.seq)) {
         const seqHit = await prisma.cmsEventReceipt.findFirst({
           where: { projectId, ...(siteId ? { siteId } : {}), cmsReviewId: String(e.review.reviewId), seq: e.seq, eventId: { notIn: ids } },
           select: { id: true },
@@ -499,6 +505,19 @@ export const prismaCmsStore = {
 
   async applyContentEvent(project, ev) {
     return applyEmdashContentEvent(project, ev);
+  },
+
+  /** v1.1.0 §21.3: suggestions carried by pipeline_client_* / review.suggestion_* events, client decision actor. */
+  async applyReviewExtras(project, ev, outcome) {
+    return applyEmdashReviewExtras(project.id, ev, outcome);
+  },
+
+  async suggestionQuote(projectId, cmsSuggestionId) {
+    const row = await prisma.cmsReviewSuggestion.findUnique({
+      where: { projectId_cmsSuggestionId: { projectId, cmsSuggestionId: String(cmsSuggestionId).slice(0, 64) } },
+      select: { quote: true },
+    });
+    return row?.quote || null;
   },
 
   afterContentBatch(projectId, log) {
@@ -776,4 +795,95 @@ export async function backfillEmdashHistory(projectId, review, { log } = {}) {
     created += 1;
   }
   return created;
+}
+
+
+// ─────────────────────────── v1.1.0 client suggestions (§21) ───────────────────────────
+
+async function reviewRowFor(projectId, cmsReviewId) {
+  if (!cmsReviewId) return null;
+  return prisma.wpContentReview.findFirst({
+    where: { projectId, cmsReviewId: String(cmsReviewId).slice(0, 64) },
+    select: { id: true },
+  });
+}
+
+/**
+ * Mirror Suggestions (from a decision response, a pipeline_client_* event or a pipeline-suggestions pull).
+ * Creates missing rows; updates existing ones only forward (a late snapshot never reopens a decided suggestion).
+ * Suggestions of another siteId are skipped. Returns the number of rows written.
+ */
+export async function storeEmdashSuggestions(projectId, suggestions, { siteId = null, cmsReviewId = null } = {}) {
+  if (!Array.isArray(suggestions) || !suggestions.length) return 0;
+  let written = 0;
+  const rowCache = new Map();
+  for (const sg of suggestions.slice(0, 500)) {
+    if (siteId && sg?.siteId && sg.siteId !== siteId) continue;
+    const data = suggestionToRow(sg);
+    if (!data) continue;
+    const reviewKey = data.cmsReviewId || cmsReviewId;
+    if (!reviewKey) continue;
+    data.cmsReviewId = reviewKey;
+    if (!rowCache.has(reviewKey)) rowCache.set(reviewKey, await reviewRowFor(projectId, reviewKey));
+    const review = rowCache.get(reviewKey);
+    if (!review) continue;
+    const existing = await prisma.cmsReviewSuggestion.findUnique({
+      where: { projectId_cmsSuggestionId: { projectId, cmsSuggestionId: data.cmsSuggestionId } },
+      select: { id: true, state: true },
+    });
+    if (!existing) {
+      try {
+        await prisma.cmsReviewSuggestion.create({ data: { projectId, contentReviewId: review.id, ...data } });
+        written += 1;
+      } catch (err) {
+        if (!isUniqueViolation(err)) throw err; // another instance created it first
+      }
+      continue;
+    }
+    if (!suggestionStateAdvances(existing.state, data.state)) continue;
+    const { cmsSuggestionId: _id, createdByUserId: _u, ...update } = data;
+    await prisma.cmsReviewSuggestion.update({ where: { id: existing.id }, data: update });
+    written += 1;
+  }
+  return written;
+}
+
+/** review.suggestion_* change: ordered per suggestion by the review seq, forward-only states. */
+export async function applyEmdashSuggestionChange(projectId, change, seq) {
+  const upd = suggestionChangeToUpdate(change);
+  if (!upd) return false;
+  const existing = await prisma.cmsReviewSuggestion.findUnique({
+    where: { projectId_cmsSuggestionId: { projectId, cmsSuggestionId: upd.cmsSuggestionId } },
+    select: { id: true, state: true, cmsSeq: true },
+  });
+  if (!existing) return false; // heal (pipeline-suggestions) brings it in with its final state
+  if (Number.isInteger(seq) && Number.isInteger(existing.cmsSeq) && seq <= existing.cmsSeq) return false;
+  if (!suggestionStateAdvances(existing.state, upd.state)) return false;
+  const { cmsSuggestionId: _id, ...data } = upd;
+  const r = await prisma.cmsReviewSuggestion.updateMany({
+    where: {
+      id: existing.id,
+      ...(Number.isInteger(seq) ? { OR: [{ cmsSeq: null }, { cmsSeq: { lt: seq } }] } : {}),
+    },
+    data: { ...data, ...(Number.isInteger(seq) ? { cmsSeq: seq } : {}) },
+  });
+  return r.count === 1;
+}
+
+/** Per-event extras after the Review itself was applied (or found stale). */
+export async function applyEmdashReviewExtras(projectId, ev, outcome) {
+  if (outcome === 'tombstoned') return;
+  const reviewId = ev?.review?.reviewId || null;
+  if (Array.isArray(ev?.suggestions) && ev.suggestions.length) {
+    await storeEmdashSuggestions(projectId, ev.suggestions, { siteId: ev.siteId || ev.review?.siteId || null, cmsReviewId: reviewId });
+  }
+  if (typeof ev?.type === 'string' && ev.type.startsWith('review.suggestion_') && ev.suggestion) {
+    await applyEmdashSuggestionChange(projectId, ev.suggestion, ev.seq);
+  }
+  if (outcome === 'applied' && typeof ev?.type === 'string' && ev.type.startsWith('pipeline_client_') && reviewId) {
+    const actor = clientActorFromEvent(ev.actor);
+    if (actor) {
+      await prisma.wpContentReview.updateMany({ where: { projectId, cmsReviewId: reviewId }, data: { cmsClientActor: actor } });
+    }
+  }
 }

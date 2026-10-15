@@ -136,6 +136,9 @@ export async function applyReviewEvent({ project, event: n, log }) {
         ...(n.cms.revisionId ? { cmsRevisionId: n.cms.revisionId } : {}),
         ...(n.cms.editUrl ? { cmsEditUrl: n.cms.editUrl } : {}),
         ...(n.cms.links ? { cmsLinks: n.cms.links } : {}),
+        ...(Number.isInteger(n.cms.rev) ? { cmsRev: n.cms.rev } : {}),
+        ...(n.cms.clientDecisionSource ? { cmsClientDecisionSource: n.cms.clientDecisionSource } : {}),
+        ...(n.cms.suggestionCounts ? { cmsSuggestionCounts: n.cms.suggestionCounts } : {}),
         ...(Number.isInteger(n.cms.seq) ? { cmsSeq: n.cms.seq } : {}),
       }
     : {};

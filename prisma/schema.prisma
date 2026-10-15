@@ -533,6 +533,7 @@ model Project {
   cmsCredential        CmsCredential?
   cmsPairingCodes      CmsPairingCode[]
   cmsEventReceipts     CmsEventReceipt[]
+  cmsReviewSuggestions CmsReviewSuggestion[]
 
   @@map("project")
 }
@@ -1192,16 +1193,63 @@ model WpContentReview {
   cmsEditUrl         String?   @db.VarChar(1000)
   /// EmDash (contract v1.0.1 §5.4): token-free preview link state { pm, client: { state, issuedAt, expiresAt } }.
   cmsLinks           Json?
+  /// EmDash Review `rev` (contract §8 CAS) from the last applied event or mirror; sent as expectedRev (v1.1.0).
+  cmsRev             Int?
+  /// v1.1.0: where this round's client decision was made: os | review-link.
+  cmsClientDecisionSource String? @db.VarChar(16)
+  /// v1.1.0: { open, accepted, rejected, applied, closed } client suggestions, all rounds (site-reported).
+  cmsSuggestionCounts Json?
+  /// v1.1.0: who made the last client decision { name, role, source, onBehalfOfClient } (no ids, no PII).
+  cmsClientActor     Json?
 
   project         Project                  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   events          WpContentReviewEvent[]
   comments        WpContentReviewComment[]
   contentMapNodes ContentMapNode[]
+  cmsSuggestions  CmsReviewSuggestion[]
 
   @@unique([projectId, wpPipelineId])
   @@index([assignedWorkerId])
   @@index([projectId, cmsReviewId])
   @@map("wpcontentreview")
+}
+
+/// EmDash client suggestions (contract v1.1.0 §21): text-only, stored and decided on the site, mirrored here.
+/// Never applied by the OS. State: open | accepted | rejected | applied | closed.
+model CmsReviewSuggestion {
+  id                String    @id @default(uuid())
+  projectId         String
+  contentReviewId   String
+  cmsSuggestionId   String    @db.VarChar(64)
+  cmsReviewId       String    @db.VarChar(64)
+  round             Int
+  targetField       String    @db.VarChar(32)
+  targetBlockKey    String?   @db.VarChar(64)
+  quote             String    @db.Text
+  proposedText      String    @db.Text
+  note              String?   @db.Text
+  state             String    @default("open") @db.VarChar(16)
+  /// os | review-link
+  source            String    @db.VarChar(16)
+  createdByName     String?   @db.VarChar(200)
+  createdByUserId   String?   @db.VarChar(64)
+  onBehalfOfClient  Boolean   @default(false)
+  decidedByName     String?   @db.VarChar(200)
+  decidedAt         DateTime?
+  decisionNote      String?   @db.Text
+  appliedRevisionId String?   @db.VarChar(64)
+  /// Seq of the last review.suggestion_* event applied to this row (ordering).
+  cmsSeq            Int?
+  siteCreatedAt     DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @default(now()) @updatedAt
+
+  project       Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  contentReview WpContentReview @relation(fields: [contentReviewId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, cmsSuggestionId])
+  @@index([contentReviewId, round])
+  @@map("cmsreviewsuggestion")
 }
 
 /// Owner-deleted pipeline ids. Sync and webhooks must not recreate these rows.

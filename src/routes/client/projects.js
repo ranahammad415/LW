@@ -9,6 +9,7 @@ import {
 } from '../../lib/pipelineFormat.js';
 import { resolveCycle } from '../../lib/workCycle.js';
 import { syncClientProjectsFromWp } from '../../lib/pipelineSync.js';
+import { emdashReviewExtras } from '../../lib/siteAdapters/clientReview.js';
 
 async function buildCycleWhere(query = {}) {
   if (query.cycle === 'all') return {};
@@ -855,7 +856,7 @@ export async function clientProjectsRoutes(app) {
 
       const project = await prisma.project.findUnique({
         where: { id: projectId },
-        select: { id: true, name: true, clientId: true },
+        select: { id: true, name: true, clientId: true, cmsType: true, cmsCapabilities: true },
       });
       if (!project || !clientIds.includes(project.clientId)) {
         return reply.status(404).send({ message: 'Project not found' });
@@ -922,6 +923,9 @@ export async function clientProjectsRoutes(app) {
           history: (r.events || [])
             .filter((e) => e.eventType !== 'pipeline_resend_notification')
             .map((e) => formatHistoryEvent(e, CLIENT_STATUS_LABELS)),
+          // EmDash v1.1.0 (§21): decision channel, suggestion counts, who decided. WordPress rows unchanged.
+          ...(project.cmsType === 'EMDASH' ? { cmsType: 'EMDASH' } : {}),
+          ...emdashReviewExtras(r, project),
         }));
 
         return reply.send(result);
@@ -975,7 +979,7 @@ export async function clientProjectsRoutes(app) {
           where,
           include: {
             events: { orderBy: { createdAt: 'desc' } },
-            project: { select: { id: true, name: true } },
+            project: { select: { id: true, name: true, cmsType: true, cmsCapabilities: true } },
           },
           orderBy: [{ wpUpdatedAt: 'desc' }, { updatedAt: 'desc' }],
         });
@@ -1027,6 +1031,8 @@ export async function clientProjectsRoutes(app) {
           history: (r.events || [])
             .filter((e) => e.eventType !== 'pipeline_resend_notification')
             .map((e) => formatHistoryEvent(e, CLIENT_STATUS_LABELS)),
+          ...(r.project?.cmsType === 'EMDASH' ? { cmsType: 'EMDASH' } : {}),
+          ...emdashReviewExtras(r, r.project),
         }));
 
         return reply.send(result);
