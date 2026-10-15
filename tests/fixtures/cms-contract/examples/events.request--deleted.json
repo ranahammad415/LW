@@ -103,7 +103,8 @@
         "slug": "hot-tub-repair",
         "path": "/spa-services/hot-tub-repair/",
         "title": "Hot Tub Repair for Most Brands",
-        "updatedAt": "2026-10-16T09:00:00Z"
+        "updatedAt": "2026-10-16T09:00:00Z",
+        "hasPendingDraft": false
       },
       "message": "Moved to trash"
     }

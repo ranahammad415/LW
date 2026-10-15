@@ -1627,7 +1627,8 @@
           "$ref": "common.json#/$defs/entryStatus"
         },
         "hasPendingDraft": {
-          "type": "boolean"
+          "const": false,
+          "description": "v1.0.7: a deleted entry has no pending draft"
         },
         "draftRevisionId": {
           "anyOf": [
@@ -1764,55 +1765,9 @@
       ],
       "allOf": [
         {
-          "if": {
-            "properties": {
-              "hasPendingDraft": {
-                "const": false
-              }
-            },
+          "not": {
             "required": [
-              "hasPendingDraft"
-            ]
-          },
-          "then": {
-            "not": {
-              "required": [
-                "live"
-              ]
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "outlineOmitted": {
-                "const": true
-              }
-            },
-            "required": [
-              "outlineOmitted"
-            ]
-          },
-          "then": {
-            "required": [
-              "outlineHash"
-            ],
-            "not": {
-              "required": [
-                "outline"
-              ]
-            }
-          }
-        },
-        {
-          "if": {
-            "required": [
-              "outline"
-            ]
-          },
-          "then": {
-            "required": [
-              "outlineHash"
+              "live"
             ]
           }
         }

@@ -395,6 +395,15 @@
       "scheduled": 1
     }
   },
-  "contractRevision": "1.0.4",
-  "previewConfigured": true
+  "contractRevision": "1.0.7",
+  "previewConfigured": true,
+  "navigation": [
+    "/",
+    "/pool-services/",
+    "/spa-services/",
+    "/about/",
+    "/contact/",
+    "/privacy-policy/"
+  ],
+  "sitemapUrl": "https://oasispoolspas.com/sitemap.xml"
 }

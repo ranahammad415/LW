@@ -1,7 +1,7 @@
 # EmDash bridge contract fixtures (read-only copy)
 
 Copied verbatim from the framework repo `oasis-astro`, package `packages/os-bridge-contract`,
-at commit `f2c7b6f` ("Contract v1.0.6 addendum: content outline on entry summaries"; contract v1, errata v1.0.6; the `live` object came in 82476f8):
+at commit `18b2b83` ("Contract v1.0.7: outline scope, delete resets draft state, sitemap discovery"; contract v1, errata v1.0.7; the v1.0.6 `live` object came in 82476f8, the outline in f2c7b6f):
 
 | Folder | Source |
 | --- | --- |

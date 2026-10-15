@@ -89,6 +89,19 @@
         },
         "required": []
       }
+    },
+    "navigation": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/path"
+      },
+      "maxItems": 200,
+      "uniqueItems": true,
+      "description": "v1.0.7, optional: site-relative paths linked from the site template (top nav + footer), so the OS counts them as linked when computing orphans"
+    },
+    "sitemapUrl": {
+      "$ref": "common.json#/$defs/url",
+      "description": "v1.0.7, optional: absolute URL of the sitemap or sitemap index; the OS follows <sitemapindex> children"
     }
   },
   "required": [
