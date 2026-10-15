@@ -496,6 +496,9 @@ model Project {
   /// the site lost its storage and must re-pair as a new siteId. Cleared by the next pairing.
   cmsRepairNeededAt  DateTime?
   cmsRepairReason    String?       @db.VarChar(300)
+  /// EmDash: set by an OWNER or site-initiated disconnect (keys deleted). Distinguishes 401 UNKNOWN_KEY
+  /// (disconnected) from 503 NOT_PAIRED (first pairing never completed). Cleared by the next pairing.
+  cmsDisconnectedAt  DateTime?
   createdAt          DateTime      @default(now())
   updatedAt          DateTime      @default(now()) @updatedAt
 

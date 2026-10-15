@@ -157,7 +157,9 @@ export async function emdashWebhookRoutes(app, opts = {}) {
     const project = await store.findProjectBySiteId(siteId);
     if (!project || project.cmsType !== 'EMDASH') return undefined;
     const cred = await store.getCredential(project.id);
-    if (!cred) return NOT_PAIRED;
+    // v1.0.4 §17(b): 503 NOT_PAIRED only while the first pairing never completed; a disconnected site
+    // gets 401 UNKNOWN_KEY ("re-pair needed" on the site).
+    if (!cred) return project.cmsDisconnectedAt ? null : NOT_PAIRED;
     const rings = credentialToRings(cred, now);
     return resolveKey(rings.outbound, keyId, now);
   };
@@ -287,8 +289,11 @@ export async function emdashWebhookRoutes(app, opts = {}) {
     const parsed = parseJson(body);
     if (!parsed.ok || !parsed.value || typeof parsed.value !== 'object') return sendError(reply, 'VALIDATION', 'Body must be JSON');
     const info = parsed.value;
-    if (info.mode !== 'heartbeat') return sendError(reply, 'VALIDATION', 'mode must be "heartbeat" when signed with a site key');
+    if (info.mode !== 'heartbeat' && info.mode !== 'disconnect') {
+      return sendError(reply, 'VALIDATION', 'mode must be "heartbeat" or "disconnect" when signed with a site key');
+    }
     if (info.siteId !== v.siteId) return sendError(reply, 'VALIDATION', 'Body siteId must equal X-AOS-Site');
+    if (info.mode === 'disconnect') return handleSiteDisconnect({ request, reply, path, v, now });
     const contract = negotiateContract(info.supportedContracts);
     if (!contract) {
       return sendError(reply, 'CONTRACT_UNSUPPORTED', 'No common contract version', { supported: [...SUPPORTED_CONTRACTS] });
@@ -325,6 +330,25 @@ export async function emdashWebhookRoutes(app, opts = {}) {
       ...(rotate ? { rotate } : {}),
     });
     return sendSigned(reply, { secret: signKey, keyId: v.keyId, path, nonce: v.nonce, body: responseBody, now });
+  }
+
+  /**
+   * v1.0.4 §17(b): site-initiated disconnect, signed with the CURRENT outbound key (a previous key id is
+   * 401 UNKNOWN_KEY). Clears the paired state exactly like the OWNER disconnect; the response is signed
+   * with the inbound key of the same generation.
+   */
+  async function handleSiteDisconnect({ request, reply, path, v, now }) {
+    const project = await store.findProjectBySiteId(v.siteId);
+    const cred = await store.getCredential(project.id);
+    if (!cred || Number(v.keyId) !== cred.keyId) {
+      return sendError(reply, 'UNKNOWN_KEY', 'Disconnect must be signed with the current key');
+    }
+    const rings = credentialToRings(cred, now);
+    const signKey = resolveKey(rings.inbound, v.keyId, now);
+    await store.disconnect(project.id, new Date(now));
+    request.log.info({ projectId: project.id, siteId: v.siteId }, 'EmDash site disconnected by the site');
+    const body = JSON.stringify({ ok: true, siteId: v.siteId, disconnected: true, serverTime: Math.floor(now / 1000) });
+    return sendSigned(reply, { secret: signKey, keyId: v.keyId, path, nonce: v.nonce, body, now });
   }
 
   function sendSigned(reply, { secret, keyId, path, nonce, body, now }) {
@@ -397,7 +421,11 @@ export async function emdashWebhookRoutes(app, opts = {}) {
     // v1.0.2 C1: a NEW eventId reusing a stored cursor, a stored (review, seq) of another event, or a
     // known reviewNo/entryNo mapped to another ULID means the site lost its storage. Whole request:
     // 409 COUNTER_REGRESSION, nothing stored, project flagged "re-pair needed".
-    const regression = await store.findCounterRegression(project.id, batch.events.filter((e) => !validateEvent(e)), project.cmsSiteId);
+    const regression = await store.findCounterRegression(
+      project.id,
+      batch.events.filter((e) => !validateEvent(e) && (e.siteId === undefined || e.siteId === project.cmsSiteId)),
+      project.cmsSiteId
+    );
     if (regression) {
       await store.flagRepairNeeded(project.id, regression, request.log);
       request.log.warn({ projectId: project.id, regression }, 'EmDash counter regression');
@@ -451,6 +479,12 @@ export async function processEventBatch({ store, project, events, log }) {
     if (invalid) {
       const eventId = typeof ev?.eventId === 'string' ? ev.eventId.slice(0, 64) : 'unknown';
       rejected.push({ eventId, code: 'VALIDATION', retryable: false, message: invalid });
+      continue;
+    }
+    // v1.0.4 §17(a): events carry the siteId current when the site created them; one stamped for another
+    // siteId (e.g. the site's previous pairing) is never applied. No siteId = older plugin = current site.
+    if (ev.siteId !== undefined && ev.siteId !== project.cmsSiteId) {
+      rejected.push({ eventId: ev.eventId, code: 'VALIDATION', retryable: false, message: 'Event belongs to another siteId' });
       continue;
     }
     if (seenInBatch.has(ev.eventId)) {

@@ -47,6 +47,9 @@ beforeAll(async () => {
   app.decorate('verifyJwt', async (request) => {
     request.user = db.user;
   });
+  app.decorate('requireOwner', async (request, reply) => {
+    if (request.user?.role !== 'OWNER') return reply.status(403).send({ message: 'Owner access required' });
+  });
   await app.register(projectCmsRoutes, { prefix: '/api/projects' });
   await app.ready();
 });
@@ -156,5 +159,22 @@ describe('rotate-keys and health', () => {
     const body = r.json();
     expect(body).toMatchObject({ paired: true, stale: true, keyId: 1, contractSupported: true, pluginVersion: '1.0.0', encryptionConfigured: true });
     expect(JSON.stringify(body)).not.toMatch(/Enc|aosk1_/);
+  });
+});
+
+describe('POST /:id/cms/disconnect (e2e OS issue 4)', () => {
+  it('is OWNER only, deletes the credential, clears the paired state and burns open codes', async () => {
+    db.overrides['project.findUnique'] = async () => ({ id: PID, cmsType: 'EMDASH' });
+    db.user = { id: 'pm-1', role: 'PM' };
+    expect((await app.inject({ method: 'POST', url: `/api/projects/${PID}/cms/disconnect` })).statusCode).toBe(403);
+    db.user = { id: 'owner-1', role: 'OWNER' };
+    const r = await app.inject({ method: 'POST', url: `/api/projects/${PID}/cms/disconnect` });
+    expect(r.statusCode).toBe(200);
+    expect(db.calls.find((c) => c.key === 'cmsCredential.deleteMany').args).toEqual({ where: { projectId: PID } });
+    const upd = db.calls.find((c) => c.key === 'project.update').args.data;
+    expect(upd).toMatchObject({ cmsPairedAt: null, cmsKeyId: null, cmsRepairNeededAt: null });
+    expect(upd.cmsDisconnectedAt).toBeInstanceOf(Date);
+    expect(upd).not.toHaveProperty('cmsSiteId'); // a later re-pair reuses the siteId
+    expect(db.calls.find((c) => c.key === 'cmsPairingCode.updateMany').args.data).toMatchObject({ signingKeyEnc: null });
   });
 });

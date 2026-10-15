@@ -58,6 +58,11 @@ function createMemoryStore() {
     async getCounterFloor() {
       return s.counterFloor;
     },
+    async disconnect(pid, now) {
+      s.creds.delete(pid);
+      Object.assign(s.projects.get(pid), { cmsPairedAt: null, cmsKeyId: null, cmsDisconnectedAt: now || new Date() });
+      s.disconnects = (s.disconnects || 0) + 1;
+    },
     async findProjectById(id) {
       return s.projects.get(id) || null;
     },
@@ -307,7 +312,7 @@ describe('POST /handshake — pairing', () => {
     const json = res.json();
     expect(json).toMatchObject({ ok: true, contract: 1, siteId: SITE, projectId: PROJECT_ID, keys: { keyId: 1 } });
     expect(json.keys.inbound).toMatch(/^aosk1_[A-Za-z0-9_-]{43}$/);
-    expect(json.contractRevision).toBe('1.0.3');
+    expect(json.contractRevision).toBe('1.0.4');
     expect(json.counterFloor).toEqual({ reviewNo: 0, entryNo: 0 });
     expect(store.lastPairing).toEqual({ siteId: SITE, siteUrl: null, cursorBefore: null });
     expect(json.pms[0].memberId).toBe('8f14e45f-ceea-467a-9575-5f3c1b2a7d90');
@@ -793,5 +798,61 @@ describe('contract v1.0.3 §16(b) re-pair', () => {
     expect(res.json().keys.keyId).toBe(2);
     const stale = await post(HS, handshakeBody('heartbeat'), { secret: oldOut, keyId: 1 });
     expect(stale.statusCode).toBe(401);
+  });
+});
+
+describe('contract v1.0.4', () => {
+  let keys;
+  beforeEach(() => {
+    addProject();
+    keys = pairKeys();
+  });
+
+  it('§17(a): an event stamped for another siteId is rejected VALIDATION (not retryable); none = current site', async () => {
+    const [e1] = ex('events.request').events;
+    const foreign = { ...e1, siteId: 'site_previous01' };
+    const mine = { ...ex('events.request').events[2], siteId: SITE };
+    const res = await post(EV, eventsBody([foreign, mine]), { secret: keys.outbound, keyId: 1 });
+    const json = res.json();
+    expect(json.rejected).toEqual([{ eventId: foreign.eventId, code: 'VALIDATION', retryable: false, message: 'Event belongs to another siteId' }]);
+    expect(json.accepted).toEqual([mine.eventId]);
+    expect(store.applied).toHaveLength(0);
+  });
+
+  it('§17(b): site-initiated disconnect (current key) clears the paired state and answers signed; then /events → 401 UNKNOWN_KEY', async () => {
+    const nonce = '13131313-2424-4535-8646-575757575757';
+    const body = JSON.stringify({ mode: 'disconnect', siteId: SITE, reason: 'admin clicked Disconnect' });
+    const r = await post(HS, body, { secret: keys.outbound, keyId: 1, nonce });
+    expect(r.statusCode).toBe(200);
+    expect(r.json()).toEqual({ ok: true, siteId: SITE, disconnected: true, serverTime: Math.floor(nowMs / 1000) });
+    expect(
+      verifyResponse({ status: 200, path: HS, requestNonce: nonce, body: r.body, headers: r.headers, resolveSecret: (k) => (k === '1' ? keys.inbound : null), now: nowMs }).ok
+    ).toBe(true);
+    expect(store.disconnects).toBe(1);
+    const after = await post(EV, eventsBody([ex('events.request').events[2]]), { secret: keys.outbound, keyId: 1 });
+    expect(after.statusCode).toBe(401);
+    expect(after.json().error.code).toBe('UNKNOWN_KEY');
+  });
+
+  it('§17(b): a disconnect signed with a previous key id is 401 UNKNOWN_KEY', async () => {
+    const cred = store.creds.get(PROJECT_ID);
+    Object.assign(cred, {
+      keyId: 2,
+      prevKeyId: 1,
+      inboundKeyPrevEnc: cred.inboundKeyEnc,
+      outboundKeyPrevEnc: cred.outboundKeyEnc,
+      prevExpiresAt: new Date(nowMs + 3600_000),
+    });
+    const body = JSON.stringify({ mode: 'disconnect', siteId: SITE });
+    const r = await post(HS, body, { secret: keys.outbound, keyId: 1 });
+    expect(r.statusCode).toBe(401);
+    expect(r.json().error.code).toBe('UNKNOWN_KEY');
+    expect(store.disconnects || 0).toBe(0);
+  });
+
+  it('§17(b): a site whose first pairing never completed still gets 503 NOT_PAIRED', async () => {
+    store.creds.clear();
+    const r = await post(EV, eventsBody([ex('events.request').events[2]]), { secret: keys.outbound, keyId: 1 });
+    expect(r.statusCode).toBe(503);
   });
 });

@@ -40,6 +40,7 @@ export const PROJECT_CMS_SELECT = {
   cmsPairedAt: true,
   cmsLastSeenAt: true,
   cmsLastCursor: true,
+  cmsDisconnectedAt: true,
 };
 
 function isUniqueViolation(err) {
@@ -90,6 +91,8 @@ function siteInfoProjectData(siteInfo, contract, now) {
       siteName: siteInfo?.siteName ? String(siteInfo.siteName).slice(0, 200) : null,
       supportedContracts: Array.isArray(siteInfo?.supportedContracts) ? siteInfo.supportedContracts : null,
       contractRevision: typeof siteInfo?.contractRevision === 'string' ? siteInfo.contractRevision.slice(0, 16) : null,
+      // v1.0.4 §17(d): false = the site has no preview secret; review links will not open.
+      previewConfigured: typeof siteInfo?.previewConfigured === 'boolean' ? siteInfo.previewConfigured : null,
       // site-info only (errata v1.0.1 adds framework.blockSchemas): stored for later use, not relied on.
       ...(siteInfo?.framework && typeof siteInfo.framework === 'object' ? { framework: siteInfo.framework } : {}),
       ...(Array.isArray(siteInfo?.plugins) ? { plugins: siteInfo.plugins.slice(0, 50) } : {}),
@@ -204,9 +207,12 @@ export const prismaCmsStore = {
           cmsPairedAt: now,
           ...(siteId ? { cmsSiteId: siteId } : {}),
           ...(siteUrl ? { wpUrl: siteUrl } : {}),
-          ...(siteChanged ? { cmsLastCursor: null } : {}),
+          // New siteId (e2e OS issue 1): start replay at the cursor the site reports, never at 0, so a site
+          // that kept its storage does not import events that belonged to its previous pairing.
+          ...(siteChanged ? { cmsLastCursor: Number.isInteger(siteInfo?.health?.lastCursor) && siteInfo.health.lastCursor >= 0 ? siteInfo.health.lastCursor : null } : {}),
           cmsRepairNeededAt: null,
           cmsRepairReason: null,
+          cmsDisconnectedAt: null,
         },
       }),
     ]);
@@ -433,6 +439,25 @@ export const prismaCmsStore = {
     });
   },
 
+  /**
+   * OWNER disconnect: delete the credential, clear the paired state and burn open codes; polling stops
+   * because sync only covers paired projects. cmsSiteId and cmsLastCursor stay, so a later re-pair
+   * reuses the same siteId and continues the counters (contract v1.0.3 §16(b)).
+   */
+  async disconnect(projectId, now = new Date()) {
+    await prisma.$transaction([
+      prisma.cmsCredential.deleteMany({ where: { projectId } }),
+      prisma.cmsPairingCode.updateMany({
+        where: { projectId, usedAt: null, burnedAt: null },
+        data: { burnedAt: now, signingKeyEnc: null },
+      }),
+      prisma.project.update({
+        where: { id: projectId },
+        data: { cmsPairedAt: null, cmsKeyId: null, cmsDisconnectedAt: now, cmsRepairNeededAt: null, cmsRepairReason: null, cmsLostNotifiedAt: null },
+      }),
+    ]);
+  },
+
   async touchLastSeen(projectId, now = new Date()) {
     await prisma.project.updateMany({ where: { id: projectId }, data: { cmsLastSeenAt: now, cmsLostNotifiedAt: null } });
   },
@@ -556,7 +581,7 @@ export async function mirrorEmdashReview(projectId, review, { log } = {}) {
   if (await isPipelineTombstoned(projectId, m.wpPipelineId)) return null;
   const existing = await prisma.wpContentReview.findUnique({
     where: { projectId_wpPipelineId: { projectId, wpPipelineId: m.wpPipelineId } },
-    select: { id: true, isPublished: true, publishedAt: true, assignedWorkerId: true, cmsSeq: true, cmsMirrorSeq: true },
+    select: { id: true, status: true, isPublished: true, publishedAt: true, assignedWorkerId: true, cmsSeq: true, cmsMirrorSeq: true },
   });
   // A response/pull older than what the event stream (cmsSeq) or an earlier mirror (cmsMirrorSeq)
   // already applied must not rewind the mirror (review C7).
@@ -565,11 +590,15 @@ export async function mirrorEmdashReview(projectId, review, { log } = {}) {
     return existing;
   }
   const data = { ...m.data };
-  if (existing?.isPublished) {
+  // Published is derived from an actual published status only; cancelled rows also carry isPublished
+  // (hidden from queues) and must never turn into "published" (e2e OS issue 2).
+  if (existing?.status === 'published') {
     data.isPublished = true;
-    if (data.status !== 'cancelled') data.status = 'published';
+    data.status = 'published';
+  } else if (existing?.isPublished) {
+    data.isPublished = true;
   }
-  if (data.isPublished && !existing?.publishedAt) data.publishedAt = new Date();
+  if (data.status === 'published' && !existing?.publishedAt) data.publishedAt = new Date();
   // cmsMirrorSeq (never cmsSeq): later events with seq <= this still create their event row and
   // notify once, but cannot roll the status back below what the mirror saw.
   if (hasSeq) data.cmsMirrorSeq = m.seq;

@@ -190,3 +190,15 @@ describe('review C3: EmDash delete never leaks raw errors', () => {
     expect(r.json()).toEqual({ message: 'EmDash request failed' });
   });
 });
+
+describe('e2e issue 3: EmDash access equals the WP rule (no stricter, no looser)', () => {
+  it.each(['WORDPRESS', 'EMDASH'])('%s: a PM who is not the project lead gets 403 on review and publish before any site call', async (cmsType) => {
+    db.overrides['project.findUnique'] = async () => ({ wpUrl: 'https://s.example', wpApiKey: cmsType === 'WORDPRESS' ? 'k' : null, leadPmId: 'pm-lead', cmsType, name: 'P', clientId: 'c1' });
+    db.user = { id: 'pm-other', role: 'PM', name: 'Other' };
+    for (const url of [`/api/pm/pipeline/${PID}/42/review`, `/api/pm/pipeline/${PID}/42/publish`]) {
+      const r = await app.inject({ method: 'POST', url, payload: { decision: 'approved' } });
+      expect(r.statusCode).toBe(403);
+    }
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});

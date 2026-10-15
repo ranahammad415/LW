@@ -160,10 +160,10 @@ const templates = [
     bodyText: 'The EmDash site for {{projectName}} has not contacted Agency OS since {{lastSeenAt}}. Check that the site is up and the Agency OS bridge plugin is active and paired.',
     inAppMessage: 'Site connection lost: {{projectName}} (last seen {{lastSeenAt}})',
     variables: ['projectName', 'lastSeenAt', 'actionUrl'] },
-  { slug: 'cms_repair_needed', name: 'Site Needs Re-pairing', description: "An EmDash site's counters went backwards (lost plugin storage)", category: 'pipeline',
+  { slug: 'cms_repair_needed', name: 'Site Needs Re-pairing', description: 'An EmDash site must be paired again (counters went backwards, or it rejected Agency OS keys)', category: 'pipeline',
     subject: 'Re-pair needed: {{projectName}}',
-    bodyHtml: '<p>The EmDash site for <strong>{{projectName}}</strong> sent events that conflict with what Agency OS already stored ({{reason}}). The site probably lost its plugin storage. Its events are refused until it is paired again as a new site (Website tab, "Re-pair as a new site").</p>',
-    bodyText: 'The EmDash site for {{projectName}} sent events that conflict with stored data ({{reason}}). Re-pair it as a new site from the Website tab.',
+    bodyHtml: '<p>The EmDash site for <strong>{{projectName}}</strong> needs to be paired again: {{reason}}. Agency OS stops syncing it until it is re-paired from the Website tab (use "Re-pair as a new site" only when the site lost its plugin data).</p>',
+    bodyText: 'The EmDash site for {{projectName}} needs to be paired again: {{reason}}. Re-pair it from the Website tab.',
     inAppMessage: 'Re-pair needed: {{projectName}}',
     variables: ['projectName', 'reason', 'actionUrl'] },
 

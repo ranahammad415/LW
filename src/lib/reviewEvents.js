@@ -75,6 +75,7 @@ export async function applyReviewEvent({ project, event: n, log }) {
   const isCancelEvent = eventType === 'pipeline_cancelled';
 
   let alreadyPublished = false;
+  let existingIsPublishedFlag = false;
   let existingAssigneeId = null;
   let existingStatus = null;
   let existingClientReviewedAt = null;
@@ -85,7 +86,10 @@ export async function applyReviewEvent({ project, event: n, log }) {
       },
       select: { isPublished: true, assignedWorkerId: true, status: true, clientReviewedAt: true },
     });
-    alreadyPublished = existingReview?.isPublished || false;
+    // WP keeps its historical rule (isPublished flag). EmDash: only an actual published status counts,
+    // because cancelled rows also carry isPublished (e2e OS issue 2).
+    alreadyPublished = isEmdash ? existingReview?.status === 'published' : existingReview?.isPublished || false;
+    existingIsPublishedFlag = existingReview?.isPublished || false;
     existingClientReviewedAt = existingReview?.clientReviewedAt || null;
     existingAssigneeId = existingReview?.assignedWorkerId || null;
     existingStatus = existingReview?.status || null;
@@ -178,7 +182,11 @@ export async function applyReviewEvent({ project, event: n, log }) {
       ...(wpCreatedAt ? { wpCreatedAt } : {}),
       // Never regress the published flag once set; only ever flip it true.
       ...(isPublishEvent || isCancelEvent
-        ? { isPublished: true, ...(alreadyPublished ? {} : { publishedAt: new Date() }) }
+        ? {
+            isPublished: true,
+            // EmDash: publishedAt only for a real publish (a cancel just hides the row).
+            ...(alreadyPublished || (isEmdash && !isPublishEvent) ? {} : { publishedAt: new Date() }),
+          }
         : {}),
       ...cmsData,
     },
@@ -211,7 +219,9 @@ export async function applyReviewEvent({ project, event: n, log }) {
       lastEventType: eventType,
       wpCreatedAt: wpCreatedAt || new Date(),
       wpUpdatedAt,
-      ...(isPublishEvent || isCancelEvent ? { isPublished: true, publishedAt: new Date() } : {}),
+      ...(isPublishEvent || isCancelEvent
+        ? { isPublished: true, ...(isEmdash && !isPublishEvent ? {} : { publishedAt: new Date() }) }
+        : {}),
       ...cmsData,
     },
   };
@@ -266,6 +276,14 @@ export async function applyReviewEvent({ project, event: n, log }) {
           select: { id: true },
         });
         if (existingPublished) skipCreate = true;
+      }
+      // EmDash: a heal/backfill may already have written this seq's timeline row (e2e OS issue 2).
+      if (!skipCreate && isEmdash && Number.isInteger(n.cms?.seq)) {
+        const existingSeq = await prisma.wpContentReviewEvent.findFirst({
+          where: { contentReviewId: review.id, cmsSeq: n.cms.seq },
+          select: { id: true },
+        });
+        if (existingSeq) skipCreate = true;
       }
 
       if (!skipCreate) {

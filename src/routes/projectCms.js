@@ -106,6 +106,19 @@ export async function projectCmsRoutes(app) {
     });
   });
 
+  // ── Disconnect (OWNER) ───────────────────────────────────────────────────
+  // Deletes the HMAC keys, clears the paired state and stops polling (e2e OS issue 4). The siteId and
+  // cursor stay so a later re-pair continues the same site (contract v1.0.3 §16(b)).
+  app.post('/:id/cms/disconnect', { onRequest: [app.verifyJwt, app.requireOwner] }, async (request, reply) => {
+    const project = await prisma.project.findUnique({ where: { id: request.params.id }, select: { id: true, cmsType: true } });
+    if (!project) return reply.status(404).send({ message: 'Project not found' });
+    if (project.cmsType !== 'EMDASH') return reply.status(400).send({ message: 'This project is not an EmDash site.' });
+    const { prismaCmsStore } = await import('../lib/cmsStore.js');
+    await prismaCmsStore.disconnect(project.id);
+    request.log.info({ projectId: project.id }, 'EmDash site disconnected by OWNER');
+    return reply.send({ success: true, message: 'Site disconnected. Create a pairing code to connect it again.' });
+  });
+
   // ── Stage a key rotation ──────────────────────────────────────────────────
   app.post('/:id/cms/rotate-keys', { onRequest: [app.verifyJwt] }, async (request, reply) => {
     const project = await loadForStaff(request, reply);
@@ -167,6 +180,8 @@ export async function projectCmsRoutes(app) {
       rotatedAt: cred?.rotatedAt || null,
       contractVersion: project.cmsContractVersion ?? null,
       contractRevision: project.cmsHealth?.contractRevision ?? null,
+      previewConfigured: project.cmsHealth?.previewConfigured ?? null,
+      disconnectedAt: project.cmsDisconnectedAt || null,
       osContractRevision: CONTRACT_REVISION,
       supportedContracts: [...SUPPORTED_CONTRACTS],
       contractSupported: project.cmsContractVersion == null || SUPPORTED_CONTRACTS.includes(project.cmsContractVersion),

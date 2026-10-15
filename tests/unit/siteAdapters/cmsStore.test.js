@@ -221,7 +221,7 @@ describe('content events and mirror', () => {
     await mirrorEmdashReview('p1', { ...review, seq: 5 });
     expect(calls('wpContentReview.updateMany')).toHaveLength(0); // older than the last mirror (C7)
 
-    db.overrides['wpContentReview.findUnique'] = async () => ({ id: 'r1', isPublished: true, publishedAt: new Date(), cmsSeq: 2 });
+    db.overrides['wpContentReview.findUnique'] = async () => ({ id: 'r1', status: 'published', isPublished: true, publishedAt: new Date(), cmsSeq: 2 });
     db.overrides['wpContentReview.updateMany'] = async () => ({ count: 1 });
     await mirrorEmdashReview('p1', { ...review, seq: 5 });
     const up = calls('wpContentReview.updateMany')[0].args;
@@ -317,5 +317,56 @@ describe('contract v1.0.3 counterFloor (store)', () => {
     db.overrides['wpContentReview.aggregate'] = async () => ({ _max: { wpPipelineId: null } });
     db.overrides['wpPage.aggregate'] = async () => ({ _max: { wpPostId: null } });
     expect(await prismaCmsStore.getCounterFloor('p1')).toEqual({ reviewNo: 0, entryNo: 0 });
+  });
+});
+
+describe('e2e Phase 1 OS issues', () => {
+  const project = { id: 'p1', leadPmId: 'pm1', name: 'Oasis' };
+
+  it('issue 1: a new siteId seeds cmsLastCursor from the handshake health.lastCursor', async () => {
+    db.overrides['project.findUnique'] = async () => ({ cmsSiteId: 'site_old000001' });
+    await prismaCmsStore.completePairing({ projectId: 'p1', siteId: 'site_new00002', siteInfo: { health: { lastCursor: 21 } }, contract: 1, inbound: 'i', outbound: 'o' });
+    expect(calls('project.update').at(-1).args.data.cmsLastCursor).toBe(21);
+  });
+
+  it('issue 2: a cancelled EmDash row (isPublished=true) is never turned into "published" by a later event or mirror', async () => {
+    db.overrides['wpContentReview.findUnique'] = async () => ({ id: 'r1', status: 'cancelled', isPublished: true, assignedWorkerId: null });
+    db.overrides['wpContentReview.updateMany'] = async () => ({ count: 1 });
+    const ev = ex('events.request').events[0];
+    await applyReviewEvent({ project, event: normalizeReviewEvent(ev.review, { eventType: ev.type, seq: ev.seq }) });
+    const state = calls('wpContentReview.updateMany')[1].args.data;
+    expect(state.status).toBe('pm_approved');
+
+    db.calls = [];
+    await mirrorEmdashReview('p1', { ...ex('review.response').review, status: 'cancelled', seq: 9 });
+    const m = calls('wpContentReview.updateMany')[0].args.data;
+    expect(m.status).toBe('cancelled');
+    expect(m).not.toHaveProperty('publishedAt');
+  });
+
+  it('issue 2: an EmDash cancel hides the row without a publishedAt', async () => {
+    db.overrides['wpContentReview.findUnique'] = async () => null;
+    db.overrides['wpContentReview.create'] = async (args) => ({ id: 'r9', ...args.data });
+    const ev = ex('events.request').events[0];
+    const r = { ...ev.review, status: 'cancelled' };
+    await applyReviewEvent({ project, event: normalizeReviewEvent(r, { eventType: 'pipeline_cancelled', seq: 7 }) });
+    const created = calls('wpContentReview.create')[0].args.data;
+    expect(created).toMatchObject({ isPublished: true, status: 'cancelled' });
+    expect(created).not.toHaveProperty('publishedAt');
+  });
+
+  it('issue 2: an event whose seq already has a (backfilled) timeline row adds no duplicate', async () => {
+    db.overrides['wpContentReview.findUnique'] = async () => ({ id: 'r1', status: 'pending_pm_review', isPublished: false });
+    db.overrides['wpContentReview.updateMany'] = async () => ({ count: 1 });
+    db.overrides['wpContentReviewEvent.findFirst'] = async (args) => (args.where.cmsSeq === 3 ? { id: 'e-existing' } : null);
+    const ev = ex('events.request').events[0];
+    await applyReviewEvent({ project, event: normalizeReviewEvent(ev.review, { eventType: ev.type, seq: 3 }) });
+    expect(calls('wpContentReviewEvent.create')).toHaveLength(0);
+  });
+
+  it('issue 4: disconnect deletes the credential and marks the project disconnected', async () => {
+    await prismaCmsStore.disconnect('p1');
+    expect(calls('cmsCredential.deleteMany')[0].args).toEqual({ where: { projectId: 'p1' } });
+    expect(calls('project.update').at(-1).args.data).toMatchObject({ cmsPairedAt: null, cmsKeyId: null });
   });
 });

@@ -44,12 +44,27 @@ function retryOpts(interactive, noRetry = false) {
   return { retryDelays: interactive ? INTERACTIVE_RETRY_DELAYS_MS : READ_RETRY_DELAYS_MS };
 }
 
+const KEY_REJECTED = new Set(['UNKNOWN_SITE', 'UNKNOWN_KEY']);
+
+/**
+ * The site no longer knows us (Disconnect on the site, re-paired elsewhere): flag re-pair needed once
+ * (CAS + OWNER notice) so polling stops until the project is paired again.
+ */
+export async function handleSiteRejection(projectId, err, log) {
+  if (!KEY_REJECTED.has(err?.code)) return false;
+  await prismaCmsStore.flagRepairNeeded(projectId, `the site rejected Agency OS's keys (${err.code}); it was disconnected or paired elsewhere`, log);
+  return true;
+}
+
 async function pairedEmdashProjectIds(projectId) {
   const rows = await prisma.project.findMany({
     where: {
       cmsType: 'EMDASH',
       cmsPairedAt: { not: null },
       wpUrl: { not: null },
+      // Archived projects and sites that rejected our keys are not polled (e2e OS issue 4).
+      status: { not: 'ARCHIVED' },
+      cmsRepairNeededAt: null,
       ...(projectId ? { id: projectId } : {}),
     },
     select: { id: true },
@@ -88,6 +103,7 @@ export async function syncEmdashPipelines({ projectId, interactive = false, noRe
       }
     } catch (err) {
       errors += 1;
+      await handleSiteRejection(id, err, log).catch(() => {});
       log?.warn?.({ err: { code: err?.code, message: err?.message }, projectId: id }, 'EmDash pipeline sync failed');
     }
   }
@@ -144,6 +160,7 @@ export async function syncEmdashInventory(projectId, { interactive = false } = {
       }
     }
   } catch (err) {
+    await handleSiteRejection(projectId, err).catch(() => {});
     return { synced: 0, created: 0, updated: 0, deleted: 0, error: err.message };
   }
 
@@ -258,9 +275,28 @@ export async function replayEmdashEvents(projectId, { log, maxPages = 1 } = {}) 
   let since = project.cmsLastCursor || 0;
   let applied = 0;
   for (let i = 0; i < maxPages; i += 1) {
-    const res = await emdashRoutes.eventsReplay(conn, { sinceCursor: since, limit: 500 });
-    const events = Array.isArray(res?.events) ? res.events : [];
-    if (events.length === 0) break;
+    let res;
+    try {
+      res = await emdashRoutes.eventsReplay(conn, { sinceCursor: since, limit: 500 });
+    } catch (err) {
+      await handleSiteRejection(project.id, err, log).catch(() => {});
+      throw err;
+    }
+    // Never import events at or below the starting cursor (e.g. a new siteId's pairing point, which may
+    // belong to the site's previous pairing; e2e OS issue 1), even if the site returns them.
+    const floor = since;
+    const events = (Array.isArray(res?.events) ? res.events : []).filter(
+      (ev) =>
+        Number.isInteger(ev?.cursor) &&
+        ev.cursor > floor &&
+        // v1.0.4 §17(a): only events stamped for the current siteId (none = older plugin = current).
+        (ev.siteId === undefined || ev.siteId === project.cmsSiteId)
+    );
+    if (events.length === 0) {
+      since = Math.max(since, Number(res?.lastCursor) || 0);
+      if (!res?.more) break;
+      continue;
+    }
     // Replay respects the batch rules (≤ 50 events, ≤ 1 snapshot per batch).
     for (let j = 0; j < events.length; j += 50) {
       const chunk = [];
@@ -298,7 +334,7 @@ export async function replayEmdashEvents(projectId, { log, maxPages = 1 } = {}) 
 export async function checkCmsConnections(log) {
   const cutoff = new Date(Date.now() - CONNECTION_LOST_MS);
   const stale = await prisma.project.findMany({
-    where: { cmsType: 'EMDASH', cmsPairedAt: { not: null }, cmsLastSeenAt: { lt: cutoff }, cmsLostNotifiedAt: null },
+    where: { cmsType: 'EMDASH', cmsPairedAt: { not: null }, status: { not: 'ARCHIVED' }, cmsRepairNeededAt: null, cmsLastSeenAt: { lt: cutoff }, cmsLostNotifiedAt: null },
     select: { id: true, name: true, cmsLastSeenAt: true },
   });
   if (!stale.length) return 0;

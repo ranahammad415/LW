@@ -293,6 +293,13 @@ CREATE TABLE IF NOT EXISTS `cmsnonce` (
 
 -- Columns/indexes added after the tables above were first written (keeps re-runs idempotent).
 SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'project' AND COLUMN_NAME = 'cmsDisconnectedAt');
+SET @sql := IF(@col = 0,
+  'ALTER TABLE `project` ADD COLUMN `cmsDisconnectedAt` DATETIME(3) NULL',
+  'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'cmseventreceipt' AND COLUMN_NAME = 'siteId');
 SET @sql := IF(@col = 0,
   'ALTER TABLE `cmseventreceipt` ADD COLUMN `siteId` VARCHAR(64) NULL',
@@ -335,9 +342,9 @@ VALUES
 INSERT IGNORE INTO `notificationtemplate`
   (`id`, `slug`, `name`, `description`, `category`, `subject`, `bodyHtml`, `bodyText`, `inAppMessage`, `variables`, `isActive`, `emailAgencyOwner`, `emailPm`, `emailClientManager`, `emailClientViewer`, `createdAt`, `updatedAt`)
 VALUES
-  (UUID(), 'cms_repair_needed', 'Site Needs Re-pairing', 'An EmDash site''s counters went backwards (lost plugin storage)', 'pipeline',
+  (UUID(), 'cms_repair_needed', 'Site Needs Re-pairing', 'An EmDash site must be paired again (counters went backwards, or it rejected Agency OS keys)', 'pipeline',
    'Re-pair needed: {{projectName}}',
-   '<p>The EmDash site for <strong>{{projectName}}</strong> sent events that conflict with what Agency OS already stored ({{reason}}). The site probably lost its plugin storage. Its events are refused until it is paired again as a new site (Website tab, "Re-pair as a new site").</p>',
-   'The EmDash site for {{projectName}} sent events that conflict with stored data ({{reason}}). Re-pair it as a new site from the Website tab.',
+   '<p>The EmDash site for <strong>{{projectName}}</strong> needs to be paired again: {{reason}}. Agency OS stops syncing it until it is re-paired from the Website tab (use "Re-pair as a new site" only when the site lost its plugin data).</p>',
+   'The EmDash site for {{projectName}} needs to be paired again: {{reason}}. Re-pair it from the Website tab.',
    'Re-pair needed: {{projectName}}',
    JSON_ARRAY('projectName','reason','actionUrl'), 1, 1, 0, 0, 0, NOW(3), NOW(3));
