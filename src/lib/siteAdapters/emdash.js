@@ -1,0 +1,430 @@
+/**
+ * EmDash side of the SiteAdapter seam: signed OS → site calls to
+ * `POST {siteUrl}/_emdash/api/plugins/agency-os-bridge/<route>` (contract v1 §5.1) and the
+ * pure normalisers that turn contract `Review` / `entry` objects into the legacy
+ * WpContentReview / WpPage shapes (surrogate integers in wpPipelineId / wpPostId, §8.3).
+ *
+ * Phase 1: no publish/schedule from the OS (§1 owner decision). `publishNotAllowed()`
+ * builds the actionable 403 locally; the site would answer the same.
+ */
+import crypto from 'node:crypto';
+import {
+  SITE_ROUTE_PREFIX,
+  SUPPORTED_CONTRACTS,
+  signRequest,
+  signedPathFor,
+  ERROR_CODES,
+} from './signing.js';
+import { decryptCmsSecret } from '../cmsKeyCrypto.js';
+import { STATUS_LABELS } from '../pipelineFormat.js';
+
+export const EMDASH_USER_AGENT = 'Localwaves-AgencyOS/1.0 (agency-os-bridge)';
+export const READ_RETRY_DELAYS_MS = Object.freeze([1000, 4000, 10000]);
+/** Interactive (PM clicked a button): one quick retry, then surface the error. */
+export const INTERACTIVE_RETRY_DELAYS_MS = Object.freeze([1000]);
+export const DEFAULT_TIMEOUT_MS = 10_000;
+
+export const MUTATION_ROUTES = new Set([
+  'draft-upsert',
+  'pipeline-submit',
+  'pipeline-review',
+  'pipeline-send-to-client',
+  'pipeline-cancel',
+  'pipeline-change-type',
+  'pipeline-rotate-links',
+  'media-import',
+  'pipeline-client-review',
+  'pipeline-publish',
+  'pipeline-schedule',
+]);
+
+export class CmsBridgeError extends Error {
+  constructor({ status = 502, code = 'UPSTREAM_UNAVAILABLE', message, retryable = false, details } = {}) {
+    super(message || code);
+    this.name = 'CmsBridgeError';
+    this.status = status;
+    this.code = code;
+    this.retryable = retryable;
+    if (details !== undefined) this.details = details;
+  }
+}
+
+const CONTRACT_HELP =
+  'Update the agency-os-bridge plugin on the site (or Agency OS) so both speak the same contract version.';
+
+/** One actionable message when the site's contract is not one this OS supports (plan O6). */
+export function assertContractSupported(project) {
+  const v = project?.cmsContractVersion;
+  if (v != null && !SUPPORTED_CONTRACTS.includes(Number(v))) {
+    throw new CmsBridgeError({
+      status: 426,
+      code: 'CONTRACT_UNSUPPORTED',
+      message: `This site speaks bridge contract v${v}; this Agency OS supports v${SUPPORTED_CONTRACTS.join(', v')}. ${CONTRACT_HELP}`,
+      details: { siteContract: v, supported: [...SUPPORTED_CONTRACTS] },
+    });
+  }
+}
+
+/**
+ * Decrypt a CmsCredential row into an inbound/outbound keyring.
+ * { inbound: {current:{id,secret}, prev?}, outbound: {current, prev?}, pending? }
+ */
+export function credentialToRings(credential, now = Date.now()) {
+  if (!credential) return null;
+  const prevAlive =
+    credential.prevKeyId != null &&
+    credential.inboundKeyPrevEnc &&
+    credential.outboundKeyPrevEnc &&
+    (!credential.prevExpiresAt || new Date(credential.prevExpiresAt).getTime() > now);
+  const prevExpiresAt = credential.prevExpiresAt ? new Date(credential.prevExpiresAt).getTime() : null;
+  return {
+    inbound: {
+      current: { id: credential.keyId, secret: decryptCmsSecret(credential.inboundKeyEnc) },
+      prev: prevAlive
+        ? { id: credential.prevKeyId, secret: decryptCmsSecret(credential.inboundKeyPrevEnc), expiresAt: prevExpiresAt }
+        : null,
+    },
+    outbound: {
+      current: { id: credential.keyId, secret: decryptCmsSecret(credential.outboundKeyEnc) },
+      prev: prevAlive
+        ? { id: credential.prevKeyId, secret: decryptCmsSecret(credential.outboundKeyPrevEnc), expiresAt: prevExpiresAt }
+        : null,
+    },
+  };
+}
+
+/** Connection object for the request helpers. Throws CmsBridgeError when the project is not paired. */
+export function connectionFor(project, credential, { now = Date.now() } = {}) {
+  if (!project || project.cmsType !== 'EMDASH') {
+    throw new CmsBridgeError({ status: 400, code: 'VALIDATION', message: 'Project is not connected to an EmDash site.' });
+  }
+  if (!project.wpUrl || !project.cmsSiteId || !credential) {
+    throw new CmsBridgeError({
+      status: 503,
+      code: 'NOT_PAIRED',
+      message: 'This EmDash site is not paired yet. Create a pairing code in the Website tab and paste it into the site plugin.',
+      retryable: false,
+    });
+  }
+  assertContractSupported(project);
+  const rings = credentialToRings(credential, now);
+  return { siteUrl: String(project.wpUrl).replace(/\/$/, ''), siteId: project.cmsSiteId, inbound: rings.inbound };
+}
+
+function sleepMs(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function retryAfterMs(res) {
+  const v = res?.headers?.get?.('retry-after');
+  if (!v) return null;
+  const n = Number(v);
+  if (Number.isFinite(n)) return Math.min(n * 1000, 30_000);
+  const t = Date.parse(v);
+  return Number.isFinite(t) ? Math.max(0, Math.min(t - Date.now(), 30_000)) : null;
+}
+
+function errorFromResponse(status, json) {
+  const e = json && typeof json === 'object' && json.error && typeof json.error === 'object' ? json.error : null;
+  const code = e?.code && typeof e.code === 'string' ? e.code : status >= 500 ? 'UPSTREAM_UNAVAILABLE' : 'INTERNAL';
+  const def = ERROR_CODES[code];
+  return new CmsBridgeError({
+    status,
+    code,
+    message: String(e?.message || `EmDash site returned HTTP ${status}`).slice(0, 500),
+    retryable: typeof e?.retryable === 'boolean' ? e.retryable : def ? def.retryable : status >= 500 || status === 429,
+    details: e?.details,
+  });
+}
+
+/**
+ * Signed POST to one plugin route. Retries retryable errors, 5xx, 429 and network
+ * failures on `retryDelays` (honouring Retry-After); mutations keep the SAME
+ * idempotency key across retries (contract §7, §10). A 401 UNKNOWN_KEY while a
+ * previous inbound key is still in its 24 h overlap is retried once with that key
+ * (the site has not installed the rotated pair yet).
+ */
+export async function siteRequest(conn, route, body = {}, opts = {}) {
+  const {
+    fetchImpl = globalThis.fetch,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    retryDelays = READ_RETRY_DELAYS_MS,
+    sleep = sleepMs,
+    idempotencyKey = MUTATION_ROUTES.has(route) ? crypto.randomUUID() : undefined,
+    now = () => Date.now(),
+  } = opts;
+  const url = `${conn.siteUrl}${SITE_ROUTE_PREFIX}${route}`;
+  const path = signedPathFor(url);
+  const raw = body === undefined || body === null ? '{}' : JSON.stringify(body);
+  let key = conn.inbound.current;
+  let triedPrev = false;
+  let attempt = 0;
+
+  for (;;) {
+    const headers = signRequest({
+      secret: key.secret,
+      keyId: key.id,
+      siteId: conn.siteId,
+      path,
+      body: raw,
+      timestamp: Math.floor(now() / 1000),
+      idempotencyKey,
+    });
+    headers['user-agent'] = EMDASH_USER_AGENT;
+    headers.accept = 'application/json';
+
+    let res = null;
+    let err = null;
+    let json = null;
+    try {
+      res = await fetchImpl(url, { method: 'POST', headers, body: raw, signal: AbortSignal.timeout(timeoutMs) });
+      json = await res.json().catch(() => null);
+    } catch (e) {
+      const isTimeout = e?.name === 'TimeoutError' || e?.name === 'AbortError';
+      err = new CmsBridgeError({
+        status: 502,
+        code: 'UPSTREAM_UNAVAILABLE',
+        message: isTimeout ? 'The EmDash site did not respond in time.' : 'Unable to reach the EmDash site.',
+        retryable: true,
+      });
+    }
+
+    if (res && res.ok && json && json.ok !== false) return json;
+    if (res && !err) {
+      err = res.ok
+        ? new CmsBridgeError({ status: 502, code: 'UPSTREAM_UNAVAILABLE', message: 'The EmDash site returned an unreadable response.', retryable: true })
+        : errorFromResponse(res.status, json);
+    }
+
+    if (err.code === 'UNKNOWN_KEY' && !triedPrev && conn.inbound.prev) {
+      triedPrev = true;
+      key = conn.inbound.prev;
+      continue;
+    }
+    const retryable = err.retryable || (res && (res.status >= 500 || res.status === 429));
+    if (retryable && attempt < retryDelays.length) {
+      const wait = (res && retryAfterMs(res)) ?? retryDelays[attempt];
+      attempt += 1;
+      const jitter = Math.floor(Math.random() * 250);
+      await sleep(wait + jitter);
+      continue;
+    }
+    throw err;
+  }
+}
+
+// ---------------------------------------------------------------- route helpers
+
+export const emdashRoutes = {
+  siteInfo: (conn, opts) => siteRequest(conn, 'site-info', {}, opts),
+  health: (conn, opts) => siteRequest(conn, 'health', {}, opts),
+  inventory: (conn, q = {}, opts) => siteRequest(conn, 'inventory', compact({ status: 'any', limit: 100, ...q }), opts),
+  entryGet: (conn, entryId, variant = 'draft', opts) => siteRequest(conn, 'entry-get', { entryId, variant }, opts),
+  pipelineList: (conn, q = {}, opts) => siteRequest(conn, 'pipeline-list', compact({ status: 'any', limit: 100, ...q }), opts),
+  pipelineGet: (conn, ref, opts) =>
+    siteRequest(conn, 'pipeline-get', ref.reviewId ? { reviewId: ref.reviewId } : { entryId: ref.entryId }, opts),
+  pipelineSubmit: (conn, body, opts) => siteRequest(conn, 'pipeline-submit', body, opts),
+  pipelineReview: (conn, body, opts) => siteRequest(conn, 'pipeline-review', compact(body), opts),
+  pipelineSendToClient: (conn, body, opts) => siteRequest(conn, 'pipeline-send-to-client', compact(body), opts),
+  pipelineCancel: (conn, body, opts) => siteRequest(conn, 'pipeline-cancel', compact(body), opts),
+  pipelineChangeType: (conn, body, opts) => siteRequest(conn, 'pipeline-change-type', body, opts),
+  pipelineRotateLinks: (conn, body, opts) => siteRequest(conn, 'pipeline-rotate-links', compact(body), opts),
+  eventsReplay: (conn, q, opts) => siteRequest(conn, 'events-replay', compact(q), opts),
+};
+
+function compact(obj) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj || {})) if (v !== undefined) out[k] = v;
+  return out;
+}
+
+/** OS actor for a signed call (contract common.json#/$defs/osActor). */
+export function osActor(user) {
+  return {
+    kind: 'human',
+    osUserId: String(user?.id || ''),
+    name: String(user?.name || 'Agency OS user').slice(0, 200),
+    ...(user?.role ? { role: user.role } : {}),
+  };
+}
+
+/** The Phase 1 answer to "Publish" on an EmDash review (contract §1, §9). */
+export function publishNotAllowed(editUrl) {
+  return new CmsBridgeError({
+    status: 403,
+    code: 'PUBLISH_NOT_ALLOWED',
+    message: 'Approved. Publish in the site admin.',
+    retryable: false,
+    details: editUrl ? { editUrl } : {},
+  });
+}
+
+// ---------------------------------------------------------------- normalisers (pure)
+
+const str = (v, max) => (v == null || v === '' ? null : String(v).slice(0, max));
+const int = (v) => (Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) : null);
+
+function postTypeFor(collection) {
+  return collection === 'posts' ? 'Post' : 'Page';
+}
+
+/**
+ * Contract `Review` (+ envelope bits) → the normalized review event consumed by
+ * lib/reviewEvents.js applyReviewEvent (same keys as wordpress.normalizePipelineWebhook).
+ */
+export function normalizeReviewEvent(review, { eventType, seq, message = null, override = false, snapshotText = null } = {}) {
+  const r = review || {};
+  const reviewNo = int(r.reviewNo);
+  const entryNo = int(r.entryNo) || 0;
+  let logMessage = str(message, 500);
+  if (override && eventType === 'pipeline_published') {
+    logMessage = (logMessage ? `${logMessage} ` : '') + '(published in the site admin before client approval)';
+    logMessage = logMessage.slice(0, 500);
+  }
+  return {
+    source: 'EMDASH',
+    wpPipelineId: reviewNo,
+    eventType: String(eventType || '').slice(0, 100),
+    wpPostId: entryNo,
+    postTitle: String(r.title || '').slice(0, 500),
+    postType: postTypeFor(r.collection),
+    contentType: str(r.contentType, 50),
+    parentWpPostId: r.updateMode ? entryNo || null : null,
+    logMessage,
+    status: String(r.status || '').slice(0, 50),
+    revisionNumber: Number(r.round) || 1,
+    pmPreviewUrl: str(r.pmPreviewUrl, 1000),
+    clientPreviewUrl: str(r.clientPreviewUrl, 1000),
+    pmDecision: str(r.pmDecision, 50),
+    pmComment: str(r.pmComment, 10000),
+    clientDecision: str(r.clientDecision, 50),
+    clientComment: str(r.clientComment, 10000),
+    submittedByName: str(r.submittedBy?.name, 200),
+    submittedById: str(r.submittedBy?.memberId, 100),
+    pmMemberName: str(r.pmAssigned?.name, 200),
+    pmMemberId: str(r.pmAssigned?.memberId, 100),
+    workerNote: str(r.workerNote, 10000),
+    pmReviewedAt: str(r.pmReviewedAt, 50),
+    clientReviewedAt: str(r.clientReviewedAt, 50),
+    wpCreatedAt: parseDate(r.createdAt),
+    wpUpdatedAt: parseDate(r.updatedAt) || new Date(),
+    summaryExcerpt: snapshotText ? String(snapshotText).slice(0, 4000) : '',
+    isElementor: false,
+    testMode: false,
+    testEmails: {},
+    cms: {
+      reviewId: str(r.reviewId, 64),
+      entryId: str(r.entryId, 64),
+      revisionId: str(r.draftRevisionId, 64),
+      seq: Number.isInteger(seq) ? seq : Number.isInteger(r.seq) ? r.seq : null,
+      editUrl: str(r.editUrl, 1000),
+    },
+  };
+}
+
+function parseDate(v) {
+  if (!v) return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * Contract `Review` → WpContentReview column values for a pull sync / response mirror
+ * (no event, no notification). `seq` is NOT written here: only the event stream advances
+ * cmsSeq, so a later event with the same seq is still applied and notified.
+ */
+export function reviewToMirrorData(review) {
+  const n = normalizeReviewEvent(review, { eventType: '' });
+  const isPublished = n.status === 'published';
+  const isCancelled = n.status === 'cancelled';
+  return {
+    wpPipelineId: n.wpPipelineId,
+    data: {
+      wpPostId: n.wpPostId,
+      ...(n.postTitle ? { postTitle: n.postTitle } : {}),
+      ...(n.parentWpPostId ? { parentWpPostId: n.parentWpPostId } : {}),
+      status: n.status,
+      submittedByName: n.submittedByName,
+      submittedById: n.submittedById,
+      pmMemberName: n.pmMemberName,
+      pmMemberId: n.pmMemberId,
+      ...(n.pmPreviewUrl ? { pmPreviewUrl: n.pmPreviewUrl } : {}),
+      ...(n.clientPreviewUrl ? { clientPreviewUrl: n.clientPreviewUrl } : {}),
+      pmDecision: n.pmDecision,
+      pmComment: n.pmComment,
+      clientDecision: n.clientDecision,
+      clientComment: n.clientComment,
+      workerNote: n.workerNote,
+      ...(n.contentType ? { contentType: n.contentType } : {}),
+      pmReviewedAt: n.pmReviewedAt,
+      clientReviewedAt: n.clientReviewedAt,
+      revisionNumber: n.revisionNumber,
+      ...(n.wpCreatedAt ? { wpCreatedAt: n.wpCreatedAt } : {}),
+      wpUpdatedAt: n.wpUpdatedAt,
+      cmsReviewId: n.cms.reviewId,
+      cmsEntryId: n.cms.entryId,
+      cmsRevisionId: n.cms.revisionId,
+      cmsEditUrl: n.cms.editUrl,
+      ...(isPublished || isCancelled ? { isPublished: true } : {}),
+    },
+    postTitle: n.postTitle || 'Untitled',
+    seq: n.cms.seq,
+    history: Array.isArray(review?.history) ? review.history : [],
+  };
+}
+
+/** Contract `entry` → WpPage column values (content is filled from snapshotText when present). */
+export function entryToPageData(entry, siteUrl) {
+  const e = entry || {};
+  const base = String(siteUrl || '').replace(/\/$/, '');
+  const path = typeof e.path === 'string' ? e.path : '';
+  return {
+    wpPostId: int(e.entryNo),
+    data: {
+      title: String(e.title || '').slice(0, 500),
+      slug: String(e.slug || '').slice(0, 500),
+      status: String(e.status || 'draft').slice(0, 50),
+      postType: e.collection === 'posts' ? 'post' : 'page',
+      url: (path && base ? `${base}${path.startsWith('/') ? '' : '/'}${path}` : path).slice(0, 500),
+      excerpt: e.excerpt == null ? null : String(e.excerpt).slice(0, 1000),
+      template: null,
+      seoTitle: e.seo?.title ? String(e.seo.title).slice(0, 500) : null,
+      seoDescription: e.seo?.description ? String(e.seo.description).slice(0, 1000) : null,
+      contentHash: String(e.contentHash || '').slice(0, 64) || String(Date.now()),
+      modifiedAt: parseDate(e.updatedAt),
+      cmsEntryId: str(e.entryId, 64),
+      cmsCollection: str(e.collection, 64),
+      cmsDraftRevisionId: str(e.draftRevisionId, 64),
+      cmsLiveRevisionId: str(e.liveRevisionId, 64),
+      cmsEditUrl: str(e.editUrl, 1000),
+    },
+  };
+}
+
+/** Status label shown for an EmDash review (same STATUS_LABELS as WP, plus reserved `scheduled`). */
+export function emdashStatusLabel(status) {
+  return STATUS_LABELS[status] || status;
+}
+
+export const emdashAdapter = {
+  type: 'EMDASH',
+  info(project) {
+    const caps = project?.cmsCapabilities && typeof project.cmsCapabilities === 'object' ? project.cmsCapabilities : {};
+    return {
+      type: 'EMDASH',
+      contractVersion: project?.cmsContractVersion ?? null,
+      capabilities: {
+        ...caps,
+        // Phase 1: never publish or schedule from the OS, whatever the site advertises.
+        publishFromOs: false,
+        scheduleFromOs: false,
+        clientReviewFromOs: false,
+        autoLogin: false,
+        updateContentClone: false,
+      },
+    };
+  },
+  isConfigured(project) {
+    return !!(project?.wpUrl && project?.cmsSiteId && project?.cmsPairedAt);
+  },
+};

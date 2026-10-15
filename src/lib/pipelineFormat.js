@@ -12,6 +12,8 @@ export const STATUS_LABELS = {
   // the raw WP post status that can arrive via the wp-content-change webhook.
   published: 'Published',
   publish: 'Published',
+  // EmDash bridge (contract v1 §8.1): reserved for Phase 2 OS scheduling; additive.
+  scheduled: 'Scheduled',
 };
 
 /** Distinct colors per workflow stage (match WP plugin). */
@@ -26,6 +28,17 @@ export const STATUS_COLORS = {
   cancelled: '#646970',
   published: '#2271b1',
   publish: '#2271b1',
+  scheduled: '#2271b1',
+};
+
+/**
+ * Timeline badge labels for event types that do not change the status (EmDash bridge
+ * contract v1 §6.2; WP never sends these, so WP timelines are unchanged).
+ */
+export const EVENT_LABELS = {
+  pipeline_draft_updated: 'Draft Updated',
+  pipeline_scheduled: 'Scheduled',
+  pipeline_unscheduled: 'Unscheduled',
 };
 
 /** Client-facing labels (slightly different for pending_client_review). */
@@ -273,6 +286,7 @@ export function formatHistoryEvent(e, labels = STATUS_LABELS) {
   ) {
     statusLabel = CLIENT_DECISION_LABELS.changes_requested;
   }
+  if (e.eventType && EVENT_LABELS[e.eventType]) statusLabel = EVENT_LABELS[e.eventType];
 
   return {
     eventType: e.eventType || null,

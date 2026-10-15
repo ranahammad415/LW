@@ -1,27 +1,10 @@
 import { prisma } from './prisma.js';
 import { generateChat, isAiConfigured } from './ai.js';
 import { reconcileProjectMapsSafe } from './contentMapSync.js';
+import { fetchAllWpPages, fetchWpSiteInfo } from './siteAdapters/wordpress.js';
 
-/** Headers many WordPress hosts expect (bare fetch() can be blocked as a bot). */
-function wpAgentHeaders(apiKey) {
-  return {
-    'X-LWA-API-Key': apiKey,
-    Accept: 'application/json',
-    'User-Agent': 'Localwaves-AgencyOS/1.0 (+https://localwaves; WP page sync)',
-  };
-}
-
-/**
- * Normalize REST payload: supports top-level array or { data: [...] } (and accidental nesting).
- */
-function extractWpPagesArray(json) {
-  if (!json || typeof json !== 'object') return [];
-  if (Array.isArray(json)) return json;
-  const d = json.data;
-  if (Array.isArray(d)) return d;
-  if (d && typeof d === 'object' && Array.isArray(d.data)) return d.data;
-  return [];
-}
+// WP REST helpers (wpAgentHeaders, extractWpPagesArray, fetchAllWpPages, fetchWpSiteInfo)
+// moved verbatim to lib/siteAdapters/wordpress.js (EmDash bridge O2).
 
 export async function maybeGenerateSummary({ excerpt, isElementor = false }) {
   const text = String(excerpt || '').trim();
@@ -44,71 +27,21 @@ export async function maybeGenerateSummary({ excerpt, isElementor = false }) {
 }
 
 /**
- * Fetch all pages from a WP site's Localwave Agent REST API, paginating until exhausted.
- */
-async function fetchAllWpPages(wpUrl, wpApiKey) {
-  const baseUrl = String(wpUrl || '').trim().replace(/\/$/, '');
-  const allPages = [];
-  const perPage = 100;
-  let page = 1;
-
-  while (true) {
-    const url = `${baseUrl}/wp-json/lwa/v1/pages?per_page=${perPage}&page=${page}`;
-    const res = await fetch(url, {
-      headers: wpAgentHeaders(wpApiKey),
-      signal: AbortSignal.timeout(30000),
-    });
-    if (!res.ok) {
-      const body = await res.text().catch(() => 'unknown');
-      throw new Error(`WP API error ${res.status}: ${body.slice(0, 500)}`);
-    }
-    const ct = res.headers.get('content-type') || '';
-    if (!ct.includes('application/json')) {
-      throw new Error(
-        'WP site did not return JSON for /wp-json/lwa/v1/pages. Check the site URL (include https) and that the Localwave Agent plugin is active.'
-      );
-    }
-    const json = await res.json();
-    const items = extractWpPagesArray(json);
-    allPages.push(...items);
-
-    if (items.length === 0) break;
-
-    const reportedTotalPages = parseInt(json.total_pages, 10);
-    const moreByMeta = Number.isFinite(reportedTotalPages) && page < reportedTotalPages;
-    const moreByFullPage = items.length >= perPage && !Number.isFinite(reportedTotalPages);
-    if (!moreByMeta && !moreByFullPage) break;
-    page++;
-  }
-
-  return allPages;
-}
-
-async function fetchWpSiteInfo(wpUrl, wpApiKey) {
-  const baseUrl = String(wpUrl || '').trim().replace(/\/$/, '');
-  const res = await fetch(`${baseUrl}/wp-json/lwa/v1/site-info`, {
-    headers: wpAgentHeaders(wpApiKey),
-    signal: AbortSignal.timeout(15000),
-  });
-  if (!res.ok) return null;
-  const json = await res.json();
-  return {
-    theme: json?.theme || null,
-    plugins: Array.isArray(json?.plugins)
-      ? json.plugins.filter((p) => p && p.active).map((p) => ({ name: String(p.name || ''), version: String(p.version || '') }))
-      : [],
-  };
-}
-
-/**
  * Sync WordPress pages for a single project.
  * Compares content hashes to detect changes and creates snapshots for changed pages.
  */
 export async function syncProjectPages(projectId) {
   const project = await prisma.project.findUnique({
     where: { id: projectId },
-    select: { id: true, wpUrl: true, wpApiKey: true },
+    select: { id: true, wpUrl: true, wpApiKey: true, cmsType: true },
   });
+
+  // EmDash sites: inventory through the EmDash adapter (lib/emdashSync.js). Dynamic import
+  // avoids a module cycle (emdashSync → cmsStore → reviewEvents → wpSync).
+  if (project?.cmsType === 'EMDASH') {
+    const { syncEmdashInventory } = await import('./emdashSync.js');
+    return syncEmdashInventory(projectId, { interactive: true });
+  }
 
   const wpUrl = String(project?.wpUrl || '').trim();
   const wpApiKey = String(project?.wpApiKey || '').trim();
@@ -261,6 +194,8 @@ export async function syncProjectPages(projectId) {
 export async function syncAllProjects() {
   const projects = await prisma.project.findMany({
     where: {
+      // WordPress only; EmDash inventories run leader-only via emdashSync.syncAllEmdashProjects.
+      cmsType: 'WORDPRESS',
       wpUrl: { not: null },
       wpApiKey: { not: null },
     },

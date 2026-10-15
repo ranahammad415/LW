@@ -10,6 +10,9 @@ const PATTERNS = [
   [/(\/knowledge-interview\/)[^/?#\s]+/g, '$1[redacted]'],
   // ?token=... (SSE auth, signed issue links)
   [/([?&]token=)[^&#\s]+/gi, '$1[redacted]'],
+  // EmDash bridge review links (?t=<capability token>) and preview tokens (plan §6 Logging)
+  [/([?&]t=)[^&#\s]+/g, '$1[redacted]'],
+  [/([?&]_preview=)[^&#\s]+/gi, '$1[redacted]'],
 ];
 
 export function redactSensitiveUrl(url) {
