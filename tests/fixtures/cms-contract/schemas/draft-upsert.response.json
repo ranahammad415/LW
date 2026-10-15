@@ -8,6 +8,10 @@
     "ok": {
       "const": true
     },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
     "entryId": {
       "$ref": "common.json#/$defs/id"
     },
@@ -18,10 +22,12 @@
       "type": "boolean"
     },
     "draftRevisionId": {
-      "$ref": "common.json#/$defs/id"
+      "$ref": "common.json#/$defs/id",
+      "description": "EmDash draft revision id, or v<version> (e.g. v1) for a never-published entry whose main row is the draft. Opaque."
     },
     "rev": {
-      "$ref": "common.json#/$defs/id"
+      "$ref": "common.json#/$defs/id",
+      "description": "Opaque concurrency token: compare for equality only; send back as baseRev"
     },
     "path": {
       "$ref": "common.json#/$defs/path"

@@ -178,6 +178,13 @@ SET @sql := IF(@col = 0,
   'SELECT 1');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
+SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'wpcontentreview' AND COLUMN_NAME = 'cmsLinks');
+SET @sql := IF(@col = 0,
+  'ALTER TABLE `wpcontentreview` ADD COLUMN `cmsLinks` JSON NULL',
+  'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 SET @idx := (SELECT COUNT(*) FROM information_schema.STATISTICS
   WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'wpcontentreview' AND INDEX_NAME = 'wpcontentreview_projectId_cmsReviewId_idx');
 SET @sql := IF(@idx = 0,

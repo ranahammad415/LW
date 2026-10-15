@@ -14,6 +14,7 @@ import { ensureProjectAccess } from '../lib/ensureProjectAccess.js';
 import { encryptCmsSecret, isCmsKeyCryptoConfigured } from '../lib/cmsKeyCrypto.js';
 import {
   PAIRING_CODE_TTL_SEC,
+  CONTRACT_REVISION,
   SUPPORTED_CONTRACTS,
   createPairingCode,
   generateKey,
@@ -208,6 +209,8 @@ export async function projectCmsRoutes(app) {
       prevKeyExpiresAt: cred?.prevExpiresAt || null,
       rotatedAt: cred?.rotatedAt || null,
       contractVersion: project.cmsContractVersion ?? null,
+      contractRevision: project.cmsHealth?.contractRevision ?? null,
+      osContractRevision: CONTRACT_REVISION,
       supportedContracts: [...SUPPORTED_CONTRACTS],
       contractSupported: project.cmsContractVersion == null || SUPPORTED_CONTRACTS.includes(project.cmsContractVersion),
       pluginVersion: project.cmsPluginVersion || null,

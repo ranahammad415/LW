@@ -184,6 +184,8 @@ function formatReview(r) {
       .map((e) => formatHistoryEvent(e)),
     cmsType,
     editUrl: r.cmsEditUrl || null,
+    // EmDash v1.0.1: token-free link state; URLs come only from the minting call (renew = rotate-links).
+    previewLinks: r.cmsLinks || null,
     canPublishFromOs: !isEmdash,
     readyToPublish: isEmdash && effectiveStatus === 'client_approved',
   };

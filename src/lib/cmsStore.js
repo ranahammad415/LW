@@ -88,6 +88,7 @@ function siteInfoProjectData(siteInfo, contract, now) {
       siteUrlReported: siteInfo?.siteUrl ? String(siteInfo.siteUrl).slice(0, 500) : null,
       siteName: siteInfo?.siteName ? String(siteInfo.siteName).slice(0, 200) : null,
       supportedContracts: Array.isArray(siteInfo?.supportedContracts) ? siteInfo.supportedContracts : null,
+      contractRevision: typeof siteInfo?.contractRevision === 'string' ? siteInfo.contractRevision.slice(0, 16) : null,
       // site-info only (errata v1.0.1 adds framework.blockSchemas): stored for later use, not relied on.
       ...(siteInfo?.framework && typeof siteInfo.framework === 'object' ? { framework: siteInfo.framework } : {}),
       ...(Array.isArray(siteInfo?.plugins) ? { plugins: siteInfo.plugins.slice(0, 50) } : {}),

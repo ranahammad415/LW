@@ -1163,6 +1163,8 @@ model WpContentReview {
   cmsSeq             Int?
   /// EmDash admin edit URL (the "Publish in site admin" link).
   cmsEditUrl         String?   @db.VarChar(1000)
+  /// EmDash (contract v1.0.1 §5.4): token-free preview link state { pm, client: { state, issuedAt, expiresAt } }.
+  cmsLinks           Json?
 
   project         Project                  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   events          WpContentReviewEvent[]

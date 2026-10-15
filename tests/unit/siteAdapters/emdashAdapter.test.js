@@ -142,13 +142,30 @@ describe('siteRequest: signed POST to /_emdash/api/plugins/agency-os-bridge/<rou
     expect(sleep).toHaveBeenCalledTimes(2);
   });
 
-  it('treats a non-contract 4xx host error as final', async () => {
+  it('treats a non-contract 4xx host error as INTERNAL and final (v1.0.1 §9)', async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ error: { code: 'INVALID_PLUGIN_REQUEST', message: 'too big' } }, 413));
     await expect(siteRequest(conn, 'inventory', {}, { fetchImpl, sleep: noSleep })).rejects.toMatchObject({
       status: 413,
+      code: 'INTERNAL',
       retryable: false,
+      details: { nonContract: true, hostCode: 'INVALID_PLUGIN_REQUEST' },
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('a non-contract 404 means the plugin is missing; a non-contract 502 is retried', async () => {
+    const notFound = vi.fn(async () => new Response('Not Found', { status: 404 }));
+    await expect(siteRequest(conn, 'health', {}, { fetchImpl: notFound, sleep: noSleep })).rejects.toMatchObject({
+      code: 'INTERNAL',
+      details: { pluginMissing: true },
+      message: expect.stringMatching(/plugin is missing or disabled/),
+    });
+    const flaky = vi.fn(async () => new Response('<html>bad gateway</html>', { status: 502 }));
+    await expect(siteRequest(conn, 'health', {}, { fetchImpl: flaky, sleep: noSleep, retryDelays: [1] })).rejects.toMatchObject({
+      code: 'INTERNAL',
+      retryable: true,
+    });
+    expect(flaky).toHaveBeenCalledTimes(2);
   });
 
   it('pages inventory and pipeline-list with the contract request shapes', async () => {
@@ -249,6 +266,8 @@ describe('Review → WpContentReview normalisation (both adapters)', () => {
       },
     });
     expect(n.wpUpdatedAt).toBeInstanceOf(Date);
+    // v1.0.1: token-free link state travels with every Review.
+    expect(n.cms.links).toEqual(ev.review.links);
   });
 
   it('produces the same keys as the WordPress webhook normaliser', () => {

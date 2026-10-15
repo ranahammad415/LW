@@ -64,7 +64,19 @@
         "cancelledReason": null,
         "createdAt": "2026-10-15T11:00:00Z",
         "updatedAt": "2026-10-15T12:00:00Z",
-        "history": []
+        "history": [],
+        "links": {
+          "pm": {
+            "state": "active",
+            "issuedAt": "2026-10-15T11:00:00Z",
+            "expiresAt": "2026-10-22T11:00:00Z"
+          },
+          "client": {
+            "state": "none",
+            "issuedAt": null,
+            "expiresAt": null
+          }
+        }
       },
       "message": null
     },
@@ -128,7 +140,19 @@
         "cancelledReason": null,
         "createdAt": "2026-10-15T11:00:00Z",
         "updatedAt": "2026-10-15T12:00:00Z",
-        "history": []
+        "history": [],
+        "links": {
+          "pm": {
+            "state": "active",
+            "issuedAt": "2026-10-15T11:00:00Z",
+            "expiresAt": "2026-10-22T11:00:00Z"
+          },
+          "client": {
+            "state": "active",
+            "issuedAt": "2026-10-15T12:00:00Z",
+            "expiresAt": "2026-10-29T12:00:00Z"
+          }
+        }
       },
       "message": null
     }

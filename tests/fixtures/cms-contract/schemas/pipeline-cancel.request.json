@@ -9,7 +9,8 @@
       "$ref": "common.json#/$defs/id"
     },
     "force": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "OWNER only (403 FORBIDDEN otherwise). Same transition as a normal cancel; marks an OWNER cancellation (OS tombstone)"
     },
     "reason": {
       "anyOf": [

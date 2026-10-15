@@ -32,6 +32,13 @@
             "type": "string",
             "pattern": "^[a-z][a-z0-9_]*$"
           }
+        },
+        "blockSchemas": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "common.json#/$defs/blockSchema"
+          },
+          "description": "v1.0.1: field definitions per enabled block (keys = blocks). Sites SHOULD send it; the OS builds and pre-checks layouts with it (checkLayout)."
         }
       },
       "required": [

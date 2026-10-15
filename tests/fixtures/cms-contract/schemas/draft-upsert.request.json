@@ -31,7 +31,8 @@
             "parent": {
               "anyOf": [
                 {
-                  "$ref": "common.json#/$defs/id"
+                  "$ref": "common.json#/$defs/id",
+                  "description": "Parent SECTION: a value of the collection's parent select (e.g. spa-services) or an entry id of the same collection (its slug is used). Validated against the select options (422 SCHEMA_INVALID)"
                 },
                 {
                   "type": "null"
@@ -102,7 +103,8 @@
     "baseRev": {
       "anyOf": [
         {
-          "$ref": "common.json#/$defs/id"
+          "$ref": "common.json#/$defs/id",
+          "description": "The rev from the last draft-upsert/entry-get; mismatch -> 409 CONFLICT_REV"
         },
         {
           "type": "null"

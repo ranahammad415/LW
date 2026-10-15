@@ -22,5 +22,6 @@
     "keyId": 2,
     "inbound": "aosk1_nhndr7r5XtNWMQ2BhoZ2EW7iJ3qNn1E066pDPzr8qY8",
     "outbound": "aosk1_GDQ4q-wSeXXmi1409VYnN1mxOGhkrxuRJYDWtE0VhMw"
-  }
+  },
+  "contractRevision": "1.0.1"
 }

@@ -15,6 +15,7 @@
  */
 import {
   CONTRACT_VERSION,
+  CONTRACT_REVISION,
   SUPPORTED_CONTRACTS,
   HEADERS,
   MAX_EVENTS_BODY_BYTES,
@@ -221,6 +222,7 @@ export async function emdashWebhookRoutes(app, opts = {}) {
     const responseBody = JSON.stringify({
       ok: true,
       contract,
+      contractRevision: CONTRACT_REVISION,
       siteId: v.siteId,
       projectId: project.id,
       projectName: String(project.name || '').slice(0, 200),
@@ -275,6 +277,7 @@ export async function emdashWebhookRoutes(app, opts = {}) {
     const responseBody = JSON.stringify({
       ok: true,
       contract,
+      contractRevision: CONTRACT_REVISION,
       siteId: v.siteId,
       projectId: project.id,
       projectName: String(project.name || '').slice(0, 200),

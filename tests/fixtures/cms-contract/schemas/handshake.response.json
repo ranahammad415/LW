@@ -8,6 +8,10 @@
     "ok": {
       "const": true
     },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
     "contract": {
       "type": "integer",
       "minimum": 1
@@ -23,6 +27,11 @@
     "projectName": {
       "type": "string",
       "maxLength": 200
+    },
+    "contractRevision": {
+      "type": "string",
+      "pattern": "^1\\.\\d+\\.\\d+$",
+      "description": "v1.0.1: errata level the OS implements (informational)"
     },
     "serverTime": {
       "type": "integer",

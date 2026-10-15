@@ -16,6 +16,8 @@ import crypto from 'node:crypto';
 
 export const CONTRACT_NAME = 'agency-os-bridge';
 export const CONTRACT_VERSION = 1;
+/** Errata level implemented by this OS (informational; X-AOS-Contract stays 1). */
+export const CONTRACT_REVISION = '1.0.1';
 export const SUPPORTED_CONTRACTS = Object.freeze([1]);
 export const PLUGIN_ID = 'agency-os-bridge';
 export const SITE_ROUTE_PREFIX = '/_emdash/api/plugins/agency-os-bridge/';
@@ -281,7 +283,8 @@ export async function verifyRequest({
   const expected = computeSignature(secret, canonicalString({ method, path, timestamp: ts, nonce, body }));
   if (!timingSafeEqualStr(expected, m[1])) {
     // signatureMismatch: well-formed, fresh request whose signature is wrong (pairing burn rule, errata v1.0.1).
-    return { ...fail(401, 'BAD_SIGNATURE', 'Signature mismatch'), signatureMismatch: true, siteId, nonceKey: siteId + ':' + nonce };
+    // details.stage "mismatch" (contract v1.0.1 O4): a well-formed, fresh request whose signature is wrong.
+    return { ...fail(401, 'BAD_SIGNATURE', 'Signature mismatch', { stage: 'mismatch' }), signatureMismatch: true, siteId, nonceKey: siteId + ':' + nonce };
   }
 
   const fresh = await nonceCache.checkAndStore(`${siteId}:${nonce}`, now + nonceTtlSec * 1000);

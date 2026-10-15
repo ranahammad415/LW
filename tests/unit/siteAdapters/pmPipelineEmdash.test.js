@@ -137,6 +137,16 @@ describe('EmDash projects', () => {
   });
 });
 
+describe('EmDash approve-for-client (v1.0.1 §8.2)', () => {
+  it('a PM "request changes" after the client asked for changes gets an actionable 409', async () => {
+    emdashProject();
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify(ex('error.response')), { status: 409 }));
+    const r = await app.inject({ method: 'POST', url: `/api/pm/pipeline/${PID}/42/review`, payload: { decision: 'changes_requested' } });
+    expect(r.statusCode).toBe(409);
+    expect(r.json()).toMatchObject({ code: 'INVALID_TRANSITION', message: expect.stringMatching(/use Approve/) });
+  });
+});
+
 describe('WordPress projects are unchanged', () => {
   it('Publish still proxies to wp-json/lwa/v1/pipeline/:id/publish with the API key header', async () => {
     db.overrides['project.findUnique'] = async () => ({ wpUrl: 'https://wp.example/', wpApiKey: 'k-123', leadPmId: 'pm-1', name: 'WP', clientId: 'c1', cmsType: 'WORDPRESS' });

@@ -98,6 +98,13 @@ export async function emdashPmReview({ request, reply, projectId, wpPipelineId, 
     const pipeline = await mirrorAndFormat(projectId, res.review, formatReview, request.log);
     return reply.send({ success: true, pipeline });
   } catch (err) {
+    // v1.0.1 §8.2: after the client asked for changes the worker already has them; a PM
+    // "request changes" there is refused (409). Approve sends the revised page back to the client
+    // (or marks it ready to publish when the client chose "minor changes, then publish").
+    if (err instanceof CmsBridgeError && err.code === 'INVALID_TRANSITION' && decision === 'changes_requested') {
+      err.message =
+        'The client already requested changes and the worker has them. When the page is revised, use Approve to send it back to the client.';
+    }
     return sendEmdashError(reply, err, request.log);
   }
 }

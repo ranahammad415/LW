@@ -77,7 +77,291 @@
       "faq",
       "cta_banner",
       "related_links"
-    ]
+    ],
+    "blockSchemas": {
+      "page_hero": {
+        "fields": [
+          {
+            "slug": "variant",
+            "type": "select",
+            "options": [
+              "Standard",
+              "Homepage"
+            ]
+          },
+          {
+            "slug": "eyebrow",
+            "type": "string",
+            "maxLength": 60
+          },
+          {
+            "slug": "heading",
+            "type": "string",
+            "required": true,
+            "maxLength": 70
+          },
+          {
+            "slug": "heading_accent",
+            "type": "string",
+            "maxLength": 40
+          },
+          {
+            "slug": "intro",
+            "type": "text",
+            "maxLength": 420
+          },
+          {
+            "slug": "tagline",
+            "type": "string",
+            "maxLength": 80
+          },
+          {
+            "slug": "image",
+            "type": "image"
+          },
+          {
+            "slug": "primary_label",
+            "type": "string",
+            "maxLength": 32
+          },
+          {
+            "slug": "primary_url",
+            "type": "string",
+            "maxLength": 200
+          },
+          {
+            "slug": "show_call_button",
+            "type": "boolean"
+          }
+        ]
+      },
+      "content_section": {
+        "fields": [
+          {
+            "slug": "eyebrow",
+            "type": "string",
+            "maxLength": 60
+          },
+          {
+            "slug": "heading",
+            "type": "string",
+            "required": true,
+            "maxLength": 90
+          },
+          {
+            "slug": "heading_accent",
+            "type": "string",
+            "maxLength": 40
+          },
+          {
+            "slug": "body",
+            "type": "portableText"
+          },
+          {
+            "slug": "image",
+            "type": "image"
+          },
+          {
+            "slug": "image_side",
+            "type": "select",
+            "options": [
+              "Right",
+              "Left"
+            ]
+          },
+          {
+            "slug": "image_badge",
+            "type": "string",
+            "maxLength": 60
+          },
+          {
+            "slug": "buttons",
+            "type": "repeater",
+            "maxItems": 2,
+            "subFields": [
+              {
+                "slug": "label",
+                "type": "string",
+                "required": true
+              },
+              {
+                "slug": "url",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          {
+            "slug": "tone",
+            "type": "select",
+            "options": [
+              "Light",
+              "Tinted",
+              "Navy"
+            ]
+          }
+        ]
+      },
+      "card_grid": {
+        "fields": [
+          {
+            "slug": "eyebrow",
+            "type": "string",
+            "maxLength": 60
+          },
+          {
+            "slug": "heading",
+            "type": "string",
+            "required": true,
+            "maxLength": 90
+          },
+          {
+            "slug": "intro",
+            "type": "text",
+            "maxLength": 300
+          },
+          {
+            "slug": "style",
+            "type": "select",
+            "options": [
+              "Cards",
+              "Numbered steps"
+            ]
+          },
+          {
+            "slug": "cards",
+            "type": "repeater",
+            "minItems": 1,
+            "maxItems": 6,
+            "subFields": [
+              {
+                "slug": "title",
+                "type": "string",
+                "required": true
+              },
+              {
+                "slug": "text",
+                "type": "text"
+              },
+              {
+                "slug": "image",
+                "type": "image"
+              },
+              {
+                "slug": "link_label",
+                "type": "string"
+              },
+              {
+                "slug": "link_url",
+                "type": "string"
+              }
+            ]
+          },
+          {
+            "slug": "tone",
+            "type": "select",
+            "options": [
+              "Light",
+              "Tinted",
+              "Navy"
+            ]
+          }
+        ]
+      },
+      "faq": {
+        "fields": [
+          {
+            "slug": "eyebrow",
+            "type": "string",
+            "maxLength": 60
+          },
+          {
+            "slug": "heading",
+            "type": "string",
+            "required": true,
+            "maxLength": 90
+          },
+          {
+            "slug": "intro",
+            "type": "text",
+            "maxLength": 300
+          },
+          {
+            "slug": "items",
+            "type": "repeater",
+            "minItems": 1,
+            "maxItems": 14,
+            "subFields": [
+              {
+                "slug": "question",
+                "type": "string",
+                "required": true
+              },
+              {
+                "slug": "answer",
+                "type": "text",
+                "required": true
+              }
+            ]
+          },
+          {
+            "slug": "tone",
+            "type": "select",
+            "options": [
+              "Light",
+              "Tinted",
+              "Navy"
+            ]
+          }
+        ]
+      },
+      "cta_banner": {
+        "fields": [
+          {
+            "slug": "eyebrow",
+            "type": "string",
+            "maxLength": 40
+          },
+          {
+            "slug": "heading",
+            "type": "string",
+            "maxLength": 60
+          },
+          {
+            "slug": "text",
+            "type": "text",
+            "maxLength": 160
+          }
+        ]
+      },
+      "related_links": {
+        "fields": [
+          {
+            "slug": "heading",
+            "type": "string",
+            "maxLength": 60
+          },
+          {
+            "slug": "links",
+            "type": "repeater",
+            "minItems": 1,
+            "maxItems": 6,
+            "subFields": [
+              {
+                "slug": "label",
+                "type": "string",
+                "required": true
+              },
+              {
+                "slug": "url",
+                "type": "string",
+                "required": true
+              }
+            ]
+          }
+        ]
+      }
+    }
   },
   "plugins": [
     {
@@ -104,5 +388,6 @@
       "published": 12,
       "scheduled": 1
     }
-  }
+  },
+  "contractRevision": "1.0.1"
 }

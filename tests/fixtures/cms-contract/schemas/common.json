@@ -660,7 +660,8 @@
         "pmPreviewUrl": {
           "anyOf": [
             {
-              "$ref": "common.json#/$defs/url"
+              "$ref": "common.json#/$defs/url",
+              "description": "Non-null ONLY in the response/event that minted the link (links are hashed at rest). Receivers keep their stored URL when this is null."
             },
             {
               "type": "null"
@@ -670,7 +671,8 @@
         "clientPreviewUrl": {
           "anyOf": [
             {
-              "$ref": "common.json#/$defs/url"
+              "$ref": "common.json#/$defs/url",
+              "description": "Same rule as pmPreviewUrl"
             },
             {
               "type": "null"
@@ -702,6 +704,19 @@
             }
           },
           "required": []
+        },
+        "links": {
+          "type": "object",
+          "properties": {
+            "pm": {
+              "$ref": "common.json#/$defs/linkState"
+            },
+            "client": {
+              "$ref": "common.json#/$defs/linkState"
+            }
+          },
+          "required": [],
+          "description": "v1.0.1: token-free link status on every Review (pipeline-get/list included)"
         },
         "editUrl": {
           "$ref": "common.json#/$defs/url"
@@ -779,7 +794,9 @@
           "type": "array",
           "items": {
             "$ref": "common.json#/$defs/historyItem"
-          }
+          },
+          "maxItems": 100,
+          "description": "Most recent items, oldest first. Sites send at most the last 25; receivers accept up to 100. seq is authoritative; heal gaps with pipeline-get / events-replay."
         }
       },
       "required": [
@@ -798,6 +815,113 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "linkState": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "enum": [
+            "none",
+            "active",
+            "expired",
+            "revoked"
+          ]
+        },
+        "issuedAt": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expiresAt": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "state"
+      ]
+    },
+    "fieldDef": {
+      "type": "object",
+      "properties": {
+        "slug": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "maxLength": 64
+        },
+        "type": {
+          "type": "string",
+          "maxLength": 32,
+          "description": "EmDash field type: string, text, select, boolean, number, integer, image, repeater, portableText, … (unknown types: the site validates)"
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "maxLength": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "minItems": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxItems": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "allowedTypes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "subFields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/fieldDef"
+          }
+        }
+      },
+      "required": [
+        "slug",
+        "type"
+      ]
+    },
+    "blockSchema": {
+      "type": "object",
+      "properties": {
+        "fields": {
+          "type": "array",
+          "items": {
+            "$ref": "common.json#/$defs/fieldDef"
+          }
+        }
+      },
+      "required": [
+        "fields"
+      ],
+      "description": "Fields of one approved block type (from the site's seed/schema)"
     },
     "capabilities": {
       "type": "object",
@@ -1047,6 +1171,11 @@
         },
         "health": {
           "$ref": "common.json#/$defs/health"
+        },
+        "contractRevision": {
+          "type": "string",
+          "pattern": "^1\\.\\d+\\.\\d+$",
+          "description": "v1.0.1: errata level the sender implements (informational; X-AOS-Contract stays 1)"
         }
       },
       "required": [
@@ -1107,7 +1236,8 @@
           "$ref": "common.json#/$defs/review"
         },
         "entry": {
-          "$ref": "common.json#/$defs/entry"
+          "type": "object",
+          "description": "content.saved/published/unpublished: full entry; content.deleted: entryRef (v1.0.1)"
         },
         "message": {
           "anyOf": [
@@ -1189,6 +1319,48 @@
               ]
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "content.saved",
+                  "content.published",
+                  "content.unpublished"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "entry": {
+                "$ref": "common.json#/$defs/entry"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "content.deleted"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "entry": {
+                "$ref": "common.json#/$defs/entryRef"
+              }
+            }
+          }
         }
       ]
     },
@@ -1241,6 +1413,115 @@
         "message",
         "retryable"
       ]
+    },
+    "entryRef": {
+      "type": "object",
+      "properties": {
+        "entryId": {
+          "$ref": "common.json#/$defs/id"
+        },
+        "entryNo": {
+          "$ref": "common.json#/$defs/surrogateNo"
+        },
+        "collection": {
+          "$ref": "common.json#/$defs/collection"
+        },
+        "slug": {
+          "$ref": "common.json#/$defs/slug"
+        },
+        "path": {
+          "$ref": "common.json#/$defs/path"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "status": {
+          "$ref": "common.json#/$defs/entryStatus"
+        },
+        "hasPendingDraft": {
+          "type": "boolean"
+        },
+        "draftRevisionId": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "liveRevisionId": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "seo": {
+          "$ref": "common.json#/$defs/seo"
+        },
+        "contentHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "wordCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "excerpt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 1000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "updatedAt": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "publishedAt": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scheduledAt": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "editUrl": {
+          "$ref": "common.json#/$defs/url"
+        },
+        "template": {
+          "type": "null",
+          "description": "Always null on EmDash (WP template/isElementor have no equivalent)"
+        }
+      },
+      "required": [
+        "entryId",
+        "entryNo",
+        "collection",
+        "updatedAt"
+      ],
+      "description": "Reduced entry for content.deleted (v1.0.1): the last summary the site saw; updatedAt = deletion time"
     }
   }
 }

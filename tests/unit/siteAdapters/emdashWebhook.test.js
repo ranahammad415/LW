@@ -261,6 +261,7 @@ describe('POST /handshake — pairing', () => {
     const json = res.json();
     expect(json).toMatchObject({ ok: true, contract: 1, siteId: SITE, projectId: PROJECT_ID, keys: { keyId: 1 } });
     expect(json.keys.inbound).toMatch(/^aosk1_[A-Za-z0-9_-]{43}$/);
+    expect(json.contractRevision).toBe('1.0.1');
     expect(json.pms[0].memberId).toBe('8f14e45f-ceea-467a-9575-5f3c1b2a7d90');
     const sig = verifyResponse({
       status: 200,
@@ -532,7 +533,7 @@ describe('POST /events', () => {
   it('bad signature → 401 BAD_SIGNATURE envelope', async () => {
     const res = await send(ex('events.request').events, { secret: generateKey() });
     expect(res.statusCode).toBe(401);
-    expect(res.json()).toEqual({ ok: false, error: { code: 'BAD_SIGNATURE', message: 'Signature mismatch', retryable: false } });
+    expect(res.json()).toEqual({ ok: false, error: { code: 'BAD_SIGNATURE', message: 'Signature mismatch', retryable: false, details: { stage: 'mismatch' } } });
     expect(store.applied).toHaveLength(0);
   });
 
@@ -558,6 +559,15 @@ describe('POST /events', () => {
     const res = await send(ex('events.request').events, { siteId: 'site_unknown00001' });
     expect(res.statusCode).toBe(401);
     expect(res.json().error.code).toBe('UNKNOWN_SITE');
+  });
+
+  it('accepts content.deleted with a reduced entryRef and stores token-free link state (v1.0.1 example)', async () => {
+    const events = ex('events.request--deleted').events;
+    store.reviewSeq.set(events[0].review.reviewId, 4);
+    const res = await send(events);
+    expect(res.json()).toMatchObject({ accepted: events.map((e) => e.eventId), rejected: [], lastCursor: 61 });
+    expect(store.applied[0].cms.links).toEqual(events[0].review.links);
+    expect(store.contentApplied[0].type).toBe('content.deleted');
   });
 
   it('a body over 1 MiB → 413 PAYLOAD_TOO_LARGE (not retryable) in the contract envelope', async () => {

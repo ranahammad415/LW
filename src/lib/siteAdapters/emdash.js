@@ -124,16 +124,33 @@ function retryAfterMs(res) {
   return Number.isFinite(t) ? Math.max(0, Math.min(t - Date.now(), 30_000)) : null;
 }
 
-function errorFromResponse(status, json) {
+/**
+ * Contract error envelope → CmsBridgeError. Non-contract bodies (answered by the EmDash host before
+ * the plugin runs, e.g. INVALID_PLUGIN_REQUEST, or a bare 404) are INTERNAL: retryable for 5xx/429,
+ * final for 4xx; a non-contract 404 means the plugin is missing or disabled (contract v1.0.1 §9).
+ */
+export function errorFromResponse(status, json) {
   const e = json && typeof json === 'object' && json.error && typeof json.error === 'object' ? json.error : null;
-  const code = e?.code && typeof e.code === 'string' ? e.code : status >= 500 ? 'UPSTREAM_UNAVAILABLE' : 'INTERNAL';
-  const def = ERROR_CODES[code];
+  const isContract = !!(json && json.ok === false && e && typeof e.code === 'string' && ERROR_CODES[e.code]);
+  if (!isContract) {
+    const pluginMissing = status === 404;
+    return new CmsBridgeError({
+      status,
+      code: 'INTERNAL',
+      message: pluginMissing
+        ? 'The EmDash site does not answer the Agency OS bridge route: the agency-os-bridge plugin is missing or disabled.'
+        : `The EmDash site returned HTTP ${status}${e?.code ? ` (${String(e.code).slice(0, 60)})` : ''}.`,
+      retryable: status >= 500 || status === 429,
+      details: { nonContract: true, ...(pluginMissing ? { pluginMissing: true } : {}), ...(e?.code ? { hostCode: String(e.code).slice(0, 60) } : {}) },
+    });
+  }
+  const def = ERROR_CODES[e.code];
   return new CmsBridgeError({
     status,
-    code,
-    message: String(e?.message || `EmDash site returned HTTP ${status}`).slice(0, 500),
-    retryable: typeof e?.retryable === 'boolean' ? e.retryable : def ? def.retryable : status >= 500 || status === 429,
-    details: e?.details,
+    code: e.code,
+    message: String(e.message || `EmDash site returned HTTP ${status}`).slice(0, 500),
+    retryable: typeof e.retryable === 'boolean' ? e.retryable : def.retryable,
+    details: e.details,
   });
 }
 
@@ -329,6 +346,8 @@ export function normalizeReviewEvent(review, { eventType, seq, message = null, o
     testMode: false,
     testEmails: {},
     cms: {
+      // v1.0.1: token-free link state { pm, client: { state, issuedAt, expiresAt } } on every Review.
+      links: r.links && typeof r.links === 'object' ? sanitizeLinks(r.links) : null,
       reviewId: str(r.reviewId, 64),
       entryId: str(r.entryId, 64),
       revisionId: str(r.draftRevisionId, 64),
@@ -336,6 +355,20 @@ export function normalizeReviewEvent(review, { eventType, seq, message = null, o
       editUrl: str(r.editUrl, 1000),
     },
   };
+}
+
+const LINK_STATES = new Set(['none', 'active', 'expired', 'revoked']);
+function sanitizeLinks(links) {
+  const one = (l) =>
+    l && typeof l === 'object' && LINK_STATES.has(l.state)
+      ? { state: l.state, issuedAt: str(l.issuedAt, 40), expiresAt: str(l.expiresAt, 40) }
+      : null;
+  const out = {};
+  const pm = one(links.pm);
+  const client = one(links.client);
+  if (pm) out.pm = pm;
+  if (client) out.client = client;
+  return Object.keys(out).length ? out : null;
 }
 
 function parseDate(v) {
@@ -381,6 +414,7 @@ export function reviewToMirrorData(review) {
       cmsEntryId: n.cms.entryId,
       cmsRevisionId: n.cms.revisionId,
       cmsEditUrl: n.cms.editUrl,
+      ...(n.cms.links ? { cmsLinks: n.cms.links } : {}),
       ...(isPublished || isCancelled ? { isPublished: true } : {}),
     },
     postTitle: n.postTitle || 'Untitled',

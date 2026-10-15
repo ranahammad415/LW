@@ -131,6 +131,7 @@ export async function applyReviewEvent({ project, event: n, log }) {
         ...(n.cms.entryId ? { cmsEntryId: n.cms.entryId } : {}),
         ...(n.cms.revisionId ? { cmsRevisionId: n.cms.revisionId } : {}),
         ...(n.cms.editUrl ? { cmsEditUrl: n.cms.editUrl } : {}),
+        ...(n.cms.links ? { cmsLinks: n.cms.links } : {}),
         ...(Number.isInteger(n.cms.seq) ? { cmsSeq: n.cms.seq } : {}),
       }
     : {};

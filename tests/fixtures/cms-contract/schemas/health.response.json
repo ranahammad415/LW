@@ -8,6 +8,10 @@
     "ok": {
       "const": true
     },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
     "paired": {
       "type": "boolean"
     },

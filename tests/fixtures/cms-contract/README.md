@@ -1,7 +1,7 @@
 # EmDash bridge contract fixtures (read-only copy)
 
 Copied verbatim from the framework repo `oasis-astro`, package `packages/os-bridge-contract`,
-at commit `2748a59` ("Separate pairing signing key from the stored pairing verifier"):
+at commit `0bb1564` ("Contract errata v1.0.1: resolve site and OS team issues"; contract v1, errata v1.0.1):
 
 | Folder | Source |
 | --- | --- |
