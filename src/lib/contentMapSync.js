@@ -115,11 +115,50 @@ function countImages(html) {
   return matches ? matches.length : 0;
 }
 
+function enrichCmsPage(page, outline) {
+  const wordCount = Number.isInteger(page.cmsWordCount) ? page.cmsWordCount : countWords(page.content);
+  const headings = outline ? (outline.headings || []).map((h) => ({ level: h.level, text: h.text })) : [];
+  const internalPaths = new Set(outline ? (outline.internalLinks || []).map((l) => normalizePath(l)).filter(Boolean) : []);
+  internalPaths.delete(normalizePath(page.url));
+  const seoTitleLength = page.seoTitle ? String(page.seoTitle).length : 0;
+  const seoDescriptionLength = page.seoDescription ? String(page.seoDescription).length : 0;
+  const daysSinceModified = page.modifiedAt
+    ? Math.floor((Date.now() - new Date(page.modifiedAt).getTime()) / 86_400_000)
+    : null;
+  return {
+    wordCount,
+    readingMinutes: Math.max(1, Math.round(wordCount / 220)),
+    headings: headings.slice(0, 30),
+    h1: headings.find((h) => h.level === 1)?.text || null,
+    outboundInternalPaths: [...internalPaths],
+    internalLinksOut: outline ? internalPaths.size : null,
+    externalLinks: outline ? outline.externalLinkCount || 0 : null,
+    imageCount: outline ? outline.imageCount || 0 : null,
+    hasFeaturedImage: !!page.featuredImageUrl,
+    seoTitleLength,
+    seoDescriptionLength,
+    hasSeoTitle: seoTitleLength > 0,
+    hasSeoDescription: seoDescriptionLength > 0,
+    seoTitleTooLong: seoTitleLength > SEO_TITLE_MAX,
+    seoDescriptionTooLong: seoDescriptionLength > SEO_DESCRIPTION_MAX,
+    isThin: wordCount > 0 && wordCount < THIN_CONTENT_WORDS,
+    daysSinceModified,
+    isStale: daysSinceModified != null && daysSinceModified > STALE_CONTENT_DAYS,
+    hasPendingDraft: !!page.cmsHasPendingDraft,
+    linksKnown: !!outline,
+  };
+}
+
 /**
  * Per-page detail computed from what we already store. No network calls.
  * `siteHost` scopes the link extraction so outbound links are excluded.
  */
 export function enrichPage(page, { siteHost = null } = {}) {
+  // EmDash pages (cmsEntryId): no HTML body. Use the site's wordCount and outline (contract v1.0.6) when
+  // present. Without an outline the links are unknown, so orphan status stays unknown. WP path unchanged.
+  const isCms = !!page.cmsEntryId;
+  const outline = isCms && page.cmsOutline && typeof page.cmsOutline === 'object' ? page.cmsOutline : null;
+  if (isCms) return enrichCmsPage(page, outline);
   const wordCount = countWords(page.content);
   const headings = extractHeadings(page.content);
   const host = siteHost || hostOf(page.url);
@@ -175,6 +214,7 @@ export function enrichPage(page, { siteHost = null } = {}) {
  * A live page with zero inbound internal links is an orphan.
  */
 export function computeInboundLinks(enrichedPages) {
+  const allLinksKnown = enrichedPages.every((item) => item.enrichment.linksKnown !== false);
   const inbound = new Map();
   for (const item of enrichedPages) {
     for (const target of item.enrichment.outboundInternalPaths) {
@@ -186,7 +226,8 @@ export function computeInboundLinks(enrichedPages) {
     const sources = inbound.get(item.path);
     item.enrichment.internalLinksIn = sources ? sources.size : 0;
     item.enrichment.inboundPaths = sources ? [...sources].slice(0, 50) : [];
-    item.enrichment.isOrphan = item.isLive && item.enrichment.internalLinksIn === 0;
+    // Orphan status needs every page's links: unknown (null) while any EmDash page lacks an outline.
+    item.enrichment.isOrphan = allLinksKnown ? item.isLive && item.enrichment.internalLinksIn === 0 : null;
   }
   return enrichedPages;
 }
@@ -233,6 +274,10 @@ export async function buildSiteInventory(projectId, opts = {}) {
       modifiedAt: true,
       syncedAt: true,
       taskId: true,
+      cmsEntryId: true,
+      cmsWordCount: true,
+      cmsOutline: true,
+      cmsHasPendingDraft: true,
     },
   });
 

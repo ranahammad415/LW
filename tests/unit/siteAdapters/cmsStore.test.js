@@ -203,13 +203,18 @@ describe('applyReviewEvent: one upsert for both CMSs', () => {
 describe('content events and mirror', () => {
   const project = { id: 'p1', wpUrl: 'https://oasispoolspas.com' };
 
-  it('creates a WpPage + snapshot from a content.saved event using snapshotText as content', async () => {
+  it('creates a WpPage + snapshot from a content.saved event; snapshotText is stored only when it is the live copy', async () => {
     const ev = ex('events.request').events[2];
     await applyEmdashContentEvent(project, ev);
     const page = calls('wpPage.create')[0].args.data;
-    expect(page).toMatchObject({ projectId: 'p1', wpPostId: 118, cmsEntryId: ev.entry.entryId, content: ev.snapshotText, status: 'published' });
+    // Example has a pending draft: snapshotText is the draft's text, so the live mirror's content stays empty.
+    expect(page).toMatchObject({ projectId: 'p1', wpPostId: 118, cmsEntryId: ev.entry.entryId, content: '', status: 'published', cmsHasPendingDraft: true });
     const snap = calls('wpPageSnapshot.create')[0].args.data;
-    expect(snap).toMatchObject({ eventType: 'created', cmsRevisionId: ev.entry.draftRevisionId, contentHash: ev.entry.contentHash });
+    expect(snap).toMatchObject({ eventType: 'created', cmsRevisionId: ev.entry.draftRevisionId });
+    db.calls = [];
+    const { live, ...entry } = ev.entry;
+    await applyEmdashContentEvent(project, { ...ev, entry: { ...entry, hasPendingDraft: false } });
+    expect(calls('wpPage.create')[0].args.data.content).toBe(ev.snapshotText);
   });
 
   it('mirror never rewinds below the stored seq and never regresses a published row', async () => {

@@ -1021,14 +1021,17 @@ export async function pmContentMapRoutes(app) {
           prisma.contentMapSync.findUnique({ where: { mapId: access.map.id } }),
           prisma.project.findUnique({
             where: { id: access.map.projectId },
-            select: { wpUrl: true, wpApiKey: true },
+            select: { wpUrl: true, wpApiKey: true, cmsType: true, cmsPairedAt: true },
           }),
           prisma.contentMapDrift.count({ where: { mapId: access.map.id, status: 'PENDING' } }),
         ]);
         return reply.send({
           state: state || null,
           pendingDrift,
-          wpConnected: !!(project?.wpUrl && project?.wpApiKey),
+          // "Site connected": WP URL + key, or a paired EmDash site (inventory feeds the same WpPage rows).
+          wpConnected:
+            project?.cmsType === 'EMDASH' ? !!(project?.wpUrl && project?.cmsPairedAt) : !!(project?.wpUrl && project?.wpApiKey),
+          cmsType: project?.cmsType || 'WORDPRESS',
         });
       } catch (err) {
         request.log.error(err);

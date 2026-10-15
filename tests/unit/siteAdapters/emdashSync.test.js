@@ -10,7 +10,12 @@ const h = vi.hoisted(() => ({
   listError: null,
   flagged: [],
   batches: [],
-  project: { id: 'p1', cmsSiteId: 'site_current01', cmsLastCursor: 21 },
+  project: { id: 'p1', cmsSiteId: 'site_current01', cmsLastCursor: 21, wpUrl: 'https://s.example' },
+  pages: [],
+  pageUpdates: [],
+  inventory: null,
+  inventoryError: null,
+  entryGets: [],
 }));
 
 vi.mock('../../../src/lib/prisma.js', () => ({
@@ -22,6 +27,15 @@ vi.mock('../../../src/lib/prisma.js', () => ({
       },
     },
     wpContentReviewEvent: { count: async () => 1 },
+    wpPage: {
+      findMany: async () => h.pages,
+      create: async (args) => ({ id: 'new', ...args.data }),
+      update: async (args) => {
+        h.pageUpdates.push(args);
+        return {};
+      },
+    },
+    wpPageSnapshot: { create: async () => ({}) },
   },
 }));
 vi.mock('../../../src/lib/cmsKeyCrypto.js', async (orig) => ({ ...(await orig()), isCmsKeyCryptoConfigured: () => true }));
@@ -39,6 +53,7 @@ vi.mock('../../../src/lib/cmsStore.js', () => ({
     },
     findCounterRegression: async () => null,
     setLastCursor: async () => {},
+    recordHeartbeat: async () => {},
   },
 }));
 vi.mock('../../../src/routes/webhooks/emdash.js', () => ({
@@ -58,11 +73,22 @@ vi.mock('../../../src/lib/siteAdapters/emdash.js', async (orig) => {
         return { items: [], next: null };
       },
       eventsReplay: async () => h.replay,
+      siteInfo: async () => ({ ok: true, supportedContracts: [1], contract: 1 }),
+      inventory: async () => {
+        if (h.inventoryError) throw h.inventoryError;
+        return h.inventory;
+      },
+      entryGet: async (conn, entryId, variant) => {
+        h.entryGets.push({ entryId, variant });
+        return { ok: true, entry: { outline: { headings: [{ level: 1, text: 'H' }], internalLinks: ['/x/'], externalLinkCount: 0, imageCount: 0 }, outlineHash: `h-${entryId}` } };
+      },
     },
   };
 });
 
-import { syncEmdashPipelines, replayEmdashEvents } from '../../../src/lib/emdashSync.js';
+vi.mock('../../../src/lib/wpSync.js', () => ({ autoSyncSitemap: vi.fn(async () => ({})) }));
+
+import { syncEmdashPipelines, replayEmdashEvents, syncEmdashInventory, scheduleInventoryAfterPairing } from '../../../src/lib/emdashSync.js';
 import { CmsBridgeError } from '../../../src/lib/siteAdapters/emdash.js';
 
 beforeEach(() => {
@@ -114,5 +140,45 @@ describe('events-replay import rules (issue 1, v1.0.4 §17a)', () => {
     };
     await replayEmdashEvents('p1');
     expect(h.batches.flat().map((e) => e.eventId)).toEqual(['mine', 'legacy']);
+  });
+});
+
+describe('inventory: omitted outlines (v1.0.6 size guard)', () => {
+  it('fetches at most 25 changed outlines per run via entry-get; unchanged hashes are skipped', async () => {
+    h.entryGets = [];
+    h.pageUpdates = [];
+    const item = (n) => ({ entryId: `E${n}`, entryNo: n, collection: 'pages', slug: `s${n}`, path: `/s${n}/`, title: `T${n}`, status: 'published', hasPendingDraft: false, draftRevisionId: null, liveRevisionId: 'L', contentHash: 'a'.repeat(64), updatedAt: '2026-10-15T12:00:00Z', outlineOmitted: true, outlineHash: `hash-${n}` });
+    h.inventory = { ok: true, items: Array.from({ length: 30 }, (_, i) => item(i + 1)), next: null };
+    h.pages = [{ id: 'p-1', wpPostId: 1, contentHash: 'a'.repeat(64), content: '', status: 'published', cmsOutlineHash: 'hash-1' }];
+    const r = await syncEmdashInventory('p1');
+    expect(h.entryGets).toHaveLength(25);
+    expect(h.entryGets.map((g) => g.entryId)).not.toContain('E1');
+    expect(h.entryGets[0].variant).toBe('live');
+    expect(r).toMatchObject({ synced: 30, outlinesFetched: 25, outlinesDeferred: 4 });
+    const outlineWrites = h.pageUpdates.filter((u) => u.data.cmsOutline);
+    expect(outlineWrites).toHaveLength(25);
+    expect(outlineWrites[0].data.cmsOutlineHash).toBe('h-E2');
+  });
+});
+
+describe('first inventory after pairing (item 2)', () => {
+  it('runs once after the delay, time-boxed, and a 401 there never flags re-pair', async () => {
+    vi.useFakeTimers();
+    try {
+      h.flagged = [];
+      h.inventoryError = new CmsBridgeError({ status: 401, code: 'UNKNOWN_KEY', message: 'keys not installed yet' });
+      const log = { info: vi.fn(), warn: vi.fn() };
+      scheduleInventoryAfterPairing('p1', log);
+      await vi.advanceTimersByTimeAsync(14_000);
+      expect(log.info).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.runAllTimersAsync();
+      expect(log.info).toHaveBeenCalledTimes(1);
+      expect(log.info.mock.calls[0][0].result.error).toMatch(/keys not installed/);
+      expect(h.flagged).toHaveLength(0);
+    } finally {
+      h.inventoryError = null;
+      vi.useRealTimers();
+    }
   });
 });

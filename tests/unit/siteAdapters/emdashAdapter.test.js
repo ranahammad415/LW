@@ -326,13 +326,16 @@ describe('Review → WpContentReview normalisation (both adapters)', () => {
     const { wpPostId, data } = entryToPageData(entry, 'https://oasispoolspas.com/');
     expect(wpPostId).toBe(118);
     expect(data).toMatchObject({
-      title: 'Hot Tub Repair for Most Brands',
+      // v1.0.6: pending draft → the published state uses `live`; the draft title is kept separately.
+      title: entry.live.title,
+      cmsDraftTitle: entry.title,
+      cmsHasPendingDraft: true,
       slug: 'hot-tub-repair',
       status: 'published',
       postType: 'page',
       url: 'https://oasispoolspas.com/spa-services/hot-tub-repair/',
       seoTitle: 'Hot Tub Repair in Waukesha & Milwaukee | Oasis Pool and Spa',
-      contentHash: entry.contentHash,
+      contentHash: entry.live.contentHash,
       template: null,
       cmsEntryId: entry.entryId,
       cmsCollection: 'pages',

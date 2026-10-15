@@ -481,6 +481,17 @@ export const prismaCmsStore = {
   },
 };
 
+/** Sitemap refresh after EmDash publish/delete, at most once per minute per project per instance. */
+const lastSitemapSync = new Map();
+export function scheduleSitemapSync(projectId) {
+  const now = Date.now();
+  if (now - (lastSitemapSync.get(projectId) || 0) < 60_000) return;
+  lastSitemapSync.set(projectId, now);
+  import('./wpSync.js')
+    .then(({ autoSyncSitemap }) => autoSyncSitemap(projectId, { emdash: true }))
+    .catch(() => {});
+}
+
 /** content.* event → WpPage (+ WpPageSnapshot when the content hash changed). No AI summary (cost). */
 export async function applyEmdashContentEvent(project, ev) {
   const { wpPostId, data } = entryToPageData(ev.entry, project.wpUrl);
@@ -497,6 +508,7 @@ export async function applyEmdashContentEvent(project, ev) {
   };
 
   if (ev.type === 'content.deleted') {
+    scheduleSitemapSync(project.id);
     if (existing) {
       // modifiedAt = deletion time, so a late older content.saved cannot resurrect the page (review S6).
       const deletedAt = data.modifiedAt || now;
@@ -518,7 +530,11 @@ export async function applyEmdashContentEvent(project, ev) {
     return 'applied';
   }
 
-  const content = typeof ev.snapshotText === 'string' ? ev.snapshotText.slice(0, 100_000) : undefined;
+  // snapshotText describes the working copy; with a pending draft it is the draft's text, so the live
+  // mirror's content is left alone (the draft is shown through the Pending draft badge).
+  const content =
+    typeof ev.snapshotText === 'string' && !data.cmsHasPendingDraft ? ev.snapshotText.slice(0, 100_000) : undefined;
+  if (ev.type === 'content.published' || (!existing && data.status === 'published')) scheduleSitemapSync(project.id);
   const revisionId = data.cmsDraftRevisionId || data.cmsLiveRevisionId || null;
   if (!existing) {
     const page = await prisma.wpPage.create({

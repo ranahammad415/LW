@@ -780,6 +780,12 @@ export async function projectRoutes(app) {
           contentHash: p.contentHash,
           taskId: p.taskId,
           taskTitle: p.task?.title ?? null,
+          // EmDash bridge (null on WordPress pages)
+          cmsEntryId: p.cmsEntryId ?? null,
+          cmsEditUrl: p.cmsEditUrl ?? null,
+          cmsHasPendingDraft: !!p.cmsHasPendingDraft,
+          cmsDraftTitle: p.cmsDraftTitle ?? null,
+          cmsWordCount: p.cmsWordCount ?? null,
           modifiedAt: p.modifiedAt,
           syncedAt: p.syncedAt,
           createdAt: p.createdAt,

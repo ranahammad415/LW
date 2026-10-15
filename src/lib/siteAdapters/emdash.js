@@ -17,6 +17,7 @@ import {
 } from './signing.js';
 import { decryptCmsSecret, cmsAad } from '../cmsKeyCrypto.js';
 import { guardedFetch } from './netGuard.js';
+import { limitOutline } from './outline.js';
 import { STATUS_LABELS } from '../pipelineFormat.js';
 
 export const EMDASH_USER_AGENT = 'Localwaves-AgencyOS/1.0 (agency-os-bridge)';
@@ -440,24 +441,59 @@ export function reviewToMirrorData(review) {
 }
 
 /** Contract `entry` → WpPage column values (content is filled from snapshotText when present). */
+/** Outline (contract v1.0.6): validated and capped with the contract's own limitOutline(). */
+export function sanitizeOutline(o) {
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
+  const nonNeg = (v) => (Number.isInteger(v) && v >= 0 ? v : 0);
+  return limitOutline({
+    headings: Array.isArray(o.headings) ? o.headings.filter((h) => h && typeof h === 'object') : [],
+    internalLinks: Array.isArray(o.internalLinks) ? o.internalLinks : [],
+    externalLinkCount: nonNeg(o.externalLinkCount),
+    imageCount: nonNeg(o.imageCount),
+  });
+}
+
+/**
+ * Contract `entry` → WpPage column values.
+ * Top-level entry fields describe the WORKING COPY (the draft when `hasPendingDraft`); `live` (v1.0.6) carries the
+ * live values then. The mirror's published state uses the live values when present; the draft title is kept for
+ * the "Pending draft" badge. Older plugins (no `live`): values kept as sent, flag still set (title may be the draft's).
+ * SEO, slug and path are not versioned by EmDash and are taken as sent.
+ * `outlinePending` = the site omitted `outline` (size guard) but sent `outlineHash`: fetch via entry-get when it changed.
+ */
 export function entryToPageData(entry, siteUrl) {
   const e = entry || {};
   const base = String(siteUrl || '').replace(/\/$/, '');
   const path = typeof e.path === 'string' ? e.path : '';
+  const pending = e.hasPendingDraft === true;
+  const live = pending && e.live && typeof e.live === 'object' && !Array.isArray(e.live) ? e.live : null;
+  const src = live || e;
+  const outline = sanitizeOutline(src.outline);
+  const outlineHash = typeof src.outlineHash === 'string' ? src.outlineHash.slice(0, 64) : null;
+  const wordCount = Number.isInteger(src.wordCount) && src.wordCount >= 0 ? src.wordCount : null;
   return {
     wpPostId: int(e.entryNo),
+    outlinePending: !outline && !!outlineHash,
+    outlineHash,
+    // entry-get variant for an omitted outline: what is live for a published entry, else the draft.
+    outlineVariant: e.status === 'published' ? 'live' : 'draft',
     data: {
-      title: String(e.title || '').slice(0, 500),
+      title: String((live ? live.title : e.title) || '').slice(0, 500),
       slug: String(e.slug || '').slice(0, 500),
       status: String(e.status || 'draft').slice(0, 50),
       postType: e.collection === 'posts' ? 'post' : 'page',
       url: (path && base ? `${base}${path.startsWith('/') ? '' : '/'}${path}` : path).slice(0, 500),
-      excerpt: e.excerpt == null ? null : String(e.excerpt).slice(0, 1000),
+      excerpt: (live ? live.excerpt : e.excerpt) == null ? null : String(live ? live.excerpt : e.excerpt).slice(0, 1000),
       template: null,
       seoTitle: e.seo?.title ? String(e.seo.title).slice(0, 500) : null,
       seoDescription: e.seo?.description ? String(e.seo.description).slice(0, 1000) : null,
-      contentHash: String(e.contentHash || '').slice(0, 64) || String(Date.now()),
+      contentHash: String((live ? live.contentHash : e.contentHash) || e.contentHash || '').slice(0, 64) || String(Date.now()),
+      // Ordering key for content.* events: the entry's last change (draft included), not live.updatedAt.
       modifiedAt: parseDate(e.updatedAt),
+      cmsHasPendingDraft: pending,
+      cmsDraftTitle: pending ? String(e.title || '').slice(0, 500) : null,
+      cmsWordCount: wordCount,
+      ...(outline ? { cmsOutline: outline, cmsOutlineHash: outlineHash } : {}),
       cmsEntryId: str(e.entryId, 64),
       cmsCollection: str(e.collection, 64),
       cmsDraftRevisionId: str(e.draftRevisionId, 64),

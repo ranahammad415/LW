@@ -16,11 +16,13 @@ import { reconcileProjectMapsSafe } from './contentMapSync.js';
 import {
   emdashRoutes,
   entryToPageData,
+  sanitizeOutline,
   INTERACTIVE_RETRY_DELAYS_MS,
   READ_RETRY_DELAYS_MS,
   CmsBridgeError,
 } from './siteAdapters/emdash.js';
 import { SUPPORTED_CONTRACTS, negotiateContract } from './siteAdapters/signing.js';
+import { OUTLINE_FETCH_CAP_PER_SYNC } from './siteAdapters/outline.js';
 import {
   loadEmdashConnection,
   mirrorEmdashReview,
@@ -128,7 +130,8 @@ export async function refreshEmdashSiteInfo(projectId, { interactive = false } =
 }
 
 /** Pull the entry inventory into WpPage. Mirrors syncProjectPages' return shape. */
-export async function syncEmdashInventory(projectId, { interactive = false } = {}) {
+export async function syncEmdashInventory(projectId, { interactive = false, deadlineMs = null, flagRejection = true } = {}) {
+  const deadline = deadlineMs ? Date.now() + deadlineMs : null;
   if (!isCmsKeyCryptoConfigured()) {
     return { synced: 0, created: 0, updated: 0, deleted: 0, error: 'CMS_KEY_ENCRYPTION_KEY is not set on Agency OS' };
   }
@@ -151,6 +154,8 @@ export async function syncEmdashInventory(projectId, { interactive = false } = {
   try {
     let cursor = null;
     for (let page = 0; page < MAX_INVENTORY_PAGES; page += 1) {
+      // Time-boxed runs stop paging at the deadline; `complete` stays false, so no deletions are inferred.
+      if (deadline && Date.now() > deadline) break;
       const res = await emdashRoutes.inventory(conn, { status: 'any', limit: 100, cursor }, retryOpts(interactive));
       const batch = Array.isArray(res?.items) ? res.items : [];
       items.push(...batch);
@@ -161,13 +166,13 @@ export async function syncEmdashInventory(projectId, { interactive = false } = {
       }
     }
   } catch (err) {
-    await handleSiteRejection(projectId, err).catch(() => {});
+    if (flagRejection) await handleSiteRejection(projectId, err).catch(() => {});
     return { synced: 0, created: 0, updated: 0, deleted: 0, error: err.message };
   }
 
   const existing = await prisma.wpPage.findMany({
     where: { projectId },
-    select: { id: true, wpPostId: true, contentHash: true, content: true, status: true },
+    select: { id: true, wpPostId: true, contentHash: true, content: true, status: true, cmsOutlineHash: true },
   });
   const byNo = new Map(existing.map((p) => [Number(p.wpPostId), p]));
   const now = new Date();
@@ -175,11 +180,16 @@ export async function syncEmdashInventory(projectId, { interactive = false } = {
   let updated = 0;
   const seen = new Set();
 
+  const outlineQueue = [];
   for (const entry of items) {
-    const { wpPostId, data } = entryToPageData(entry, project.wpUrl);
+    const { wpPostId, data, outlinePending, outlineHash, outlineVariant } = entryToPageData(entry, project.wpUrl);
     if (!wpPostId) continue;
     seen.add(wpPostId);
     const prev = byNo.get(wpPostId);
+    // v1.0.6 size guard: outline omitted from inventory; fetch it only when its hash changed.
+    if (outlinePending && prev?.cmsOutlineHash !== outlineHash) {
+      outlineQueue.push({ wpPostId, entryId: entry.entryId, variant: outlineVariant, outlineHash });
+    }
     const revisionId = data.cmsDraftRevisionId || data.cmsLiveRevisionId || null;
     if (!prev) {
       const page = await prisma.wpPage.create({ data: { projectId, wpPostId, ...data, content: '', syncedAt: now } });
@@ -232,8 +242,52 @@ export async function syncEmdashInventory(projectId, { interactive = false } = {
     }
   }
 
-  if (created || updated || deleted) reconcileProjectMapsSafe(projectId);
-  return { synced: items.length, created, updated, deleted };
+  const outlinesFetched = await fetchOmittedOutlines(projectId, conn, outlineQueue, { interactive });
+  if (created || updated || deleted || outlinesFetched) reconcileProjectMapsSafe(projectId);
+  if (created || deleted) import('./wpSync.js').then((m) => m.autoSyncSitemap(projectId, { emdash: true })).catch(() => {});
+  return { synced: items.length, created, updated, deleted, outlinesFetched, outlinesDeferred: Math.max(0, outlineQueue.length - outlinesFetched) };
+}
+
+/**
+ * v1.0.6: fetch outlines the site left out of inventory (`outlineOmitted`), at most
+ * OUTLINE_FETCH_CAP_PER_SYNC entry-get calls per run; the rest wait for the next run.
+ */
+export async function fetchOmittedOutlines(projectId, conn, queue, { interactive = false } = {}) {
+  let fetched = 0;
+  for (const item of queue.slice(0, OUTLINE_FETCH_CAP_PER_SYNC)) {
+    try {
+      const res = await emdashRoutes.entryGet(conn, item.entryId, item.variant, retryOpts(interactive));
+      const outline = sanitizeOutline(res?.entry?.outline);
+      if (!outline) continue;
+      await prisma.wpPage.update({
+        where: { projectId_wpPostId: { projectId, wpPostId: item.wpPostId } },
+        data: { cmsOutline: outline, cmsOutlineHash: res.entry.outlineHash || item.outlineHash },
+      });
+      fetched += 1;
+    } catch {
+      // Next run retries (the stored hash did not change).
+    }
+  }
+  return fetched;
+}
+
+/** Delay before the first inventory after pairing: the site installs its new keys only after our response. */
+export const PAIRING_SYNC_DELAY_MS = 15_000;
+export const PAIRING_SYNC_DEADLINE_MS = 120_000;
+
+/**
+ * First inventory right after pairing (WordPress syncs right after connecting). Fire-and-forget, never blocks the
+ * handshake response, time-boxed, and runs only in the instance that completed the pairing (the single-use code CAS
+ * makes that exactly one). A 401 here (site still installing keys) never flags re-pair; the daily run retries.
+ */
+export function scheduleInventoryAfterPairing(projectId, log, { delayMs = PAIRING_SYNC_DELAY_MS } = {}) {
+  const t = setTimeout(() => {
+    syncEmdashInventory(projectId, { interactive: true, deadlineMs: PAIRING_SYNC_DEADLINE_MS, flagRejection: false })
+      .then((r) => log?.info?.({ projectId, result: r }, 'EmDash inventory after pairing'))
+      .catch((err) => log?.warn?.({ projectId, err: { message: err?.message } }, 'EmDash inventory after pairing failed'));
+  }, delayMs);
+  t.unref?.();
+  return t;
 }
 
 /** Daily inventory for every paired EmDash project (leader only; called from the 03:00 cron). */

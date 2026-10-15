@@ -224,7 +224,10 @@ const SITEMAP_PATHS = ['/sitemap.xml', '/sitemap_index.xml', '/wp-sitemap.xml'];
  * Fetches the sitemap XML, extracts <loc> URLs, and inserts any new ones
  * as SitemapNode records. Returns { imported, total, error? }.
  */
-export async function autoSyncSitemap(projectId) {
+/** Astro sites usually publish /sitemap-index.xml (@astrojs/sitemap). */
+const EMDASH_SITEMAP_PATHS = ['/sitemap-index.xml', '/sitemap.xml', '/sitemap-0.xml'];
+
+export async function autoSyncSitemap(projectId, { emdash = false } = {}) {
   const project = await prisma.project.findUnique({
     where: { id: projectId },
     select: { id: true, wpUrl: true },
@@ -236,9 +239,11 @@ export async function autoSyncSitemap(projectId) {
   const baseUrl = String(project.wpUrl).trim().replace(/\/$/, '');
   let xmlText = null;
 
-  for (const path of SITEMAP_PATHS) {
+  // EmDash: Astro sitemap paths and the SSRF-guarded fetch (pinned site URL); WordPress unchanged.
+  const fetchFn = emdash ? (await import('./siteAdapters/netGuard.js')).guardedFetch : fetch;
+  for (const path of emdash ? EMDASH_SITEMAP_PATHS : SITEMAP_PATHS) {
     try {
-      const res = await fetch(`${baseUrl}${path}`, {
+      const res = await fetchFn(`${baseUrl}${path}`, {
         signal: AbortSignal.timeout(15000),
         headers: { 'User-Agent': 'Localwaves-AgencyOS/1.0 (+https://localwaves; sitemap sync)' },
       });

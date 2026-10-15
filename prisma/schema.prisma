@@ -1084,6 +1084,15 @@ model WpPage {
   cmsDraftRevisionId String?  @db.VarChar(64)
   cmsLiveRevisionId  String?  @db.VarChar(64)
   cmsEditUrl         String?  @db.VarChar(1000)
+  /// EmDash: the live entry has unpublished changes. title/excerpt/hash are the LIVE values when the site sends
+  /// `live` (v1.0.6); cmsDraftTitle keeps the draft title for the badge.
+  cmsHasPendingDraft Boolean  @default(false)
+  cmsDraftTitle      String?  @db.VarChar(500)
+  /// EmDash: word count of the live (else working) copy, sent by the site.
+  cmsWordCount       Int?
+  /// EmDash: outline { headings, internalLinks, externalLinkCount, imageCount } (v1.0.6) for the content map.
+  cmsOutline         Json?
+  cmsOutlineHash     String?  @db.VarChar(64)
 
   project            Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
   task               Task?               @relation(fields: [taskId], references: [id], onDelete: SetNull)

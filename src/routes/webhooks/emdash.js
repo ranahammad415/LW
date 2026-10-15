@@ -110,6 +110,7 @@ export async function emdashWebhookRoutes(app, opts = {}) {
   const store = opts.store || (await import('../../lib/cmsStore.js')).prismaCmsStore;
   const nowFn = opts.now || (() => Date.now());
   const onHeal = opts.onHeal || (await import('../../lib/emdashSync.js')).healReviews;
+  const onPaired = opts.onPaired || (await import('../../lib/emdashSync.js')).scheduleInventoryAfterPairing;
   const rateLimit = createRateLimiter(
     Number(opts.eventsPerMin || process.env.CMS_EVENTS_RATE_PER_MIN) || 300
   );
@@ -254,6 +255,12 @@ export async function emdashWebhookRoutes(app, opts = {}) {
       now: new Date(now),
     });
     request.log.info({ projectId: project.id, siteId: v.siteId }, 'EmDash site paired');
+    // Import the inventory right away, like WordPress after connecting (fire-and-forget, delayed, time-boxed).
+    try {
+      onPaired(project.id, request.log);
+    } catch (err) {
+      request.log.warn({ err: { message: err?.message } }, 'Could not schedule the first EmDash inventory');
+    }
 
     const responseBody = JSON.stringify({
       ok: true,

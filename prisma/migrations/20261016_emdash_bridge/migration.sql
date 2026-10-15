@@ -293,6 +293,41 @@ CREATE TABLE IF NOT EXISTS `cmsnonce` (
 
 -- Columns/indexes added after the tables above were first written (keeps re-runs idempotent).
 SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'wppage' AND COLUMN_NAME = 'cmsHasPendingDraft');
+SET @sql := IF(@col = 0,
+  'ALTER TABLE `wppage` ADD COLUMN `cmsHasPendingDraft` BOOLEAN NOT NULL DEFAULT false',
+  'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'wppage' AND COLUMN_NAME = 'cmsDraftTitle');
+SET @sql := IF(@col = 0,
+  'ALTER TABLE `wppage` ADD COLUMN `cmsDraftTitle` VARCHAR(500) NULL',
+  'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'wppage' AND COLUMN_NAME = 'cmsWordCount');
+SET @sql := IF(@col = 0,
+  'ALTER TABLE `wppage` ADD COLUMN `cmsWordCount` INTEGER NULL',
+  'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'wppage' AND COLUMN_NAME = 'cmsOutline');
+SET @sql := IF(@col = 0,
+  'ALTER TABLE `wppage` ADD COLUMN `cmsOutline` JSON NULL',
+  'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'wppage' AND COLUMN_NAME = 'cmsOutlineHash');
+SET @sql := IF(@col = 0,
+  'ALTER TABLE `wppage` ADD COLUMN `cmsOutlineHash` VARCHAR(64) NULL',
+  'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
   WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'project' AND COLUMN_NAME = 'cmsDisconnectedAt');
 SET @sql := IF(@col = 0,
   'ALTER TABLE `project` ADD COLUMN `cmsDisconnectedAt` DATETIME(3) NULL',

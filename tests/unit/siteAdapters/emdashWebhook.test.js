@@ -217,6 +217,7 @@ let app;
 let store;
 let nowMs;
 const onHeal = vi.fn(async () => {});
+const onPaired = vi.fn();
 
 function addProject(overrides = {}) {
   store.projects.set(PROJECT_ID, {
@@ -294,7 +295,7 @@ beforeEach(async () => {
   onHeal.mockClear();
   app = Fastify();
   app.setValidatorCompiler(() => (data) => ({ value: data }));
-  await app.register(emdashWebhookRoutes, { prefix: '/api/webhooks/emdash', store, now: () => nowMs, onHeal });
+  await app.register(emdashWebhookRoutes, { prefix: '/api/webhooks/emdash', store, now: () => nowMs, onHeal, onPaired });
   await app.ready();
 });
 
@@ -312,7 +313,7 @@ describe('POST /handshake — pairing', () => {
     const json = res.json();
     expect(json).toMatchObject({ ok: true, contract: 1, siteId: SITE, projectId: PROJECT_ID, keys: { keyId: 1 } });
     expect(json.keys.inbound).toMatch(/^aosk1_[A-Za-z0-9_-]{43}$/);
-    expect(json.contractRevision).toBe('1.0.5');
+    expect(json.contractRevision).toBe('1.0.6');
     expect(json.counterFloor).toEqual({ reviewNo: 0, entryNo: 0 });
     expect(store.lastPairing).toEqual({ siteId: SITE, siteUrl: null, cursorBefore: null });
     expect(json.pms[0].memberId).toBe('8f14e45f-ceea-467a-9575-5f3c1b2a7d90');
@@ -664,6 +665,7 @@ describe('review fixes (S3, S4, S5, S8, S9, v1.0.2 C1)', () => {
       store,
       now: () => nowMs,
       onHeal,
+      onPaired,
       routeRateLimit: { max: 1, timeWindow: '1 minute' },
     });
     await limited.ready();
@@ -723,7 +725,7 @@ describe('review fixes (S3, S4, S5, S8, S9, v1.0.2 C1)', () => {
     process.env.CMS_WEBHOOK_MAX_SKEW_SEC = '900';
     const other = Fastify();
     other.setValidatorCompiler(() => (data) => ({ value: data }));
-    await other.register(emdashWebhookRoutes, { prefix: '/api/webhooks/emdash', store, now: () => nowMs, onHeal });
+    await other.register(emdashWebhookRoutes, { prefix: '/api/webhooks/emdash', store, now: () => nowMs, onHeal, onPaired });
     await other.ready();
     const body = eventsBody([ex('events.request').events[2]]);
     const r = await other.inject({
@@ -868,5 +870,20 @@ describe('contract v1.0.5: Review inside an event envelope', () => {
     expect(store.applied).toHaveLength(0);
     const ok = { ...e1, review: { ...e1.review, siteId: SITE } };
     expect((await post(EV, eventsBody([ok]), { secret: keys.outbound, keyId: 1 })).json().accepted).toEqual([e1.eventId]);
+  });
+});
+
+describe('item 2: inventory scheduled after pairing', () => {
+  it('a completed pairing schedules exactly one first inventory for the project (fire-and-forget)', async () => {
+    onPaired.mockClear();
+    addProject();
+    const code = addCode();
+    const res = await post(HS, handshakeBody('pair'), { secret: pairingSigningKey(code), keyId: 'pairing' });
+    expect(res.statusCode).toBe(200);
+    expect(onPaired).toHaveBeenCalledTimes(1);
+    expect(onPaired.mock.calls[0][0]).toBe(PROJECT_ID);
+    const again = await post(HS, handshakeBody('pair'), { secret: pairingSigningKey(code), keyId: 'pairing' });
+    expect(again.statusCode).toBe(401);
+    expect(onPaired).toHaveBeenCalledTimes(1);
   });
 });
