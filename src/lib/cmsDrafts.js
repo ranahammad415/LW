@@ -28,6 +28,34 @@ const SITE_INFO_TTL_MS = 60_000;
 export const AI_DRAFT_LIMITS = Object.freeze({ perUserPerDay: 10, perClientPerDay: 30, maxTokens: 4000, feature: 'cms_draft_writer' });
 
 const bad = (message, code = 'VALIDATION', status = 400, details) => new CmsBridgeError({ status, code, message, retryable: false, details });
+/** A push claim older than this is treated as abandoned (the process died mid-push). */
+export const PUSH_CLAIM_STALE_MS = 3 * 60_000;
+
+/**
+ * Raw HTML in markdown (review LOW-10): only real tags count — a known HTML element name followed by `>`, `/>` or
+ * name=value attributes, a closing tag, or a comment. `a <b and c> d` and autolinks (`<https://…>`) are text.
+ */
+const HTML_ELEMENTS =
+  'a|abbr|address|article|aside|audio|b|bdi|bdo|blockquote|body|br|button|canvas|caption|center|cite|code|col|colgroup|data|dd|del|details|dfn|dialog|div|dl|dt|em|embed|fieldset|figcaption|figure|font|footer|form|h[1-6]|head|header|hr|html|i|iframe|img|input|ins|kbd|label|legend|li|link|main|map|mark|meta|nav|noscript|object|ol|optgroup|option|output|p|param|picture|pre|q|s|samp|script|section|select|small|source|span|strike|strong|style|sub|summary|sup|svg|table|tbody|td|template|textarea|tfoot|th|thead|time|title|tr|track|u|ul|var|video|wbr';
+const HTML_TAG_RE = new RegExp(
+  String.raw`<!--|<\/(?:${HTML_ELEMENTS})\s*>|<(?:${HTML_ELEMENTS})(?:\s*\/?>|\s+[a-z_:][-a-z0-9_:.]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>]+)[^<>]*>)`,
+  'i'
+);
+export function hasHtmlTag(markdown) {
+  return HTML_TAG_RE.test(String(markdown || ''));
+}
+
+/**
+ * Edit markers for an OS edit (review MEDIUM-4 / LOW-10): only fields whose value really changed count.
+ * `bylinesEdited` makes the next update send bylines; `cmsEditedAt` marks unpushed edits (cleared by a push or reload).
+ */
+export function draftEditMarkers(prev, data, now = new Date()) {
+  const changed = Object.keys(data).filter((k) => JSON.stringify(data[k] ?? null) !== JSON.stringify(prev?.[k] ?? null));
+  return {
+    ...(changed.includes('bylines') ? { bylinesEdited: true } : {}),
+    ...(changed.length ? { cmsEditedAt: now } : {}),
+  };
+}
 
 // ─────────────────────────────── access ───────────────────────────────
 
@@ -153,10 +181,11 @@ export function buildDraftUpsertBody(draft, { user, ctx, collectionInfo, slugPol
       : draft.contentKind === 'portableText'
         ? { portableText: Array.isArray(draft.layout) ? draft.layout : [] }
         : { layout: Array.isArray(draft.layout) ? draft.layout : [] };
+  // Review MEDIUM-4: an update sends bylines only when a person changed them in the OS (bylinesEdited); otherwise the
+  // site keeps the entry's bylines, so an unedited round trip is a no-op. A create always sends them (byline rule).
   let bylines = Array.isArray(draft.bylines) && draft.bylines.length ? draft.bylines : null;
-  if (collectionInfo?.hasBylines) {
-    if (!bylines || actor.kind !== 'human') bylines = defaultBylines(ctx, actor);
-  } else bylines = null;
+  if (!collectionInfo?.hasBylines || (!creating && !draft.bylinesEdited)) bylines = null;
+  else if (!bylines || actor.kind !== 'human') bylines = defaultBylines(ctx, actor);
   const seo = {};
   if (draft.seoTitle) seo.title = String(draft.seoTitle).slice(0, 200);
   if (draft.seoDescription) seo.description = String(draft.seoDescription).slice(0, 500);
@@ -186,7 +215,7 @@ export function checkDraftBody(siteInfo, body, collection) {
   if (Array.isArray(body.layout) && body.layout.length > DRAFT_LIMITS.maxBlocks) errors.push({ code: 'VALIDATION', path: '$.layout', message: `at most ${DRAFT_LIMITS.maxBlocks} blocks` });
   if (body.body?.markdown && body.body.markdown.length > DRAFT_LIMITS.markdownChars) errors.push({ code: 'VALIDATION', path: '$.body.markdown', message: `longer than ${DRAFT_LIMITS.markdownChars} characters` });
   // Never HTML: markdown with raw tags is refused here (the site converts markdown to Portable Text).
-  if (typeof body.body?.markdown === 'string' && /<\/?[a-z][\s\S]*?>/i.test(body.body.markdown)) {
+  if (typeof body.body?.markdown === 'string' && hasHtmlTag(body.body.markdown)) {
     errors.push({ code: 'VALIDATION', path: '$.body.markdown', message: 'HTML is not allowed; use markdown only' });
   }
   if (Buffer.byteLength(JSON.stringify(body), 'utf8') > DRAFT_LIMITS.bodyBytes) errors.push({ code: 'PAYLOAD_TOO_LARGE', path: '$', message: 'the draft is larger than 2 MiB' });
@@ -259,11 +288,31 @@ function errorRecord(err) {
  * Returns { draft, result } or throws CmsBridgeError (local validation) / records the site's refusal on the draft.
  */
 export async function pushDraft({ draftId, user, opts = {}, log }) {
-  const draft = await prisma.cmsDraft.findUnique({ where: { id: String(draftId) } });
-  if (!draft) throw bad('Draft not found', 'NOT_FOUND', 404);
-  const project = await loadDraftProject(draft.projectId);
-  if (!(await canWriteDraft(user, project, draft))) throw bad('You cannot push this draft.', 'FORBIDDEN', 403);
+  const first = await prisma.cmsDraft.findUnique({ where: { id: String(draftId) } });
+  if (!first) throw bad('Draft not found', 'NOT_FOUND', 404);
+  const project = await loadDraftProject(first.projectId);
+  if (!(await canWriteDraft(user, project, first))) throw bad('You cannot push this draft.', 'FORBIDDEN', 403);
   if (project.cmsRepairNeededAt) throw bad('The website connection needs to be renewed (re-pair) first.', 'NOT_PAIRED', 503);
+
+  // Review LOW-9: one push at a time per draft (two clicks / two tabs on a new draft would create two entries).
+  // The claim is a compare-and-set; a claim older than PUSH_CLAIM_STALE_MS is abandoned and can be taken over.
+  const claim = await prisma.cmsDraft.updateMany({
+    where: { id: first.id, OR: [{ lastPushStatus: { not: 'pushing' } }, { updatedAt: { lt: new Date(Date.now() - PUSH_CLAIM_STALE_MS) } }] },
+    data: { lastPushStatus: 'pushing' },
+  });
+  if (claim.count !== 1) throw bad('This draft is being pushed right now. Wait for that push to finish.', 'PUSH_IN_PROGRESS', 409);
+  const previous = first.lastPushStatus === 'pushing' ? 'never' : first.lastPushStatus;
+  try {
+    // Re-read under the claim: a push that just finished may have created the entry (then this one updates it).
+    const draft = (await prisma.cmsDraft.findUnique({ where: { id: first.id } })) || first;
+    return await pushClaimedDraft({ draft, project, user, opts, log });
+  } catch (err) {
+    await prisma.cmsDraft.updateMany({ where: { id: first.id, lastPushStatus: 'pushing' }, data: { lastPushStatus: previous } }).catch(() => {});
+    throw err;
+  }
+}
+
+async function pushClaimedDraft({ draft, project, user, opts, log }) {
   if (draft.cmsEntryId && !(opts.baseRev || draft.cmsRev)) throw bad('The current version of the page is unknown. Reload the page data, then push again.');
 
   const siteInfo = await loadSiteInfo(project.id);
@@ -294,9 +343,9 @@ export async function pushDraft({ draftId, user, opts = {}, log }) {
         data: { projectId: project.id, draftId: draft.id, route: 'draft-upsert', idempotencyKey, actorKind: body.actor.kind, actorUserId: user.id, status: 'pending', summary: { bodySha } },
       });
 
-  const { conn } = await loadEmdashConnection(project.id);
   let res;
   try {
+    const { conn } = await loadEmdashConnection(project.id);
     res = await emdashRoutes.draftUpsert(conn, body, { ...INTERACTIVE, idempotencyKey });
   } catch (err) {
     if (!(err instanceof CmsBridgeError)) throw err;
@@ -324,6 +373,8 @@ export async function pushDraft({ draftId, user, opts = {}, log }) {
       ...(res.slug ? { slug: String(res.slug).slice(0, 200) } : {}),
       ...(res.parent !== undefined ? { parent: res.parent == null ? draft.parent : String(res.parent).slice(0, 100) } : {}),
       ...(Array.isArray(res.bylines) ? { bylines: res.bylines } : {}),
+      bylinesEdited: false,
+      cmsEditedAt: null,
       ...(res.taxonomies && typeof res.taxonomies === 'object' ? { taxonomies: res.taxonomies } : {}),
       lastPushStatus: 'ok',
       lastPushAt: new Date(),
@@ -355,7 +406,7 @@ export async function pushDraft({ draftId, user, opts = {}, log }) {
  * Same people as other drafts. Re-opening an entry that already has an OS draft reloads that draft from the site.
  * `variant: "live"` writes back over a pending draft: a warning is stored for the editor.
  */
-export async function createDraftFromEntry({ projectId, wpPageId, variant = 'draft', user, log }) {
+export async function createDraftFromEntry({ projectId, wpPageId, variant = 'draft', overwrite = false, keep = false, user, log }) {
   const project = await loadDraftProject(projectId);
   if (project.cmsRepairNeededAt) throw bad('The website connection needs to be renewed (re-pair) first.', 'NOT_PAIRED', 503);
   if (!hasLayoutRead(project)) throw bad('This site cannot hand its pages to Agency OS for editing yet. Edit it in the site admin.', 'NOT_IMPLEMENTED', 409);
@@ -364,6 +415,19 @@ export async function createDraftFromEntry({ projectId, wpPageId, variant = 'dra
   const node = await prisma.contentMapNode.findFirst({ where: { wpPageId: page.id, map: { projectId: project.id } }, select: { id: true, taskId: true } });
   const link = { contentMapNodeId: node?.id || null, taskId: node?.taskId || null };
   if (!(await canWriteDraft(user, project, link))) throw bad('You cannot edit this page from Agency OS.', 'FORBIDDEN', 403);
+
+  // Review LOW-10: reloading from the site replaces the OS draft; never drop unpushed OS edits silently.
+  const prior = await prisma.cmsDraft.findFirst({ where: { projectId: project.id, cmsEntryId: page.cmsEntryId }, orderBy: { updatedAt: 'desc' }, select: { id: true, cmsEditedAt: true, updatedById: true } });
+  if (prior?.cmsEditedAt && keep) return prisma.cmsDraft.findUnique({ where: { id: prior.id } });
+  if (prior?.cmsEditedAt && !overwrite) {
+    const editor = prior.updatedById && prior.updatedById !== user.id ? await prisma.user.findUnique({ where: { id: prior.updatedById }, select: { name: true } }).catch(() => null) : null;
+    const who = prior.updatedById === user.id ? 'You have' : `${editor?.name || 'Another editor'} has`;
+    throw bad(`${who} unpushed edits on this page in Agency OS. Open that draft, or reload from the site to discard them.`, 'UNPUSHED_EDITS', 409, {
+      draftId: prior.id,
+      editedAt: prior.cmsEditedAt,
+      mine: prior.updatedById === user.id,
+    });
+  }
 
   const { conn } = await loadEmdashConnection(project.id);
   const v = variant === 'live' ? 'live' : 'draft';
@@ -397,6 +461,8 @@ export async function createDraftFromEntry({ projectId, wpPageId, variant = 'dra
     // valid:false: the stored content fails the site's current schemas; draft-upsert would 422 until these are fixed.
     lastPushError: e.valid === false ? { code: 'SCHEMA_INVALID', message: 'The page on the site no longer matches the current blocks. Fix the highlighted fields before pushing.', details: { errors: (e.errors || []).slice(0, 50) } } : null,
     lastPushStatus: e.valid === false ? 'failed' : 'never',
+    bylinesEdited: false,
+    cmsEditedAt: null,
     updatedById: user.id,
   };
   const existing = await prisma.cmsDraft.findFirst({ where: { projectId: project.id, cmsEntryId: page.cmsEntryId }, orderBy: { updatedAt: 'desc' } });

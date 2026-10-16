@@ -1306,6 +1306,8 @@ model CmsDraft {
   seoDescription    String?   @db.VarChar(1000)
   /// [bylineSlug] (from site-info.bylines; only the requester's mapped byline or the team byline)
   bylines           Json?
+  /// true once a person changed the bylines in the OS since the last push / open: updates send bylines only then.
+  bylinesEdited     Boolean   @default(false)
   /// { taxonomyName: [termSlug] } (existing terms only)
   taxonomies        Json?
   /// true while the content is AI-written and not edited by a person: the push actor is then kind "agent".
@@ -1323,6 +1325,8 @@ model CmsDraft {
   lastPushError     Json?
   lastPushWarnings  Json?
   lastSeoCheck      Json?
+  /// Last OS content edit not yet pushed (null after a push or a reload from the site).
+  cmsEditedAt       DateTime?
   createdById       String?
   updatedById       String?
   createdAt         DateTime  @default(now())

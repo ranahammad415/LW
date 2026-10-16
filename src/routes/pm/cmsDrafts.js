@@ -24,6 +24,7 @@ import {
   parseAiDraft,
   pushErrorMessage,
   createDraftFromEntry,
+  draftEditMarkers,
 } from '../../lib/cmsDrafts.js';
 
 async function requireStaff(request, reply) {
@@ -207,6 +208,8 @@ export async function pmCmsDraftRoutes(app) {
         projectId: request.params.projectId,
         wpPageId: request.body?.wpPageId,
         variant: request.body?.variant === 'live' ? 'live' : 'draft',
+        overwrite: request.body?.overwrite === true,
+        keep: request.body?.keep === true,
         user: request.user,
         log: request.log,
       });
@@ -237,6 +240,8 @@ export async function pmCmsDraftRoutes(app) {
       if (ctx.draft.cmsEntryId && data.collection && data.collection !== ctx.draft.collection) {
         return reply.status(400).send({ message: 'The collection cannot change after the first push.' });
       }
+      // Edit markers (review MEDIUM-4 / LOW-10): only fields whose value really changed count.
+      Object.assign(data, draftEditMarkers(ctx.draft, data));
       const d = await prisma.cmsDraft.update({ where: { id: ctx.draft.id }, data: { ...data, updatedById: request.user.id } });
       return reply.send(formatDraft(d, { canWrite: true }));
     } catch (err) {
@@ -360,6 +365,7 @@ export async function pmCmsDraftRoutes(app) {
         data: {
           ...(ctx.draft.contentKind === 'markdown' ? { markdown: parsed.markdown } : { layout: parsed.layout }),
           aiGenerated: true,
+          cmsEditedAt: new Date(),
           updatedById: request.user.id,
         },
       });

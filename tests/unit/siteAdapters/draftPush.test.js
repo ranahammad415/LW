@@ -73,6 +73,9 @@ import {
   createDraftFromEntry,
   defaultBylines,
   actorFor,
+  hasHtmlTag,
+  draftEditMarkers,
+  PUSH_CLAIM_STALE_MS,
 } from '../../../src/lib/cmsDrafts.js';
 import { CmsBridgeError } from '../../../src/lib/siteAdapters/emdash.js';
 import { probeImage } from '../../../src/lib/imageProbe.js';
@@ -365,5 +368,90 @@ describe('v1.5.1 edit an existing site page (entry-get includeLayout, layoutRead
     expect(created.lastPushError).toMatchObject({ code: 'SCHEMA_INVALID', details: { errors: [{ path: '$.layout[0].lead' }] } });
     expect(site.bodies.at(-1)).toEqual({ entryId: '01JAB4M9ZQ7X3K2V8N5T6R1W0C', variant: 'live' });
     await expect(createDraftFromEntry({ projectId: 'p1', wpPageId: 'wp1', user: { id: 'c', role: 'CLIENT' } })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+});
+
+describe('review fixes: bylines on updates, push claim, markdown HTML, unpushed edits', () => {
+  const caps = { ...PROJECT, cmsCapabilities: { ...PROJECT.cmsCapabilities, layoutRead: true } };
+  const POST = { id: 'd2', projectId: 'p1', contentMapNodeId: null, taskId: null, collection: 'posts', title: 'T', slug: 'a-b', parent: null, contentKind: 'markdown', markdown: 'Hi', layout: null, bylines: ['jane-pm'], taxonomies: null, aiGenerated: false };
+
+  it('MEDIUM-4: an update sends bylines only when a person changed them; a create always does', () => {
+    const ctx = pushContextFrom(ex('site-info.response'), JANE, PROJECT);
+    const posts = ctx.collections.find((c) => c.name === 'posts');
+    const upd = { ...POST, cmsEntryId: 'E', cmsRev: 'v2', bylines: ['someone-else'] };
+    expect(buildDraftUpsertBody(upd, { user: JANE, ctx, collectionInfo: posts })).not.toHaveProperty('bylines');
+    expect(buildDraftUpsertBody({ ...upd, aiGenerated: true }, { user: JANE, ctx, collectionInfo: posts })).not.toHaveProperty('bylines');
+    expect(buildDraftUpsertBody({ ...upd, bylines: ['jane-pm'], bylinesEdited: true }, { user: JANE, ctx, collectionInfo: posts }).bylines).toEqual(['jane-pm']);
+    expect(buildDraftUpsertBody({ ...POST, bylines: null }, { user: JANE, ctx, collectionInfo: posts, slugPolicy: 'exact' }).bylines).toEqual(['jane-pm']);
+  });
+
+  it('MEDIUM-4: edit markers count only real changes', () => {
+    const now = new Date('2026-10-17T00:00:00Z');
+    expect(draftEditMarkers({ bylines: ['a'], title: 'T' }, { bylines: ['a'], title: 'T' }, now)).toEqual({});
+    expect(draftEditMarkers({ bylines: ['a'], title: 'T' }, { bylines: ['b'] }, now)).toEqual({ bylinesEdited: true, cmsEditedAt: now });
+    expect(draftEditMarkers({ bylines: null, title: 'T' }, { title: 'U' }, now)).toEqual({ cmsEditedAt: now });
+  });
+
+  it('MEDIUM-4: a successful push clears the edit markers', async () => {
+    db.overrides['cmsDraft.findUnique'] = async () => ({ ...POST, cmsEntryId: 'E', cmsRev: 'v2', bylinesEdited: true, cmsEditedAt: new Date() });
+    site.upsert = async () => ({ ok: true, entryId: 'E', entryNo: 9, rev: 'v3', created: false });
+    await pushDraft({ draftId: 'd2', user: JANE });
+    expect(calls('cmsDraft.update').at(-1).args.data).toMatchObject({ lastPushStatus: 'ok', bylinesEdited: false, cmsEditedAt: null });
+  });
+
+  it('LOW-9: a push claims the draft (CAS) before the site call; a second concurrent push is refused; failures release it', async () => {
+    db.overrides['cmsDraft.findUnique'] = async () => ({ ...POST, lastPushStatus: 'never' });
+    db.overrides['cmsDraft.updateMany'] = async () => ({ count: 0 });
+    await expect(pushDraft({ draftId: 'd2', user: JANE })).rejects.toMatchObject({ code: 'PUSH_IN_PROGRESS', status: 409 });
+    expect(site.bodies).toHaveLength(0);
+    const claim = calls('cmsDraft.updateMany')[0].args;
+    expect(claim.data).toEqual({ lastPushStatus: 'pushing' });
+    expect(claim.where.OR[0]).toEqual({ lastPushStatus: { not: 'pushing' } });
+    expect(Date.now() - claim.where.OR[1].updatedAt.lt.getTime()).toBeGreaterThanOrEqual(PUSH_CLAIM_STALE_MS - 1000);
+    // claimed, then a local validation failure: the claim is released to the previous status
+    db.calls = [];
+    db.overrides['cmsDraft.updateMany'] = async () => ({ count: 1 });
+    db.overrides['cmsDraft.findUnique'] = async () => ({ ...POST, markdown: 'x <div class="a">y</div>', lastPushStatus: 'failed' });
+    await expect(pushDraft({ draftId: 'd2', user: JANE })).rejects.toMatchObject({ code: 'VALIDATION' });
+    expect(calls('cmsDraft.updateMany').map((c) => c.args)).toEqual([
+      expect.objectContaining({ data: { lastPushStatus: 'pushing' } }),
+      { where: { id: 'd2', lastPushStatus: 'pushing' }, data: { lastPushStatus: 'failed' } },
+    ]);
+    // the draft is re-read under the claim: an entry created by the push that just finished is updated, not re-created
+    db.calls = [];
+    let n = 0;
+    db.overrides['cmsDraft.findUnique'] = async () => (n++ === 0 ? { ...POST } : { ...POST, cmsEntryId: 'E', cmsRev: 'v1' });
+    site.upsert = async () => ({ ok: true, entryId: 'E', rev: 'v2' });
+    await pushDraft({ draftId: 'd2', user: JANE });
+    expect(site.bodies.at(-1).target).toEqual({ entryId: 'E' });
+  });
+
+  it('LOW-10: markdown HTML check counts real tags only', () => {
+    for (const ok of ['a <b and c> d', 'see <https://example.com/a?b=1>', 'a < b > c', '<user@example.com>', '1 <i 2']) expect(hasHtmlTag(ok)).toBe(false);
+    for (const tag of ['<b>x</b>', '<div class="a">', '<br>', '<br/>', 'x</p>', '<!-- c -->', '<img src=x>', '<script>x</script>']) expect(hasHtmlTag(tag)).toBe(true);
+    const si = ex('site-info.response');
+    const ctx = pushContextFrom(si, JANE, PROJECT);
+    const body = buildDraftUpsertBody({ ...POST, markdown: 'Use <https://example.com> when a <b and c> d' }, { user: JANE, ctx, collectionInfo: ctx.collections[1], slugPolicy: 'exact' });
+    expect(checkDraftBody(si, body, 'posts').errors.map((e) => e.path)).not.toContain('$.body.markdown');
+  });
+
+  it('LOW-10: reloading a page from the site never drops unpushed OS edits silently', async () => {
+    db.overrides['project.findUnique'] = async () => caps;
+    db.overrides['wpPage.findFirst'] = async () => ({ id: 'wp1', cmsEntryId: '01JAB4M9ZQ7X3K2V8N5T6R1W0C' });
+    db.overrides['contentMapNode.findFirst'] = async () => ({ id: 'n1', taskId: null });
+    db.overrides['cmsDraft.findFirst'] = async () => ({ id: 'd9', cmsEditedAt: new Date(), updatedById: OWNER.id });
+    db.overrides['user.findUnique'] = async () => ({ name: 'Agency Owner' });
+    site.layout = () => ex('entry-get.response--layout');
+    await expect(createDraftFromEntry({ projectId: 'p1', wpPageId: 'wp1', user: JANE })).rejects.toMatchObject({ code: 'UNPUSHED_EDITS', status: 409, message: expect.stringMatching(/^Agency Owner has unpushed edits/) });
+    expect(site.bodies).toHaveLength(0);
+    db.overrides['cmsDraft.findUnique'] = async () => ({ id: 'd9', title: 'kept' });
+    expect(await createDraftFromEntry({ projectId: 'p1', wpPageId: 'wp1', user: JANE, keep: true })).toEqual({ id: 'd9', title: 'kept' });
+    expect(site.bodies).toHaveLength(0);
+    await createDraftFromEntry({ projectId: 'p1', wpPageId: 'wp1', user: JANE, overwrite: true });
+    expect(calls('cmsDraft.update').at(-1).args).toMatchObject({ where: { id: 'd9' }, data: { bylinesEdited: false, cmsEditedAt: null } });
+    // no unpushed edits: reload without asking
+    db.overrides['cmsDraft.findFirst'] = async () => ({ id: 'd9', cmsEditedAt: null, updatedById: OWNER.id });
+    await createDraftFromEntry({ projectId: 'p1', wpPageId: 'wp1', user: JANE });
+    expect(site.bodies.filter((b) => b.variant)).toHaveLength(2);
   });
 });
