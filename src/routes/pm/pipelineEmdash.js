@@ -81,9 +81,11 @@ async function loadReview(projectId, wpPipelineId) {
   return row;
 }
 
-async function mirrorAndFormat(projectId, review, formatReview, log) {
+async function mirrorAndFormat(projectId, review, formatReview, log, { clearOverride = false } = {}) {
   const row = review ? await mirrorEmdashReview(projectId, review, { log }) : null;
   if (!row?.id) return null;
+  // e2e O11: the action just done did not use an override, so an earlier one no longer describes the review.
+  if (clearOverride) await prisma.wpContentReview.updateMany({ where: { id: row.id }, data: { cmsOverride: null } });
   const full = await prisma.wpContentReview.findUnique({ where: { id: row.id }, include: reviewInclude });
   return full ? formatReview(full) : null;
 }
@@ -179,7 +181,7 @@ export async function emdashPublish({ request, reply, projectId, wpPipelineId, f
       INTERACTIVE
     );
     if (d.override) request.log.info({ projectId, wpPipelineId, by: request.user.id }, 'EmDash publish with OWNER override');
-    const pipeline = res?.review && formatReview ? await mirrorAndFormat(projectId, res.review, formatReview, request.log) : null;
+    const pipeline = res?.review && formatReview ? await mirrorAndFormat(projectId, res.review, formatReview, request.log, { clearOverride: !d.override }) : null;
     return reply.send({ success: true, pipeline, publishedAt: res?.publishedAt || null, seoCheck: res?.seoCheck ?? null });
   } catch (err) {
     if (err instanceof CmsBridgeError) {
@@ -212,7 +214,7 @@ export async function emdashSchedule({ request, reply, projectId, wpPipelineId, 
       { reviewId: row.cmsReviewId, at: when.at, actor, ...(d.override ? { override: true, overrideReason } : {}) },
       INTERACTIVE
     );
-    const pipeline = res?.review && formatReview ? await mirrorAndFormat(projectId, res.review, formatReview, request.log) : null;
+    const pipeline = res?.review && formatReview ? await mirrorAndFormat(projectId, res.review, formatReview, request.log, { clearOverride: !d.override }) : null;
     return reply.send({ success: true, pipeline });
   } catch (err) {
     if (err instanceof CmsBridgeError) {
@@ -235,7 +237,7 @@ export async function emdashUnschedule({ request, reply, projectId, wpPipelineId
     }
     const { conn } = await loadEmdashConnection(projectId);
     const res = await emdashRoutes.pipelineUnschedule(conn, { reviewId: row.cmsReviewId, actor: publishActor(request.user) }, INTERACTIVE);
-    const pipeline = res?.review && formatReview ? await mirrorAndFormat(projectId, res.review, formatReview, request.log) : null;
+    const pipeline = res?.review && formatReview ? await mirrorAndFormat(projectId, res.review, formatReview, request.log, { clearOverride: true }) : null;
     return reply.send({ success: true, pipeline });
   } catch (err) {
     await onSiteMismatch(projectId, wpPipelineId, err, request.log);

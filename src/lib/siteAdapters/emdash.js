@@ -460,7 +460,12 @@ export function normalizeReviewEvent(review, { eventType, seq, message = null, o
       scheduledAt: str(r.scheduledAt, 40),
       publishOrigin: ['admin', 'os', 'scheduler'].includes(r.publishOrigin) ? r.publishOrigin : null,
       publishedBy: r.publishedBy && typeof r.publishedBy === 'object' ? { name: str(r.publishedBy.name, 200), source: str(r.publishedBy.source, 32), osUserId: str(r.publishedBy.osUserId, 64) } : null,
-      override: r.override && typeof r.override === 'object' ? { byName: str(r.override.by?.name, 200), reason: str(r.override.reason, 1000), at: str(r.override.at, 40), action: str(r.override.action, 16) } : null,
+      // e2e O11: undefined = the Review did not say (older site: leave the column); null = no override on it now.
+      override: !Object.prototype.hasOwnProperty.call(r, 'override')
+        ? undefined
+        : r.override && typeof r.override === 'object'
+          ? { byName: str(r.override.by?.name, 200), reason: str(r.override.reason, 1000), at: str(r.override.at, 40), action: str(r.override.action, 16) }
+          : null,
     },
   };
 }
@@ -472,7 +477,7 @@ export function emdashPublishColumns(cms) {
   out.cmsScheduledAt = cms.scheduledAt ? parseDate(cms.scheduledAt) : null;
   if (cms.publishOrigin) out.cmsPublishOrigin = cms.publishOrigin;
   if (cms.publishedBy) out.cmsPublishedBy = cms.publishedBy;
-  if (cms.override) out.cmsOverride = cms.override;
+  if (cms.override !== undefined) out.cmsOverride = cms.override;
   if (cms.liveRevisionId !== undefined) out.cmsLiveRevisionId = cms.liveRevisionId;
   return out;
 }

@@ -73,3 +73,14 @@ describe('v1.5.2 §28.1: the published review carries the new live revision', ()
     expect(reviewToMirrorData({ ...pub.review, liveRevisionId: null }).data.cmsLiveRevisionId).toBeNull();
   });
 });
+
+describe('e2e O11: Review.override is mirrored by presence', () => {
+  it('absent → column untouched; null → cleared; object → stored', () => {
+    const base = ex('review.response').review;
+    const { override: _drop, ...without } = base;
+    expect(reviewToMirrorData(without).data).not.toHaveProperty('cmsOverride');
+    expect(reviewToMirrorData({ ...base, override: null }).data.cmsOverride).toBeNull();
+    const withOv = reviewToMirrorData({ ...base, override: { by: { name: 'Owner' }, reason: 'Client approved by phone, email to follow', at: '2026-10-16T10:00:00Z', action: 'schedule' } });
+    expect(withOv.data.cmsOverride).toMatchObject({ byName: 'Owner', action: 'schedule' });
+  });
+});

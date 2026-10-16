@@ -314,6 +314,21 @@ describe('v1.3.0 publish / schedule from the OS (§24)', () => {
     expect(routeOf()).toBe('pipeline-unschedule');
   });
 
+  it('e2e O11: an action without override clears an earlier override; an OWNER override keeps it', async () => {
+    const clears = () => db.calls.filter((c) => c.key === 'wpContentReview.updateMany' && c.args.data && Object.keys(c.args.data).length === 1 && c.args.data.cmsOverride === null);
+    db.overrides['wpContentReview.upsert'] = async (a) => ({ id: 'r1', ...a.create });
+    withCaps({ scheduleFromOs: true }, 'scheduled');
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify(ex('review.response--ready')), { status: 200 }));
+    await app.inject({ method: 'POST', url: '/api/pm/pipeline/' + PID + '/42/unschedule' });
+    expect(clears()).toHaveLength(1);
+    db.calls = [];
+    fetchMock.mockReset();
+    withCaps({ publishFromOs: true }, 'pending_client_review');
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify(ex('pipeline-publish.response')), { status: 200 }));
+    await app.inject({ method: 'POST', url: '/api/pm/pipeline/' + PID + '/42/publish', payload: { override: true, overrideReason: 'Client approved by phone on 16 Oct, email to follow' } });
+    expect(clears()).toHaveLength(0);
+  });
+
   it('staff preview link: returned once, not stored; needs previewLinks', async () => {
     withCaps({ previewLinks: false });
     expect((await app.inject({ method: 'POST', url: `/api/pm/pipeline/${PID}/42/preview-link` })).statusCode).toBe(409);
