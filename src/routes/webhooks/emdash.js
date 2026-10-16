@@ -40,6 +40,7 @@ import { isMigrationActive } from '../../lib/cmsMigration.js';
 export const OS_VERSION = '2026.10.16';
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const MIGRATION_PENDING_MESSAGE = 'Site migration in progress; retry later';
 const DATE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 
 function sendError(reply, code, message, details) {
@@ -471,15 +472,11 @@ export async function emdashWebhookRoutes(app, opts = {}) {
     }
     // v1.5.0 migration window: nothing is applied to the WordPress project before cut-over. Every event is refused
     // as retryable so the site's outbox keeps it; after cut-over it is delivered (or replayed from the cursor).
+    // v1.5.3 §29: accepted and duplicate MUST stay empty here (the site reads a non-empty one as the cut-over signal).
     if (project.cmsType !== 'EMDASH') {
+      const refused = await processEventBatch({ store, project, events: batch.events, log: request.log });
       return reply.status(200).type('application/json').send(
-        JSON.stringify({
-          ok: true,
-          accepted: [],
-          duplicate: [],
-          rejected: batch.events.map((e) => ({ eventId: typeof e?.eventId === 'string' ? e.eventId.slice(0, 64) : 'unknown', code: 'INTERNAL', retryable: true, message: 'Site migration in progress; retry later' })),
-          lastCursor: 0,
-        })
+        JSON.stringify({ ok: true, accepted: [], duplicate: [], rejected: refused.rejected, lastCursor: 0 })
       );
     }
 
@@ -542,6 +539,21 @@ export async function processEventBatch({ store, project, events, log }) {
   let snapshots = 0;
   let storedCursor = 0;
   let contentApplied = false;
+
+  // v1.5.3 §29: the site ends its outbox pause on the first 200 that lists an eventId in accepted/duplicate. Before the
+  // migration cut-over (project still WORDPRESS) NO path (the /events route, replay, any later caller) may accept or
+  // de-duplicate anything: every event is refused as retryable, nothing is claimed or applied.
+  // (cmsType is a required column: every caller passes the project row.)
+  if (project?.cmsType && project.cmsType !== 'EMDASH') {
+    return {
+      accepted,
+      duplicate,
+      rejected: events.map((e) => ({ eventId: typeof e?.eventId === 'string' ? e.eventId.slice(0, 64) : 'unknown', code: 'INTERNAL', retryable: true, message: MIGRATION_PENDING_MESSAGE })),
+      heal: [],
+      lastCursor: 0,
+      storedCursor: 0,
+    };
+  }
 
   const sorted = [...events].sort((a, b) => (Number(a?.cursor) || 0) - (Number(b?.cursor) || 0));
   for (const ev of sorted) {

@@ -40,6 +40,9 @@
         "failed": {
           "type": "integer",
           "minimum": 0
+        },
+        "paused": {
+          "$ref": "common.json#/$defs/outboxPause"
         }
       },
       "required": [

@@ -1,0 +1,26 @@
+{
+  "ok": true,
+  "paired": true,
+  "contract": 1,
+  "siteId": "site_9f3c2a7b41d0",
+  "keyId": 1,
+  "outbox": {
+    "pending": 14,
+    "failed": 0,
+    "paused": {
+      "reason": "migration_pending",
+      "since": "2026-10-20T09:00:00Z",
+      "until": "2026-11-19T09:00:00Z"
+    }
+  },
+  "schedulerLastRunAgoMin": 3,
+  "lastEventAt": "2026-10-15T12:00:00Z",
+  "lastCursor": 57,
+  "versions": {
+    "plugin": "1.0.0",
+    "emdash": "1.2.0",
+    "astro": "7.3.8",
+    "framework": "1.0.0"
+  },
+  "previewConfigured": true
+}

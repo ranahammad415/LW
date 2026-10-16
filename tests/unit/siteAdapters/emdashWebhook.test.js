@@ -11,7 +11,7 @@ import Fastify from 'fastify';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { emdashWebhookRoutes } from '../../../src/routes/webhooks/emdash.js';
+import { emdashWebhookRoutes, processEventBatch } from '../../../src/routes/webhooks/emdash.js';
 import {
   createPairingCode,
   pairingSigningKey,
@@ -936,5 +936,46 @@ describe('v1.5.0 WordPress → EmDash migration window (§26.3)', () => {
     // heartbeats keep working
     const hb = await post(HS, handshakeBody('heartbeat'), { secret: keys.outbound, keyId: 1 });
     expect(hb.statusCode).toBe(200);
+  });
+});
+
+describe('v1.5.3 §29: no event is accepted before the migration cut-over (the site reads accepted/duplicate as the signal)', () => {
+  it('route: a WordPress project in migrate mode answers 200 with accepted AND duplicate empty, even for repeated eventIds', async () => {
+    addProject({ cmsType: 'WORDPRESS', cmsMigration: { state: 'previewed', siteUrl: 'https://oasispoolspas.com' } });
+    const keys = pairKeys();
+    const events = ex('events.request').events;
+    const twice = [...events, events[0]];
+    for (const batch of [events, twice, events]) {
+      const res = await post(EV, eventsBody(batch), { secret: keys.outbound, keyId: 1 });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ ok: true, accepted: [], duplicate: [], lastCursor: 0 });
+      expect(res.json().rejected).toHaveLength(batch.length);
+      expect(res.json().rejected.every((r) => r.retryable === true)).toBe(true);
+    }
+    expect(store.receipts.size).toBe(0); // nothing claimed, so nothing can later come back as "duplicate"
+    expect(store.applied).toHaveLength(0);
+  });
+
+  it('processEventBatch itself refuses everything for a non-EmDash project (replay or any other caller)', async () => {
+    const events = ex('events.request').events;
+    const r = await processEventBatch({ store, project: { id: PROJECT_ID, cmsType: 'WORDPRESS', cmsSiteId: SITE }, events: [...events, events[0]] });
+    expect(r.accepted).toEqual([]);
+    expect(r.duplicate).toEqual([]);
+    expect(r.rejected.every((x) => x.retryable === true)).toBe(true);
+    expect(r.storedCursor).toBe(0);
+    expect(store.receipts.size).toBe(0);
+  });
+
+  it('after the cut-over the first batch is accepted and applied normally (the held events arrive)', async () => {
+    addProject({ cmsType: 'WORDPRESS', cmsMigration: { state: 'paired', siteUrl: 'https://oasispoolspas.com' } });
+    const keys = pairKeys();
+    const events = ex('events.request').events;
+    const before = await post(EV, eventsBody(events), { secret: keys.outbound, keyId: 1 });
+    expect(before.json().accepted).toEqual([]);
+    const p = store.projects.get(PROJECT_ID);
+    store.projects.set(PROJECT_ID, { ...p, cmsType: 'EMDASH', cmsMigration: { ...p.cmsMigration, state: 'applied' } });
+    const after = await post(EV, eventsBody(events), { secret: keys.outbound, keyId: 1 });
+    expect(after.statusCode).toBe(200);
+    expect(after.json().accepted.length).toBeGreaterThan(0);
   });
 });

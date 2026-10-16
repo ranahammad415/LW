@@ -20,7 +20,7 @@ import {
   CmsBridgeError,
 } from './siteAdapters/emdash.js';
 import { KEY_ROTATION_OVERLAP_SEC, PAIRING_MAX_FAILED_ATTEMPTS } from './siteAdapters/signing.js';
-import { sanitizeMigratedFrom } from './siteAdapters/migration.js';
+import { sanitizeMigratedFrom, sanitizeOutboxPause } from './siteAdapters/migration.js';
 import {
   suggestionToRow,
   suggestionChangeToUpdate,
@@ -137,6 +137,8 @@ function siteInfoProjectData(siteInfo, contract, now) {
     cmsCapabilities: siteInfo?.capabilities && typeof siteInfo.capabilities === 'object' ? siteInfo.capabilities : {},
     cmsHealth: {
       ...health,
+      // v1.5.3 §29: outbox.paused normalised ({reason, since, until} | null); sites below 1.5.3 omit it.
+      ...(health.outbox && typeof health.outbox === 'object' ? { outbox: { ...health.outbox, paused: sanitizeOutboxPause(health.outbox.paused) } } : {}),
       platform: siteInfo?.platform || null,
       siteUrlReported: siteInfo?.siteUrl ? String(siteInfo.siteUrl).slice(0, 500) : null,
       siteName: siteInfo?.siteName ? String(siteInfo.siteName).slice(0, 200) : null,

@@ -23,6 +23,7 @@ import {
 import { emdashRoutes, CmsBridgeError } from '../lib/siteAdapters/emdash.js';
 import { loadEmdashConnection } from '../lib/cmsStore.js';
 import { validateSiteUrl } from '../lib/siteAdapters/netGuard.js';
+import { sanitizeOutboxPause } from '../lib/siteAdapters/migration.js';
 
 const STALE_AFTER_MS = 24 * 60 * 60 * 1000;
 const KEY_MISSING_MESSAGE =
@@ -126,9 +127,11 @@ export async function projectCmsRoutes(app) {
     return reply.status(500).send({ message: 'Migration request failed' });
   };
   app.get('/:id/cms/migration', { onRequest: [app.verifyJwt, app.requireOwner] }, async (request, reply) => {
-    const project = await prisma.project.findUnique({ where: { id: request.params.id }, select: { id: true, cmsType: true, wpUrl: true, cmsMigration: true, cmsPairedAt: true } });
+    const project = await prisma.project.findUnique({ where: { id: request.params.id }, select: { id: true, cmsType: true, wpUrl: true, cmsMigration: true, cmsPairedAt: true, cmsHealth: true } });
     if (!project) return reply.status(404).send({ message: 'Project not found' });
-    return reply.send({ cmsType: project.cmsType, migration: project.cmsMigration || null, pairedAt: project.cmsPairedAt });
+    // v1.5.3 §29: the paired site holds its events (no 72 h give-up) until the cut-over, at most until `until`.
+    const outboxPaused = project.cmsType === 'WORDPRESS' && project.cmsMigration ? sanitizeOutboxPause(project.cmsHealth?.outbox?.paused) : null;
+    return reply.send({ cmsType: project.cmsType, migration: project.cmsMigration || null, pairedAt: project.cmsPairedAt, outboxPaused });
   });
   app.post('/:id/cms/migration/preview', { onRequest: [app.verifyJwt, app.requireOwner] }, async (request, reply) => {
     try {
@@ -273,6 +276,8 @@ export async function projectCmsRoutes(app) {
         };
       }
     }
+    // v1.5.3 §29: outbox give-up pause (live health first, else the stored handshake/site-info value).
+    body.outboxPaused = sanitizeOutboxPause(body.live?.outbox?.paused) || sanitizeOutboxPause(project.cmsHealth?.outbox?.paused);
     return reply.send(body);
   });
 }

@@ -2685,6 +2685,36 @@
       ],
       "description": "v1.2.0: drop this object into a block image field"
     },
+    "outboxPause": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "enum": [
+                "migration_pending"
+              ]
+            },
+            "since": {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            "until": {
+              "$ref": "common.json#/$defs/dateTime",
+              "description": "since + 30 days: from then on the normal 72 h give-up applies again, cut-over or not"
+            }
+          },
+          "required": [
+            "reason",
+            "since",
+            "until"
+          ],
+          "description": "v1.5.3 (§29): the outbox give-up clock is paused (events kept and retried at least hourly) while the current pairing of a WordPress-migrated site waits for the OS cut-over; null or absent = not paused"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "health": {
       "type": "object",
       "properties": {
@@ -2719,6 +2749,9 @@
                   "type": "null"
                 }
               ]
+            },
+            "paused": {
+              "$ref": "common.json#/$defs/outboxPause"
             }
           },
           "required": [

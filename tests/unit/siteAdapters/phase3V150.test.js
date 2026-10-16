@@ -63,7 +63,7 @@ vi.mock('../../../src/lib/siteAdapters/emdash.js', async (importOriginal) => {
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { planWpHistoryMove, buildRekeyPlan, sanitizeMigratedFrom } from '../../../src/lib/siteAdapters/migration.js';
+import { planWpHistoryMove, buildRekeyPlan, sanitizeMigratedFrom, sanitizeOutboxPause } from '../../../src/lib/siteAdapters/migration.js';
 import { validateLeadEvent, leadToRow } from '../../../src/lib/siteAdapters/leads.js';
 import { applyLeadEvent, copyLeadPhotos, eraseLocalLead, eraseLead, leadPhotoUrlAllowed, sweepOrphanLeadPhotos } from '../../../src/lib/cmsLeads.js';
 import { pullSiteReports, sanitizeReport } from '../../../src/lib/cmsReports.js';
@@ -454,5 +454,23 @@ describe('WordPress → EmDash migration (§26.3)', () => {
     db.overrides['wpContentReview.aggregate'] = async () => ({ _max: { wpPipelineId: 2 } });
     db.overrides['wpPage.aggregate'] = async () => ({ _max: { wpPostId: 118 } });
     expect(await prismaCmsStore.getCounterFloor('p1')).toEqual({ reviewNo: 41, entryNo: 900 });
+  });
+});
+
+describe('v1.5.3 §29: outbox pause (stored from site-info / handshake / health)', () => {
+  it('sanitizes health.outbox.paused and stores it with the heartbeat', async () => {
+    const info = ex('site-info.response--migration-pending');
+    await prismaCmsStore.recordHeartbeat({ projectId: 'p1', siteInfo: info, contract: 1, now: new Date('2026-10-21T00:00:00Z') });
+    const stored = calls('project.update').at(-1).args.data.cmsHealth.outbox;
+    expect(stored.paused).toEqual({ reason: 'migration_pending', since: '2026-10-20T09:00:00.000Z', until: '2026-11-19T09:00:00.000Z' });
+    expect(sanitizeOutboxPause(ex('health.response--paused').outbox.paused)).toMatchObject({ reason: 'migration_pending' });
+    for (const bad of [null, undefined, {}, { reason: 'other', since: '2026-10-20T09:00:00Z', until: '2026-11-19T09:00:00Z' }, { reason: 'migration_pending', since: 'x', until: '2026-11-19T09:00:00Z' }]) {
+      expect(sanitizeOutboxPause(bad)).toBeNull();
+    }
+    // a site below 1.5.3 (no paused field): stored as null
+    const old = ex('site-info.response');
+    await prismaCmsStore.recordHeartbeat({ projectId: 'p1', siteInfo: old, contract: 1 });
+    const o = calls('project.update').at(-1).args.data.cmsHealth.outbox;
+    if (o) expect(o.paused).toBeNull();
   });
 });

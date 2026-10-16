@@ -101,6 +101,18 @@ export function sanitizeMapItems(items) {
     }));
 }
 
+/**
+ * v1.5.3 §29 `health.outbox.paused` (site-info, handshake body, health): `{ reason: "migration_pending", since, until }`
+ * while the site holds events for the migration cut-over; null when absent, unknown or malformed.
+ */
+export function sanitizeOutboxPause(v) {
+  if (!v || typeof v !== 'object' || v.reason !== 'migration_pending') return null;
+  const iso = (d) => (typeof d === 'string' && !Number.isNaN(Date.parse(d)) ? new Date(d).toISOString() : null);
+  const since = iso(v.since);
+  const until = iso(v.until);
+  return since && until ? { reason: 'migration_pending', since, until } : null;
+}
+
 /** v1.5.0 site-info/handshake `migratedFrom` (never a key: only the last 4 characters as a hint). */
 export function sanitizeMigratedFrom(v) {
   if (!v || typeof v !== 'object' || v.cms !== 'wordpress' || typeof v.siteUrl !== 'string') return null;

@@ -17,7 +17,7 @@ import crypto from 'node:crypto';
 export const CONTRACT_NAME = 'agency-os-bridge';
 export const CONTRACT_VERSION = 1;
 /** Errata level implemented by this OS (informational; X-AOS-Contract stays 1). */
-export const CONTRACT_REVISION = '1.5.2';
+export const CONTRACT_REVISION = '1.5.3';
 export const SUPPORTED_CONTRACTS = Object.freeze([1]);
 export const PLUGIN_ID = 'agency-os-bridge';
 export const SITE_ROUTE_PREFIX = '/_emdash/api/plugins/agency-os-bridge/';
