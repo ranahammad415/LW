@@ -187,6 +187,16 @@ export function checkDraftBody(siteInfo, body, collection) {
 
 // ─────────────────────────────── push ───────────────────────────────
 
+/**
+ * Which OS member a pushed draft is submitted to (reviewAfter.pm). The site accepts any OS member; this is OS policy
+ * and the owner has not decided it yet, so it lives here alone: today the project's lead PM (else the client's PMs,
+ * else an active OWNER — the order listPms returns).
+ */
+export async function reviewAfterPm(project) {
+  const pms = await listPms(project);
+  return pms[0] || null;
+}
+
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
 
 /** User-facing message for a refused push. */
@@ -255,10 +265,8 @@ export async function pushDraft({ draftId, user, opts = {}, log }) {
 
   let reviewAfter = null;
   if (opts.reviewAfter) {
-    const pms = await listPms(project);
-    if (pms.length) {
-      reviewAfter = { pm: pms[0], ...(opts.reviewAfter.note ? { note: String(opts.reviewAfter.note).slice(0, 10_000) } : {}) };
-    }
+    const pm = await reviewAfterPm(project);
+    if (pm) reviewAfter = { pm, ...(opts.reviewAfter.note ? { note: String(opts.reviewAfter.note).slice(0, 10_000) } : {}) };
   }
   const body = buildDraftUpsertBody(draft, { user, ctx, collectionInfo, slugPolicy, baseRev: opts.baseRev, changeUrl: !!opts.changeUrl, reviewAfter });
   const check = checkDraftBody(siteInfo, body, draft.collection);
