@@ -14,9 +14,10 @@ import {
   emdashRoutes,
   hasDraftPushFromOs,
   hasMediaImport,
+  hasLayoutRead,
   INTERACTIVE_RETRY_DELAYS_MS,
 } from './siteAdapters/emdash.js';
-import { prepareDraftPush, checkMediaItems, checkLayout, MEDIA_LIMITS, MEDIA_TYPES, DRAFT_LIMITS } from './siteAdapters/push.js';
+import { prepareDraftPush, checkMediaItems, checkLayout, draftFromEntryGet, MEDIA_LIMITS, MEDIA_TYPES, DRAFT_LIMITS } from './siteAdapters/push.js';
 import { probeImage } from './imageProbe.js';
 import { guardedFetch } from './siteAdapters/netGuard.js';
 
@@ -102,6 +103,7 @@ export function pushContextFrom(siteInfo, user, project) {
     capabilities: {
       draftPushFromOs: caps.draftPushFromOs === true || hasDraftPushFromOs(project),
       mediaImport: caps.mediaImport === true || hasMediaImport(project),
+      layoutRead: caps.layoutRead === true || hasLayoutRead(project),
       seoGateOnPush: caps.seoGateOnPush === true,
     },
     collections: (siteInfo?.collections || []).map((c) => ({
@@ -144,7 +146,13 @@ export function defaultBylines(ctx, actor) {
 export function buildDraftUpsertBody(draft, { user, ctx, collectionInfo, slugPolicy, baseRev, changeUrl = false, reviewAfter = null }) {
   const actor = actorFor(user, draft);
   const creating = !draft.cmsEntryId;
-  const content = draft.contentKind === 'markdown' ? { body: { markdown: String(draft.markdown || '') } } : { layout: Array.isArray(draft.layout) ? draft.layout : [] };
+  // contentKind portableText (v1.5.1 posts read with includeLayout) keeps its Portable Text in the `layout` column.
+  const content =
+    draft.contentKind === 'markdown'
+      ? { body: { markdown: String(draft.markdown || '') } }
+      : draft.contentKind === 'portableText'
+        ? { portableText: Array.isArray(draft.layout) ? draft.layout : [] }
+        : { layout: Array.isArray(draft.layout) ? draft.layout : [] };
   let bylines = Array.isArray(draft.bylines) && draft.bylines.length ? draft.bylines : null;
   if (collectionInfo?.hasBylines) {
     if (!bylines || actor.kind !== 'human') bylines = defaultBylines(ctx, actor);
@@ -337,6 +345,66 @@ export async function pushDraft({ draftId, user, opts = {}, log }) {
   }
   log?.info?.({ projectId: project.id, draftId: draft.id, created: !!res.created, actor: body.actor.kind, replay: !!res.idempotentReplay }, 'EmDash draft pushed');
   return { draft: updated, result: { ok: true, created: !!res.created, warnings, seoCheck: res.seoCheck ?? null, review: !!res.review } };
+}
+
+// ─────────────────────────────── v1.5.1: edit an existing site entry ───────────────────────────────
+
+/**
+ * Open a site entry the OS did not create (capability layoutRead): entry-get { includeLayout } → draftFromEntryGet →
+ * an OS draft holding the stored content as read, with baseRev = editable.rev. Pushing it unchanged changes nothing.
+ * Same people as other drafts. Re-opening an entry that already has an OS draft reloads that draft from the site.
+ * `variant: "live"` writes back over a pending draft: a warning is stored for the editor.
+ */
+export async function createDraftFromEntry({ projectId, wpPageId, variant = 'draft', user, log }) {
+  const project = await loadDraftProject(projectId);
+  if (project.cmsRepairNeededAt) throw bad('The website connection needs to be renewed (re-pair) first.', 'NOT_PAIRED', 503);
+  if (!hasLayoutRead(project)) throw bad('This site cannot hand its pages to Agency OS for editing yet. Edit it in the site admin.', 'NOT_IMPLEMENTED', 409);
+  const page = await prisma.wpPage.findFirst({ where: { id: String(wpPageId), projectId: project.id }, select: { id: true, cmsEntryId: true } });
+  if (!page?.cmsEntryId) throw bad('Page not found', 'NOT_FOUND', 404);
+  const node = await prisma.contentMapNode.findFirst({ where: { wpPageId: page.id, map: { projectId: project.id } }, select: { id: true, taskId: true } });
+  const link = { contentMapNodeId: node?.id || null, taskId: node?.taskId || null };
+  if (!(await canWriteDraft(user, project, link))) throw bad('You cannot edit this page from Agency OS.', 'FORBIDDEN', 403);
+
+  const { conn } = await loadEmdashConnection(project.id);
+  const v = variant === 'live' ? 'live' : 'draft';
+  const res = await emdashRoutes.entryGetLayout(conn, page.cmsEntryId, v, INTERACTIVE);
+  const built = draftFromEntryGet(res, { actor: { kind: 'human', osUserId: String(user.id), name: String(user.name || ''), role: user.role } });
+  if (!built.ok) throw bad(built.errors[0].code === 'PAYLOAD_TOO_LARGE' ? 'This page is too large to edit in Agency OS. Edit it in the site admin.' : built.errors[0].message, built.errors[0].code, 422);
+  const e = res.editable;
+  const entry = res.entry || {};
+  const contentKind = e.format === 'layout' ? 'layout' : e.format === 'portableText' ? 'portableText' : 'markdown';
+  const warnings = [];
+  if (v === 'live' && entry.hasPendingDraft) {
+    warnings.push({ code: 'REPLACES_PENDING_DRAFT', path: '$', message: 'This is the live version: pushing it replaces the pending draft on the site.' });
+  }
+  const data = {
+    collection: String(entry.collection || 'pages').slice(0, 64),
+    title: String(built.draft.title || entry.title || 'Untitled').slice(0, 500),
+    slug: entry.slug ? String(entry.slug).slice(0, 200) : null,
+    contentKind,
+    layout: contentKind === 'markdown' ? null : contentKind === 'portableText' ? built.draft.portableText : built.draft.layout,
+    markdown: contentKind === 'markdown' ? String(built.draft.body?.markdown || '') : null,
+    excerpt: built.draft.excerpt ?? null,
+    seoTitle: entry.seo?.title ? String(entry.seo.title).slice(0, 200) : null,
+    seoDescription: entry.seo?.description ? String(entry.seo.description).slice(0, 500) : null,
+    aiGenerated: false,
+    cmsEntryId: page.cmsEntryId,
+    cmsEntryNo: Number.isInteger(entry.entryNo) ? entry.entryNo : null,
+    cmsRev: String(e.rev).slice(0, 64),
+    cmsEditUrl: entry.editUrl ? String(entry.editUrl).slice(0, 1000) : null,
+    cmsPath: entry.path ? String(entry.path).slice(0, 500) : null,
+    lastPushWarnings: warnings.length ? warnings : null,
+    // valid:false: the stored content fails the site's current schemas; draft-upsert would 422 until these are fixed.
+    lastPushError: e.valid === false ? { code: 'SCHEMA_INVALID', message: 'The page on the site no longer matches the current blocks. Fix the highlighted fields before pushing.', details: { errors: (e.errors || []).slice(0, 50) } } : null,
+    lastPushStatus: e.valid === false ? 'failed' : 'never',
+    updatedById: user.id,
+  };
+  const existing = await prisma.cmsDraft.findFirst({ where: { projectId: project.id, cmsEntryId: page.cmsEntryId }, orderBy: { updatedAt: 'desc' } });
+  const draft = existing
+    ? await prisma.cmsDraft.update({ where: { id: existing.id }, data })
+    : await prisma.cmsDraft.create({ data: { projectId: project.id, ...link, ...data, createdById: user.id } });
+  log?.info?.({ projectId: project.id, draftId: draft.id, variant: v, format: e.format, valid: e.valid !== false }, 'EmDash entry opened for editing');
+  return draft;
 }
 
 // ─────────────────────────────── media ───────────────────────────────

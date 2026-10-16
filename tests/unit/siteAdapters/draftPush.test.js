@@ -6,7 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const db = vi.hoisted(() => ({ calls: [], overrides: {} }));
-const site = vi.hoisted(() => ({ upsert: null, media: null, info: null, bodies: [], opts: [] }));
+const site = vi.hoisted(() => ({ upsert: null, media: null, info: null, layout: null, bodies: [], opts: [] }));
 
 vi.mock('../../../src/lib/prisma.js', () => {
   const model = (name) =>
@@ -43,6 +43,10 @@ vi.mock('../../../src/lib/siteAdapters/emdash.js', async (importOriginal) => {
         site.opts.push(opts);
         return site.upsert(body, opts);
       },
+      entryGetLayout: async (_c, entryId, variant) => {
+        site.bodies.push({ entryId, variant });
+        return site.layout(entryId, variant);
+      },
       mediaImport: async (_c, body, opts) => {
         site.bodies.push(body);
         site.opts.push(opts);
@@ -66,6 +70,7 @@ import {
   parseAiDraft,
   aiDraftPrompt,
   clearSiteInfoCache,
+  createDraftFromEntry,
   defaultBylines,
   actorFor,
 } from '../../../src/lib/cmsDrafts.js';
@@ -305,5 +310,60 @@ describe('AI writer helpers (AiUsageLog caps; markdown or approved blocks, never
     expect(p.json).toBe(true);
     expect(p.user).toContain('hot tub repair');
     expect(p.system).toMatch(/never HTML/);
+  });
+});
+
+describe('v1.5.1 edit an existing site page (entry-get includeLayout, layoutRead)', () => {
+  const caps = { ...PROJECT, cmsCapabilities: { ...PROJECT.cmsCapabilities, layoutRead: true } };
+  beforeEach(() => {
+    db.overrides['project.findUnique'] = async () => caps;
+    db.overrides['wpPage.findFirst'] = async () => ({ id: 'wp1', cmsEntryId: '01JAB4M9ZQ7X3K2V8N5T6R1W0C' });
+    db.overrides['contentMapNode.findFirst'] = async () => ({ id: 'n1', taskId: null });
+  });
+
+  it('round trip: the draft built from the read pushes back exactly what the contract helper produces', async () => {
+    const res = ex('entry-get.response--layout');
+    site.layout = () => res;
+    const d = await createDraftFromEntry({ projectId: 'p1', wpPageId: 'wp1', user: JANE });
+    const created = calls('cmsDraft.create')[0].args.data;
+    expect(created).toMatchObject({ cmsEntryId: '01JAB4M9ZQ7X3K2V8N5T6R1W0C', cmsRev: res.editable.rev, contentKind: 'layout', contentMapNodeId: 'n1' });
+    const { draftFromEntryGet } = await import('../../../src/lib/siteAdapters/push.js');
+    const want = draftFromEntryGet(res, { actor: { kind: 'human', osUserId: JANE.id, name: 'Jane PM', role: 'PM' } }).draft;
+    const ctx = pushContextFrom(ex('site-info.response'), JANE, caps);
+    const body = buildDraftUpsertBody({ ...d, layout: created.layout, excerpt: created.excerpt, seoTitle: null, seoDescription: null }, { user: JANE, ctx, collectionInfo: ctx.collections[0], slugPolicy: 'exact' });
+    expect(body.target).toEqual(want.target);
+    expect(body.layout).toEqual(want.layout);
+    expect(body.baseRev).toBe(want.baseRev);
+    expect(body.title).toBe(want.title);
+    // stored media references ({ id, ... } without src) pass the ported pre-check
+    expect(checkDraftBody(ex('site-info.response'), body, 'pages').errors.filter((e) => e.path.includes('image'))).toEqual([]);
+  });
+
+  it('posts come back as Portable Text and push back as portableText', async () => {
+    const res = ex('entry-get.response--layout-post');
+    site.layout = () => res;
+    await createDraftFromEntry({ projectId: 'p1', wpPageId: 'wp1', user: JANE });
+    const created = calls('cmsDraft.create')[0].args.data;
+    expect(created.contentKind).toBe('portableText');
+    const ctx = pushContextFrom(ex('site-info.response'), JANE, caps);
+    const body = buildDraftUpsertBody({ ...created, cmsEntryId: 'E', cmsRev: res.editable.rev }, { user: JANE, ctx, collectionInfo: ctx.collections[1], slugPolicy: 'exact' });
+    expect(body.portableText).toEqual(res.editable.portableText);
+    expect(body).not.toHaveProperty('layout');
+  });
+
+  it('too large → edit in the site admin; no capability → refused; live + pending draft → warning; invalid content → paths', async () => {
+    site.layout = () => ex('entry-get.response--layout-omitted');
+    await expect(createDraftFromEntry({ projectId: 'p1', wpPageId: 'wp1', user: JANE })).rejects.toMatchObject({ code: 'PAYLOAD_TOO_LARGE' });
+    db.overrides['project.findUnique'] = async () => PROJECT;
+    await expect(createDraftFromEntry({ projectId: 'p1', wpPageId: 'wp1', user: JANE })).rejects.toMatchObject({ code: 'NOT_IMPLEMENTED' });
+    db.overrides['project.findUnique'] = async () => caps;
+    const res = ex('entry-get.response--layout');
+    site.layout = () => ({ ...res, editable: { ...res.editable, variant: 'live', valid: false, errors: [{ path: '$.layout[0].lead', message: 'unknown field' }] } });
+    await createDraftFromEntry({ projectId: 'p1', wpPageId: 'wp1', user: JANE, variant: 'live' });
+    const created = calls('cmsDraft.create').at(-1).args.data;
+    expect(created.lastPushWarnings[0].code).toBe('REPLACES_PENDING_DRAFT');
+    expect(created.lastPushError).toMatchObject({ code: 'SCHEMA_INVALID', details: { errors: [{ path: '$.layout[0].lead' }] } });
+    expect(site.bodies.at(-1)).toEqual({ entryId: '01JAB4M9ZQ7X3K2V8N5T6R1W0C', variant: 'live' });
+    await expect(createDraftFromEntry({ projectId: 'p1', wpPageId: 'wp1', user: { id: 'c', role: 'CLIENT' } })).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 });

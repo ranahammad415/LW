@@ -9,6 +9,11 @@ export const MEDIA_LIMITS = Object.freeze({ itemsPerCall: 20, maxBytes: 1024 * 1
 /** v1.2.1: the OS waits this long for a media-import response. */
 export const MEDIA_IMPORT_TIMEOUT_MS = 30_000;
 export const MEDIA_TYPES = Object.freeze(['image/jpeg', 'image/png', 'image/webp', 'image/avif']);
+/**
+ * v1.5.1: entry-get `includeLayout` (capability layoutRead). The editable content comes back only while a draft-upsert
+ * carrying it fits the draft-upsert limits; otherwise `editable.omitted`. `maxErrors`: cap of `editable.errors`.
+ */
+export const LAYOUT_READ_LIMITS = Object.freeze({ maxBytes: 1536 * 1024, maxBlocks: 24, markdownChars: 200_000, maxErrors: 50 });
 /** draft-upsert body limits (§22.2). */
 export const DRAFT_LIMITS = Object.freeze({ maxBlocks: 24, markdownChars: 200_000, bodyBytes: 2 * 1024 * 1024, bylines: 10 });
 
@@ -52,7 +57,9 @@ function checkFields(fields, obj, path, errors, metaKeys) {
         if (typeof v !== 'number') errors.push({ code: 'SCHEMA_INVALID', path: p, message: 'must be a number' });
         break;
       case 'image':
-        if (typeof v !== 'object' || Array.isArray(v) || typeof v.src !== 'string') errors.push({ code: 'SCHEMA_INVALID', path: p, message: 'must be an image object { src, alt }' });
+        // v1.5.1: a stored EmDash media reference ({ id, provider, meta: { storageKey }, alt, ... }, no src) is valid
+        // too, so a layout read with entry-get includeLayout goes back through draft-upsert unchanged.
+        if (typeof v !== 'object' || Array.isArray(v) || (typeof v.src !== 'string' && typeof v.id !== 'string')) errors.push({ code: 'SCHEMA_INVALID', path: p, message: 'must be an image object { src, alt } or a media reference { id, alt }' });
         break;
       case 'portableText':
         if (!Array.isArray(v)) errors.push({ code: 'SCHEMA_INVALID', path: p, message: 'must be a Portable Text array' });
@@ -217,4 +224,32 @@ export function checkMediaItems(media, items) {
     if (bytes > limits.maxBytes) errors.push({ index, code: 'MEDIA_TOO_LARGE', message: `${bytes} > ${limits.maxBytes} bytes` });
   });
   return { ok: errors.length === 0, errors };
+}
+
+/**
+ * v1.5.1 (§27): turn an entry-get `includeLayout` response into the body of the draft-upsert that writes it back. The
+ * content (layout / portableText / body.markdown), title and excerpt are copied as read and `baseRev` is
+ * `editable.rev`, so pushing the result without edits changes nothing. Apply edits to the returned draft, then send it.
+ * Ported exactly from oasis-astro packages/os-bridge-contract/src/push.mjs (0d6cf61).
+ * @param {object} response  an entry-get response with `editable`
+ * @param {{ actor: object, [k: string]: unknown }} extra  draft-upsert fields to add (actor is required; e.g. seo, reviewAfter)
+ * @returns {{ ok: boolean, draft?: object, errors: Array<{ code: string, path: string, message: string }> }}
+ */
+export function draftFromEntryGet(response, extra = {}) {
+  const e = response?.editable;
+  const fail = (code, path, message) => ({ ok: false, errors: [{ code, path, message }] });
+  if (!e || typeof e !== 'object') return fail('VALIDATION', '$.editable', 'no editable content: send entry-get with includeLayout: true (capability layoutRead)');
+  if (e.omitted) return fail('PAYLOAD_TOO_LARGE', '$.editable.omitted', `content not returned (${e.omitted.reason}, limit ${e.omitted.limit}); edit this entry in the EmDash admin`);
+  const entryId = response.entry?.entryId;
+  if (!entryId) return fail('VALIDATION', '$.entry.entryId', 'entry.entryId is missing');
+  const content = e.format === 'layout' ? { layout: structuredClone(e.layout) } : e.format === 'portableText' ? { portableText: structuredClone(e.portableText) } : { body: { markdown: e.body?.markdown } };
+  const draft = {
+    target: { entryId },
+    title: e.title,
+    ...content,
+    ...(e.excerpt !== undefined && e.excerpt !== null ? { excerpt: e.excerpt } : {}),
+    baseRev: e.rev,
+    ...extra,
+  };
+  return { ok: true, draft, errors: [] };
 }

@@ -283,6 +283,8 @@ export const emdashRoutes = {
   entryGet: (conn, entryId, variant = 'draft', opts) => siteRequest(conn, 'entry-get', { entryId, variant }, opts),
   /** v1.1.0 §21.3: text values of every block field + entry-level fields (OS portal content view). */
   entryGetFields: (conn, entryId, variant = 'draft', opts) => siteRequest(conn, 'entry-get', { entryId, variant, includeFields: true }, opts),
+  /** v1.5.1 §27 (capability layoutRead): the stored content as draft-upsert accepts it + rev (lossless round trip). */
+  entryGetLayout: (conn, entryId, variant = 'draft', opts) => siteRequest(conn, 'entry-get', { entryId, variant, includeLayout: true }, opts),
   pipelineList: (conn, q = {}, opts) => siteRequest(conn, 'pipeline-list', compact({ status: 'any', limit: 100, ...q }), opts),
   pipelineGet: (conn, ref, opts) =>
     siteRequest(conn, 'pipeline-get', ref.reviewId ? { reviewId: ref.reviewId } : { entryId: ref.entryId }, opts),
@@ -341,6 +343,11 @@ export function hasPreviewLinks(project) {
 export function hasDraftPushFromOs(project) {
   const caps = project?.cmsCapabilities && typeof project.cmsCapabilities === 'object' ? project.cmsCapabilities : {};
   return caps.draftPushFromOs === true;
+}
+/** v1.5.1: the site returns editable layouts (entry-get includeLayout). Never inferred from contractRevision. */
+export function hasLayoutRead(project) {
+  const caps = project?.cmsCapabilities && typeof project.cmsCapabilities === 'object' ? project.cmsCapabilities : {};
+  return caps.layoutRead === true;
 }
 export function hasMediaImport(project) {
   const caps = project?.cmsCapabilities && typeof project.cmsCapabilities === 'object' ? project.cmsCapabilities : {};

@@ -32,6 +32,12 @@ describe('checkLayout (blocks.mjs)', () => {
     expect(checkLayout([{ _type: 'page_hero', _version: v, heading: 'H' }], blockSchemas).ok).toBe(true);
     expect(checkLayout([{ _type: 'page_hero', _version: v + 1, heading: 'H' }], blockSchemas).errors.map((e) => [e.code, e.path])).toEqual([['SCHEMA_INVALID', '$.layout[0]._version']]);
   });
+  it('v1.5.1: stored media references ({ id, alt } without src) are valid images; neither id nor src is not', () => {
+    expect(checkLayout([{ _type: 'page_hero', heading: 'H', image: { id: 'M1', provider: 'local', alt: 'x', meta: { storageKey: 'M1.webp' } } }], blockSchemas).ok).toBe(true);
+    expect(checkLayout([{ _type: 'page_hero', heading: 'H', image: { alt: 'x' } }], blockSchemas).errors[0].message).toMatch(/media reference/);
+    expect(checkLayout(ex('entry-get.response--layout').editable.layout, blockSchemas).errors).toEqual([]);
+  });
+
   it('unknown block, maxLength, select options, repeater limits', () => {
     const r = checkLayout(
       [

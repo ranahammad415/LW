@@ -23,6 +23,7 @@ import {
   aiDraftPrompt,
   parseAiDraft,
   pushErrorMessage,
+  createDraftFromEntry,
 } from '../../lib/cmsDrafts.js';
 
 async function requireStaff(request, reply) {
@@ -69,10 +70,11 @@ function sanitizeEdit(body) {
         data.parent = v ? String(v).slice(0, 100) : null;
         break;
       case 'contentKind':
-        data.contentKind = v === 'markdown' ? 'markdown' : 'layout';
+        data.contentKind = v === 'markdown' ? 'markdown' : v === 'portableText' ? 'portableText' : 'layout';
         break;
       case 'layout':
-        data.layout = Array.isArray(v) ? v.slice(0, 24) : null;
+        // Blocks (≤ 24) or, for contentKind portableText, the Portable Text array (not block-capped).
+        data.layout = Array.isArray(v) ? (body.contentKind === 'portableText' ? v.slice(0, 5000) : v.slice(0, 24)) : null;
         break;
       case 'markdown':
         data.markdown = v == null ? null : String(v).slice(0, 200_000);
@@ -193,6 +195,22 @@ export async function pmCmsDraftRoutes(app) {
         data: { projectId: project.id, ...link, ...data, createdById: request.user.id, updatedById: request.user.id },
       });
       return reply.status(201).send(formatDraft(d, { canWrite: true }));
+    } catch (err) {
+      return sendError(reply, err, request.log);
+    }
+  });
+
+  // v1.5.1: open an existing site page for editing (layoutRead); returns the OS draft.
+  app.post('/projects/:projectId/cms-drafts/from-entry', staff, async (request, reply) => {
+    try {
+      const d = await createDraftFromEntry({
+        projectId: request.params.projectId,
+        wpPageId: request.body?.wpPageId,
+        variant: request.body?.variant === 'live' ? 'live' : 'draft',
+        user: request.user,
+        log: request.log,
+      });
+      return reply.send(formatDraft(d, { canWrite: true }));
     } catch (err) {
       return sendError(reply, err, request.log);
     }
