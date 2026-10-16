@@ -17,7 +17,7 @@ import crypto from 'node:crypto';
 export const CONTRACT_NAME = 'agency-os-bridge';
 export const CONTRACT_VERSION = 1;
 /** Errata level implemented by this OS (informational; X-AOS-Contract stays 1). */
-export const CONTRACT_REVISION = '1.1.0';
+export const CONTRACT_REVISION = '1.2.1';
 export const SUPPORTED_CONTRACTS = Object.freeze([1]);
 export const PLUGIN_ID = 'agency-os-bridge';
 export const SITE_ROUTE_PREFIX = '/_emdash/api/plugins/agency-os-bridge/';
@@ -372,17 +372,27 @@ export const ERROR_CODES = Object.freeze({
   SLUG_MISMATCH: { status: 409, retryable: false },
   SLUG_CHANGE_FORBIDDEN: { status: 409, retryable: false },
   ALREADY_EXISTS: { status: 409, retryable: false },
+  /** v1.2.0 §22 draft push (slug, parent, bylines, locked SEO contract, editor lock). */
+  SLUG_TAKEN: { status: 409, retryable: false },
+  CONTRACT_LOCKED: { status: 409, retryable: false },
+  /** v1.2.1 §23(7): never auto-retried; details.lockedUntil (+ lockedBy when allowed). */
+  ENTRY_LOCKED: { status: 409, retryable: false },
   PAYLOAD_TOO_LARGE: { status: 413, retryable: false },
   /** v1.1.0 §21.2: more than 200 client suggestions on one review (all rounds). */
   SUGGESTION_LIMIT: { status: 422, retryable: false },
   UNKNOWN_BLOCK: { status: 422, retryable: false },
   SCHEMA_INVALID: { status: 422, retryable: false },
-  PUBLISH_BLOCKED: { status: 422, retryable: false },
+  PARENT_NOT_FOUND: { status: 422, retryable: false },
+  BYLINE_NOT_ALLOWED: { status: 422, retryable: false },
+  /** v1.3.0 §24: 409 (was 422 in v1). */
+  PUBLISH_BLOCKED: { status: 409, retryable: false },
   CONTRACT_UNSUPPORTED: { status: 426, retryable: false },
   RATE_LIMITED: { status: 429, retryable: true },
   INTERNAL: { status: 500, retryable: true },
   NOT_IMPLEMENTED: { status: 501, retryable: false },
   NOT_PAIRED: { status: 503, retryable: true },
+  /** v1.2.0 §22.1: the site's service token is missing or rejected (site admin action). */
+  SERVICE_TOKEN_UNAVAILABLE: { status: 503, retryable: false },
   UPSTREAM_UNAVAILABLE: { status: 503, retryable: true },
 });
 
