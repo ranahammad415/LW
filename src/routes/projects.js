@@ -684,15 +684,14 @@ export async function projectRoutes(app) {
         });
       }
 
-      const sentWpApiKey =
-        data.wpApiKey !== undefined && updated.wpApiKey != null ? updated.wpApiKey : undefined;
+      // e2e O21: never echo the plugin API key (the caller generated it and already has it).
       return reply.send({
         id: updated.id,
         name: updated.name,
         projectType: updated.projectType,
         status: updated.status,
         wpUrl: updated.wpUrl,
-        wpApiKey: sentWpApiKey !== undefined ? sentWpApiKey : (updated.wpApiKey != null ? '[REDACTED]' : null),
+        wpApiKey: updated.wpApiKey != null ? '[REDACTED]' : null,
         cmsType: updated.cmsType,
       });
     }
