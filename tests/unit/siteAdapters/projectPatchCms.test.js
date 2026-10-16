@@ -85,4 +85,20 @@ describe('PATCH /api/projects/:id (CMS rules)', () => {
     db.overrides['wpPage.count'] = async () => 1;
     expect((await patch({ cmsType: 'WORDPRESS' })).statusCode).toBe(409);
   });
+
+  it('e2e O21: the response never echoes the plugin API key (also right after setting it)', async () => {
+    db.overrides['project.findUnique'] = proj({ wpUrl: 'https://old.example' });
+    const key = '0f1e2d3c-4b5a-4968-8776-655443322110';
+    const r = await patch({ wpApiKey: key });
+    expect(r.statusCode).toBe(200);
+    expect(r.json().wpApiKey).toBe('[REDACTED]');
+    expect(r.body).not.toContain(key);
+    expect(calls().find((c) => c.key === 'project.update').args.data.wpApiKey).toBe(key); // stored, just not echoed
+    const cleared = await patch({ wpApiKey: null });
+    expect(cleared.json().wpApiKey).toBeNull();
+  });
 });
+
+function calls() {
+  return db.calls;
+}
