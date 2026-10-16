@@ -76,6 +76,7 @@ import {
   hasHtmlTag,
   draftEditMarkers,
   PUSH_CLAIM_STALE_MS,
+  draftAccess,
 } from '../../../src/lib/cmsDrafts.js';
 import { CmsBridgeError } from '../../../src/lib/siteAdapters/emdash.js';
 import { probeImage } from '../../../src/lib/imageProbe.js';
@@ -461,5 +462,35 @@ describe('review fixes: bylines on updates, push claim, markdown HTML, unpushed 
     db.overrides['cmsDraft.findFirst'] = async () => ({ id: 'd9', cmsEditedAt: null, updatedById: OWNER.id });
     await createDraftFromEntry({ projectId: 'p1', wpPageId: 'wp1', user: JANE });
     expect(site.bodies.filter((b) => b.variant)).toHaveLength(2);
+  });
+});
+
+describe('e2e O1: one draft-access helper (whoever may push may read; ensureProjectAccess unchanged)', () => {
+  const TM = { id: 'tm1', name: 'Team', role: 'TEAM_MEMBER' };
+  const DRAFT_ROW = { id: 'd1', projectId: 'p1', contentMapNodeId: 'n1', taskId: null };
+
+  it('a node-only assignee (no task) reads and writes that node’s drafts, its push context and media; nothing else', async () => {
+    db.overrides['task.count'] = async () => 0; // no task in the project → ensureProjectAccess false
+    db.overrides['contentMapNode.findFirst'] = async (args) => (args.where.id === 'n1' ? { assigneeId: 'tm1', taskId: null } : { assigneeId: 'someone', taskId: null });
+    db.overrides['contentMapNode.count'] = async (args) => (args.where.assigneeId === 'tm1' ? 1 : 0);
+    expect(await draftAccess(TM, PROJECT, 'draft', DRAFT_ROW)).toEqual({ read: true, write: true });
+    expect(await draftAccess(TM, PROJECT, 'draft', { ...DRAFT_ROW, contentMapNodeId: 'n2' })).toEqual({ read: false, write: false });
+    expect(await draftAccess(TM, PROJECT, 'list', { contentMapNodeId: 'n1' })).toEqual({ read: true, write: true });
+    expect((await draftAccess(TM, PROJECT, 'list', {})).read).toBe(false); // never the project's whole draft list
+    expect(await draftAccess(TM, PROJECT, 'tools')).toEqual({ read: true, write: true });
+    expect(await draftAccess({ id: 'tm2', role: 'TEAM_MEMBER' }, PROJECT, 'tools')).toEqual({ read: false, write: false });
+    expect(await draftAccess({ id: 'c', role: 'CLIENT' }, PROJECT, 'tools')).toEqual({ read: false, write: false });
+  });
+
+  it('a PM who is not the lead PM may read (client PM) but never write or push; an unrelated PM gets nothing', async () => {
+    const SECOND = { id: 'pm-2', name: 'Second PM', role: 'PM' };
+    db.overrides['clientAccount.findUnique'] = async () => ({ leadPmId: JANE.id, secondaryPmId: 'pm-2' });
+    expect(await draftAccess(SECOND, PROJECT, 'draft', DRAFT_ROW)).toEqual({ read: true, write: false });
+    expect(await draftAccess({ id: 'pm-x', role: 'PM' }, PROJECT, 'draft', DRAFT_ROW)).toEqual({ read: false, write: false });
+    expect(await draftAccess(JANE, PROJECT, 'draft', DRAFT_ROW)).toEqual({ read: true, write: true });
+    db.overrides['cmsDraft.findUnique'] = async () => ({ ...DRAFT_ROW, collection: 'pages', title: 'T', contentKind: 'layout', layout: [] });
+    await expect(pushDraft({ draftId: 'd1', user: SECOND })).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
+    expect(site.bodies).toHaveLength(0);
+    expect(calls('cmsDraft.updateMany')).toHaveLength(0); // refused before the push claim
   });
 });

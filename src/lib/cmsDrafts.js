@@ -20,6 +20,7 @@ import {
 import { prepareDraftPush, checkMediaItems, checkLayout, draftFromEntryGet, MEDIA_LIMITS, MEDIA_TYPES, DRAFT_LIMITS } from './siteAdapters/push.js';
 import { probeImage } from './imageProbe.js';
 import { guardedFetch } from './siteAdapters/netGuard.js';
+import { ensureProjectAccess } from './ensureProjectAccess.js';
 
 export const DRAFT_STAFF_ROLES = Object.freeze(['OWNER', 'PM', 'TEAM_MEMBER', 'CONTRACTOR']);
 const INTERACTIVE = { retryDelays: INTERACTIVE_RETRY_DELAYS_MS, timeoutMs: 20_000 };
@@ -90,6 +91,30 @@ export async function canWriteDraft(user, project, link = {}) {
     if (n > 0) return true;
   }
   return false;
+}
+
+/**
+ * Draft access (e2e O1), the ONE helper for every draft route. Whoever may write a draft may also read it:
+ * - `draft`  (a draft row or a link { contentMapNodeId, taskId }): project access (ensureProjectAccess) or canWriteDraft;
+ * - `list`   (drafts of one node / task): project access, or a writer of that node / task (only its drafts);
+ * - `tools`  (push context, media upload; project-level): project access, or a TEAM_MEMBER / CONTRACTOR assigned to a
+ *   content-map node of the project (canWriteDraft accepts them for that node's drafts).
+ * ensureProjectAccess itself is unchanged (it still needs a task assignment for team members and contractors).
+ * Returns { read, write }.
+ */
+export async function draftAccess(user, project, scope, target = {}) {
+  if (!user || !DRAFT_STAFF_ROLES.includes(user.role) || !project) return { read: false, write: false };
+  const projectAccess = await ensureProjectAccess(project, user);
+  if (scope === 'tools') {
+    if (projectAccess) return { read: true, write: true };
+    if (user.role !== 'TEAM_MEMBER' && user.role !== 'CONTRACTOR') return { read: false, write: false };
+    const n = await prisma.contentMapNode.count({ where: { assigneeId: user.id, map: { projectId: project.id } } });
+    return { read: n > 0, write: n > 0 };
+  }
+  const link = { contentMapNodeId: target.contentMapNodeId || null, taskId: target.taskId || null };
+  if (scope === 'list' && !projectAccess && !link.contentMapNodeId && !link.taskId) return { read: false, write: false };
+  const write = await canWriteDraft(user, project, link);
+  return { read: projectAccess || write, write };
 }
 
 /** Validate that the node / task belongs to the project. */

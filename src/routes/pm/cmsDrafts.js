@@ -3,7 +3,6 @@
  * CONTRACTOR); clients never reach these routes. See lib/cmsDrafts.js for the rules.
  */
 import { prisma } from '../../lib/prisma.js';
-import { ensureProjectAccess } from '../../lib/ensureProjectAccess.js';
 import { generateChat, isAiConfigured } from '../../lib/ai.js';
 import { CmsBridgeError } from '../../lib/siteAdapters/emdash.js';
 import {
@@ -24,6 +23,7 @@ import {
   parseAiDraft,
   pushErrorMessage,
   createDraftFromEntry,
+  draftAccess,
   draftEditMarkers,
 } from '../../lib/cmsDrafts.js';
 
@@ -142,11 +142,12 @@ async function loadDraftFor(request, reply, draftId) {
     return null;
   }
   const project = await loadDraftProject(draft.projectId);
-  if (!(await ensureProjectAccess(project, request.user))) {
+  const access = await draftAccess(request.user, project, 'draft', draft);
+  if (!access.read) {
     reply.status(403).send({ message: 'Access denied' });
     return null;
   }
-  return { draft, project, canWrite: await canWriteDraft(request.user, project, draft) };
+  return { draft, project, canWrite: access.write };
 }
 
 export async function pmCmsDraftRoutes(app) {
@@ -156,7 +157,7 @@ export async function pmCmsDraftRoutes(app) {
   app.get('/projects/:projectId/cms-push-context', staff, async (request, reply) => {
     try {
       const project = await loadDraftProject(request.params.projectId);
-      if (!(await ensureProjectAccess(project, request.user))) return reply.status(403).send({ message: 'Access denied' });
+      if (!(await draftAccess(request.user, project, 'tools')).read) return reply.status(403).send({ message: 'Access denied' });
       const info = await loadSiteInfo(project.id, { fresh: request.query?.fresh === '1' });
       return reply.send(pushContextFrom(info, request.user, project));
     } catch (err) {
@@ -167,8 +168,8 @@ export async function pmCmsDraftRoutes(app) {
   app.get('/projects/:projectId/cms-drafts', staff, async (request, reply) => {
     try {
       const project = await loadDraftProject(request.params.projectId);
-      if (!(await ensureProjectAccess(project, request.user))) return reply.status(403).send({ message: 'Access denied' });
       const { nodeId, taskId } = request.query || {};
+      if (!(await draftAccess(request.user, project, 'list', { contentMapNodeId: nodeId, taskId })).read) return reply.status(403).send({ message: 'Access denied' });
       const rows = await prisma.cmsDraft.findMany({
         where: { projectId: project.id, ...(nodeId ? { contentMapNodeId: String(nodeId) } : {}), ...(taskId ? { taskId: String(taskId) } : {}) },
         orderBy: { updatedAt: 'desc' },
@@ -308,7 +309,7 @@ export async function pmCmsDraftRoutes(app) {
   app.post('/projects/:projectId/cms-media', staff, async (request, reply) => {
     try {
       const project = await loadDraftProject(request.params.projectId);
-      if (!(await ensureProjectAccess(project, request.user))) return reply.status(403).send({ message: 'Access denied' });
+      if (!(await draftAccess(request.user, project, 'tools')).write) return reply.status(403).send({ message: 'Access denied' });
       let buffer;
       let filename;
       let alt;
