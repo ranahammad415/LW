@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/profiles-list.request.json",
+  "title": "profiles-list (v1.4.0)",
+  "description": "",
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string",
+      "maxLength": 32
+    },
+    "since": {
+      "$ref": "common.json#/$defs/dateTime"
+    },
+    "cursor": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 512
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100
+    }
+  },
+  "required": []
+}

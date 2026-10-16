@@ -1,0 +1,12 @@
+{
+  "ok": false,
+  "error": {
+    "code": "ENTRY_LOCKED",
+    "message": "Site editor is editing this page until 12:30",
+    "retryable": false,
+    "details": {
+      "lockedBy": "Site editor",
+      "lockedUntil": "2026-10-16T12:30:00Z"
+    }
+  }
+}

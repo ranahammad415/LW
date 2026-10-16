@@ -1,0 +1,63 @@
+{
+  "target": {
+    "collection": "pages",
+    "slug": "hot-tub-heater-repair",
+    "parent": "spa-services"
+  },
+  "slugPolicy": "exact",
+  "title": "Hot Tub Heater Repair",
+  "layout": [
+    {
+      "_type": "page_hero",
+      "_key": "page_hero_a1",
+      "_version": 1,
+      "heading": "Hot Tub Heater Repair",
+      "intro": "Spa not heating? We test the element, high-limit and flow switch on the first visit.",
+      "image": {
+        "id": "01JAF0MEDIA000000000000001",
+        "src": "/_emdash/api/media/file/01JAF0MEDIA000000000000001.webp",
+        "alt": "Technician testing a hot tub heater element"
+      }
+    },
+    {
+      "_type": "faq",
+      "_key": "faq_b2",
+      "heading": "Heater questions",
+      "items": [
+        {
+          "question": "Why does my hot tub heater trip the breaker?",
+          "answer": "Usually a shorted element or moisture in the heater housing."
+        }
+      ]
+    },
+    {
+      "_type": "related_links",
+      "_key": "related_links_c3",
+      "heading": "Related services",
+      "links": [
+        {
+          "label": "Spa services",
+          "url": "/spa-services/"
+        }
+      ]
+    }
+  ],
+  "seo": {
+    "title": "Hot Tub Heater Repair | Oasis Pool and Spa",
+    "description": "Hot tub not heating? Oasis tests and replaces spa heater elements, high-limit and flow switches across Waukesha and Milwaukee."
+  },
+  "actor": {
+    "kind": "human",
+    "osUserId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90",
+    "name": "Jane PM",
+    "role": "PM"
+  },
+  "reviewAfter": {
+    "pm": {
+      "memberId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90",
+      "name": "Jane PM"
+    },
+    "note": "From the content map (P27)",
+    "contentType": "service_page"
+  }
+}

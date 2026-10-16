@@ -1,10 +1,30 @@
 {
   "items": [
     {
-      "url": "https://old.oasispoolspas.com/wp-content/uploads/2024/05/heater.jpg",
-      "alt": "Spa heater element",
-      "filename": "heater.jpg"
+      "url": "https://old.oasispoolspas.com/wp-content/uploads/2024/05/heater.webp",
+      "alt": "Technician testing a hot tub heater element",
+      "filename": "hot-tub-heater.webp",
+      "sha256": "4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c"
+    },
+    {
+      "url": "https://old.oasispoolspas.com/wp-content/uploads/2024/05/cover.jpg",
+      "alt": "Insulated spa cover on a hot tub"
+    },
+    {
+      "url": "https://account.localwaves.ai/uploads/cms-staging/7f3a9c1e5b2d4f6a8c0e1b3d5f7a9c1e.webp",
+      "alt": "Pool equipment pad after a filter rebuild",
+      "sha256": "9a8b7c6d5e4f30211a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7081"
+    },
+    {
+      "url": "https://cdn.unknown.example/x.jpg",
+      "alt": "Pool at dusk"
     }
   ],
-  "dedupe": true
+  "dedupe": true,
+  "actor": {
+    "kind": "human",
+    "osUserId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90",
+    "name": "Jane PM",
+    "role": "PM"
+  }
 }

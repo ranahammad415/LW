@@ -1,0 +1,25 @@
+{
+  "ok": true,
+  "items": [
+    {
+      "source": "/spa-services/installation-repair/",
+      "destination": "/spa-services/hot-tub-repair/",
+      "type": 301,
+      "origin": "change-url",
+      "state": "active",
+      "page_id": "P12",
+      "created_at": "2026-10-12T10:00:00Z",
+      "updated_at": "2026-10-12T10:00:00Z"
+    },
+    {
+      "source": "/old-promo/",
+      "destination": null,
+      "type": 410,
+      "origin": "migration",
+      "state": "active",
+      "page_id": null,
+      "created_at": "2026-10-10T08:00:00Z"
+    }
+  ],
+  "next": null
+}

@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/redirect-ledger.response.json",
+  "title": "redirect-ledger response (v1.5.0)",
+  "description": "",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "$ref": "common.json#/$defs/path"
+          },
+          "destination": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": {
+            "enum": [
+              301,
+              302,
+              410
+            ]
+          },
+          "origin": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "state": {
+            "enum": [
+              "active",
+              "proposed",
+              "retired"
+            ]
+          },
+          "page_id": {
+            "anyOf": [
+              {
+                "$ref": "common.json#/$defs/pageId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "$ref": "common.json#/$defs/dateTime"
+          },
+          "updated_at": {
+            "$ref": "common.json#/$defs/dateTime"
+          }
+        },
+        "required": [
+          "source",
+          "type",
+          "state",
+          "created_at"
+        ]
+      }
+    },
+    "next": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 512
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "ok",
+    "items",
+    "next"
+  ]
+}

@@ -23,5 +23,19 @@
     "inbound": "aosk1_nhndr7r5XtNWMQ2BhoZ2EW7iJ3qNn1E066pDPzr8qY8",
     "outbound": "aosk1_GDQ4q-wSeXXmi1409VYnN1mxOGhkrxuRJYDWtE0VhMw"
   },
-  "contractRevision": "1.0.1"
+  "contractRevision": "1.0.1",
+  "team": [
+    {
+      "memberId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90",
+      "name": "Jane PM"
+    },
+    {
+      "memberId": "c9f0f895-fb98-4b91-a5b3-0e1d2c3b4a59",
+      "name": "Sam Worker"
+    },
+    {
+      "memberId": "3b0d9a1e-6c2f-4d8a-9e57-0f1a2b3c4d5e",
+      "name": "Agency Owner"
+    }
+  ]
 }

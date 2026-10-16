@@ -104,12 +104,55 @@
       "anyOf": [
         {
           "$ref": "common.json#/$defs/id",
-          "description": "The rev from the last draft-upsert/entry-get; mismatch -> 409 CONFLICT_REV"
+          "description": "The rev from the last draft-upsert/entry-get; mismatch -> 409 CONFLICT_REV. v1.2.0: REQUIRED on updates of existing entries"
         },
         {
           "type": "null"
         }
       ]
+    },
+    "slug": {
+      "$ref": "common.json#/$defs/slug",
+      "description": "v1.2.0, updates only: new slug for a NEVER-PUBLISHED entry (live entry -> 409 SLUG_CHANGE_FORBIDDEN)"
+    },
+    "parent": {
+      "anyOf": [
+        {
+          "$ref": "common.json#/$defs/id",
+          "description": "v1.2.0, updates only: new parent section for a never-published entry"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "slugPolicy": {
+      "enum": [
+        "exact",
+        "best-effort"
+      ],
+      "description": "v1.2.0: exact (default with draftPushFromOs) = fail with SLUG_TAKEN/SERVICE_TOKEN_UNAVAILABLE rather than create another slug; best-effort = v1 behaviour (SLUG_MISMATCH warning)"
+    },
+    "bylines": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/slug"
+      },
+      "maxItems": 10,
+      "uniqueItems": true,
+      "description": "v1.2.0: byline slugs from site-info.bylines, in display order"
+    },
+    "taxonomies": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "$ref": "common.json#/$defs/slug"
+        },
+        "maxItems": 50,
+        "uniqueItems": true
+      },
+      "description": "v1.2.0: { taxonomyName: [termSlug] } from site-info.taxonomies; replaces the entry's terms for the named taxonomies only"
     },
     "actor": {
       "$ref": "common.json#/$defs/osActor"

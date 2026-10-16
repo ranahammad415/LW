@@ -1,0 +1,51 @@
+{
+  "ok": true,
+  "migratedFrom": {
+    "cms": "wordpress",
+    "siteUrl": "https://old.oasispoolspas.com",
+    "migratedAt": "2026-10-10T08:00:00Z",
+    "mapEntries": 64,
+    "wpPluginKeyHint": "9c1f"
+  },
+  "items": [
+    {
+      "wp_post_id": 118,
+      "wp_post_type": "page",
+      "old_url": "https://old.oasispoolspas.com/hot-tub-repair/",
+      "status": "migrated",
+      "entry_id": "01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+      "entry_no": 118,
+      "collection": "pages",
+      "new_path": "/spa-services/hot-tub-repair/",
+      "redirect_type": 301
+    },
+    {
+      "wp_post_id": 204,
+      "wp_post_type": "post",
+      "old_url": "https://old.oasispoolspas.com/2023/winter-tips/",
+      "status": "redirected",
+      "entry_id": null,
+      "entry_no": null,
+      "collection": null,
+      "new_path": "/blog/winterize-hot-tub/",
+      "redirect_type": 301
+    },
+    {
+      "wp_post_id": 311,
+      "wp_post_type": "page",
+      "old_url": "https://old.oasispoolspas.com/old-promo/",
+      "status": "dropped",
+      "entry_id": null,
+      "entry_no": null,
+      "collection": null,
+      "new_path": null,
+      "redirect_type": 410
+    }
+  ],
+  "next": null,
+  "summary": {
+    "migrated": 1,
+    "redirected": 1,
+    "dropped": 1
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/misses-summary.request.json",
+  "title": "misses-summary (v1.5.0)",
+  "description": "Top 404s over the last N days.",
+  "type": "object",
+  "properties": {
+    "days": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 90
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100
+    }
+  },
+  "required": []
+}

@@ -1,0 +1,198 @@
+{
+  "ok": true,
+  "profile": {
+    "page_id": "P12",
+    "target": "pages:hot-tub-repair",
+    "entry_id": "01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+    "collection": "pages",
+    "path": "/spa-services/hot-tub-repair/",
+    "status": "in-review",
+    "primary_keyword": "hot tub repair",
+    "contract": {
+      "version": 3,
+      "locked": true,
+      "locked_on": "2026-10-20T14:02:00Z",
+      "locked_by": "Site editor",
+      "fingerprint": "c3a1"
+    },
+    "checks": {
+      "block": 0,
+      "warn": 2,
+      "info": 1,
+      "ran_at": "2026-10-20T14:05:00Z",
+      "variant": "draft"
+    },
+    "facts": {
+      "requested": 1,
+      "placeholder": 0,
+      "confirmed": 4
+    },
+    "open_proposals": 1,
+    "next_review_on": "2027-05-15",
+    "updated_at": "2026-10-20T14:05:00Z",
+    "profile_hash": "aa4058ea549d0e6e0d18dc8e6bec2fe917a5ed74ff4d8e9cdfb4892ae968eeee",
+    "page_type": "service",
+    "cluster": "hot-tub",
+    "locality": null,
+    "parent_page_id": "P03",
+    "working_title": "Hot Tub Repair for Most Brands",
+    "targeting": {
+      "primary_keyword": "hot tub repair",
+      "owner_key": "hot tub repair|",
+      "intent": "commercial",
+      "secondary_keywords": [
+        {
+          "term": "spa repair near me"
+        }
+      ],
+      "avoid_terms": [
+        {
+          "term": "hot tub installation",
+          "scope": "title-h1"
+        }
+      ],
+      "target_words": {
+        "min": 700,
+        "max": 1000
+      }
+    },
+    "contract_body": {
+      "title": "Hot Tub Repair in Waukesha & Milwaukee | Oasis Pool and Spa",
+      "h1": "Hot Tub Repair for Most Brands",
+      "meta": "Hot tub not heating or tripping the breaker? Oasis diagnoses and repairs most spa brands across Waukesha and Milwaukee. Call for a quote.",
+      "answer_first_lead": true,
+      "required_blocks": [
+        {
+          "block_type": "page_hero",
+          "position": "first"
+        },
+        {
+          "block_type": "faq",
+          "min_items": 5
+        },
+        {
+          "block_type": "related_links",
+          "position": "last"
+        }
+      ],
+      "locked_faq_questions": [
+        "Why is my hot tub not heating?"
+      ],
+      "required_links_out": [
+        {
+          "path": "/spa-services/"
+        }
+      ],
+      "schema_types": [
+        "WebPage",
+        "Service",
+        "BreadcrumbList",
+        "FAQPage"
+      ],
+      "allowed_prices": "call-for-quote"
+    },
+    "aeo": {
+      "answer_targets": [
+        {
+          "id": "q1",
+          "question": "Why is my hot tub not heating?",
+          "placement": "faq",
+          "wording_locked": true
+        }
+      ]
+    },
+    "facts_used": [
+      {
+        "fact_key": "client.b13",
+        "status": "requested"
+      },
+      {
+        "fact_key": "business.phone",
+        "status": "confirmed"
+      }
+    ],
+    "links": {
+      "out": [
+        {
+          "page_id": "P03",
+          "required": true
+        }
+      ]
+    },
+    "lifecycle": {
+      "status": "in-review",
+      "publish_by": "2026-11-15",
+      "next_review_on": "2027-05-15"
+    },
+    "research": {
+      "brief_id": "P12",
+      "note": "OS content map v7"
+    },
+    "brief": {
+      "hash": "ecdf5196dd16490d0297511f92f3084aa47771a240549f00573ebd47f566f38a",
+      "imported_on": "2026-10-16T08:00:00Z",
+      "bytes": 4210
+    },
+    "last_check": {
+      "summary": {
+        "block": 0,
+        "warn": 2,
+        "info": 1
+      },
+      "failed": [
+        {
+          "id": "kw.primary-lead",
+          "severity": "warn",
+          "message": "Primary keyword not in the first 100 words"
+        }
+      ]
+    },
+    "proposals": [
+      {
+        "proposal_id": "01JAH0PROP00000000000000001",
+        "page_id": "P12",
+        "state": "open",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/contract/meta",
+            "value": "Hot tub not heating? Oasis repairs most spa brands in Waukesha and Milwaukee. Same-week visits; call for a quote."
+          }
+        ],
+        "reason": "Client wants 'same-week visits' in the meta; still under 158 characters.",
+        "source": "os",
+        "created_by": {
+          "kind": "human",
+          "name": "Jane PM",
+          "osUserId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90",
+          "role": "PM",
+          "source": "os"
+        },
+        "created_at": "2026-10-21T09:00:00Z",
+        "decided_by": null,
+        "decided_at": null,
+        "decision_note": null
+      }
+    ],
+    "changes": [
+      {
+        "at": "2026-10-20T14:02:00Z",
+        "action": "contract.lock",
+        "actor": {
+          "kind": "human",
+          "name": "Site editor"
+        },
+        "summary": "Locked contract v3"
+      }
+    ],
+    "redirects": {
+      "active": 1,
+      "last_changed_at": "2026-10-12T10:00:00Z"
+    },
+    "site_health": {
+      "last_crawl_at": "2026-11-01T03:00:00Z",
+      "must_fix": 0,
+      "should_fix": 2
+    }
+  }
+}

@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/crawl-latest.response.json",
+  "title": "crawl-latest response (v1.5.0)",
+  "description": "report is null when no crawl has run yet. Running a crawl stays an EmDash admin action.",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
+    "report": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "ran_at": {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            "trigger": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "pages": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "must_fix": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "should_fix": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "severity": {
+                    "enum": [
+                      "block",
+                      "warn",
+                      "info"
+                    ]
+                  },
+                  "kind": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "url": {
+                    "type": "string",
+                    "maxLength": 2048
+                  },
+                  "detail": {
+                    "type": "string",
+                    "maxLength": 500
+                  },
+                  "fix": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 500
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "severity",
+                  "kind",
+                  "url"
+                ]
+              },
+              "maxItems": 200
+            }
+          },
+          "required": [
+            "id",
+            "ran_at",
+            "pages",
+            "must_fix",
+            "should_fix",
+            "items"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "ok",
+    "report"
+  ]
+}

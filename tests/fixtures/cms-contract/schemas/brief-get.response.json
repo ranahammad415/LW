@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/brief-get.response.json",
+  "title": "brief-get response (v1.4.0)",
+  "description": "",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
+    "brief": {
+      "type": "object",
+      "properties": {
+        "page_id": {
+          "$ref": "common.json#/$defs/pageId"
+        },
+        "markdown": {
+          "type": "string",
+          "maxLength": 65536
+        },
+        "front_matter": {
+          "type": "object"
+        },
+        "hash": {
+          "$ref": "common.json#/$defs/sha256"
+        },
+        "imported_on": {
+          "$ref": "common.json#/$defs/dateTime"
+        }
+      },
+      "required": [
+        "page_id",
+        "markdown",
+        "hash"
+      ]
+    }
+  },
+  "required": [
+    "ok",
+    "brief"
+  ]
+}

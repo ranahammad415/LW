@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/profile-upsert.response.json",
+  "title": "profile-upsert response (v1.4.0)",
+  "description": "applied says which field groups were written; warnings include CONTRACT_LOCKED (contract not applied), FIELD_OWNED_BY_SITE (site-owned fields ignored), REGISTRY_CONFLICT (primary keyword owned by another page).",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
+    "profile": {
+      "$ref": "common.json#/$defs/profile"
+    },
+    "created": {
+      "type": "boolean"
+    },
+    "applied": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "boolean"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/warning"
+      }
+    }
+  },
+  "required": [
+    "ok",
+    "profile",
+    "applied",
+    "warnings"
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/preview-link.request.json",
+  "title": "preview-link (v1.3.0, O9)",
+  "description": "Short-lived EmDash preview URL of an entry's draft for OS staff (no login, no token reuse).",
+  "type": "object",
+  "properties": {
+    "entryId": {
+      "$ref": "common.json#/$defs/id"
+    },
+    "ttlSeconds": {
+      "type": "integer",
+      "minimum": 60,
+      "maximum": 3600
+    },
+    "actor": {
+      "$ref": "common.json#/$defs/osActor"
+    }
+  },
+  "required": [
+    "entryId",
+    "actor"
+  ]
+}

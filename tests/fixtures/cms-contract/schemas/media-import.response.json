@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/media-import.response.json",
+  "title": "media-import response (v1.2.0)",
+  "description": "HTTP 200 with per-item results (like the events batch); failed items carry a per-item code and retryable flag.",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "status": {
+            "enum": [
+              "imported",
+              "reused",
+              "failed"
+            ]
+          },
+          "mediaId": {
+            "$ref": "common.json#/$defs/id"
+          },
+          "ref": {
+            "$ref": "common.json#/$defs/mediaRef"
+          },
+          "sha256": {
+            "$ref": "common.json#/$defs/sha256"
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "width": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "height": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "enum": [
+                  "MEDIA_HOST_NOT_ALLOWED",
+                  "MEDIA_TOO_LARGE",
+                  "MEDIA_TYPE_UNSUPPORTED",
+                  "MEDIA_INVALID",
+                  "MEDIA_FETCH_FAILED",
+                  "INTERNAL"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "maxLength": 500
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "code",
+              "retryable"
+            ]
+          }
+        },
+        "required": [
+          "index",
+          "status"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "failed"
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "required": [
+                "error"
+              ]
+            },
+            "else": {
+              "required": [
+                "mediaId",
+                "ref",
+                "sha256"
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  "required": [
+    "ok",
+    "items"
+  ]
+}

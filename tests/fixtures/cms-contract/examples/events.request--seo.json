@@ -1,0 +1,223 @@
+{
+  "contract": 1,
+  "siteId": "site_9f3c2a7b41d0",
+  "sentAt": "2026-10-21T10:00:01Z",
+  "events": [
+    {
+      "eventId": "01JAH1EV00000000000000000A",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "seo.contract_locked",
+      "at": "2026-10-20T14:02:00Z",
+      "cursor": 120,
+      "actor": {
+        "kind": "human",
+        "id": "usr_7",
+        "name": "Site editor",
+        "role": "editor",
+        "source": "admin-panel"
+      },
+      "profile": {
+        "page_id": "P12",
+        "target": "pages:hot-tub-repair",
+        "entry_id": "01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+        "collection": "pages",
+        "path": "/spa-services/hot-tub-repair/",
+        "status": "in-review",
+        "primary_keyword": "hot tub repair",
+        "contract": {
+          "version": 3,
+          "locked": true,
+          "locked_on": "2026-10-20T14:02:00Z",
+          "locked_by": "Site editor",
+          "fingerprint": "c3a1"
+        },
+        "checks": {
+          "block": 0,
+          "warn": 2,
+          "info": 1,
+          "ran_at": "2026-10-20T14:05:00Z",
+          "variant": "draft"
+        },
+        "facts": {
+          "requested": 1,
+          "placeholder": 0,
+          "confirmed": 4
+        },
+        "open_proposals": 1,
+        "next_review_on": "2027-05-15",
+        "updated_at": "2026-10-20T14:05:00Z",
+        "profile_hash": "aa4058ea549d0e6e0d18dc8e6bec2fe917a5ed74ff4d8e9cdfb4892ae968eeee"
+      }
+    },
+    {
+      "eventId": "01JAH1EV00000000000000000B",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "seo.profile_changed",
+      "at": "2026-10-21T08:00:00Z",
+      "cursor": 121,
+      "actor": {
+        "kind": "human",
+        "id": "usr_7",
+        "name": "Site editor",
+        "role": "editor",
+        "source": "admin-panel"
+      },
+      "profile": {
+        "page_id": "P12",
+        "target": "pages:hot-tub-repair",
+        "entry_id": "01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+        "collection": "pages",
+        "path": "/spa-services/hot-tub-repair/",
+        "status": "in-review",
+        "primary_keyword": "hot tub repair",
+        "contract": {
+          "version": 3,
+          "locked": true,
+          "locked_on": "2026-10-20T14:02:00Z",
+          "locked_by": "Site editor",
+          "fingerprint": "c3a1"
+        },
+        "checks": {
+          "block": 0,
+          "warn": 2,
+          "info": 1,
+          "ran_at": "2026-10-20T14:05:00Z",
+          "variant": "draft"
+        },
+        "facts": {
+          "requested": 1,
+          "placeholder": 0,
+          "confirmed": 4
+        },
+        "open_proposals": 1,
+        "next_review_on": "2027-05-15",
+        "updated_at": "2026-10-21T08:00:00Z",
+        "profile_hash": "c82b422147cf36c3b4114253584f57ddf842adaa2eb9f38235d8b04f720a6266"
+      },
+      "changed": [
+        {
+          "field": "targeting.secondary_keywords",
+          "owner": "os"
+        },
+        {
+          "field": "lifecycle.status",
+          "owner": "site"
+        }
+      ]
+    },
+    {
+      "eventId": "01JAH1EV00000000000000000C",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "seo.proposal_opened",
+      "at": "2026-10-21T09:00:00Z",
+      "cursor": 122,
+      "actor": {
+        "kind": "human",
+        "name": "Jane PM",
+        "osUserId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90",
+        "role": "PM",
+        "source": "os"
+      },
+      "proposal": {
+        "proposal_id": "01JAH0PROP00000000000000001",
+        "page_id": "P12",
+        "state": "open",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/contract/meta",
+            "value": "Hot tub not heating? Oasis repairs most spa brands in Waukesha and Milwaukee. Same-week visits; call for a quote."
+          }
+        ],
+        "reason": "Client wants 'same-week visits' in the meta; still under 158 characters.",
+        "source": "os",
+        "created_by": {
+          "kind": "human",
+          "name": "Jane PM",
+          "osUserId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90",
+          "role": "PM",
+          "source": "os"
+        },
+        "created_at": "2026-10-21T09:00:00Z",
+        "decided_by": null,
+        "decided_at": null,
+        "decision_note": null
+      }
+    },
+    {
+      "eventId": "01JAH1EV00000000000000000D",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "seo.proposal_decided",
+      "at": "2026-10-21T09:30:00Z",
+      "cursor": 123,
+      "actor": {
+        "kind": "human",
+        "id": "usr_7",
+        "name": "Site editor",
+        "role": "editor",
+        "source": "admin-panel"
+      },
+      "proposal": {
+        "proposal_id": "01JAH0PROP00000000000000001",
+        "page_id": "P12",
+        "state": "approved",
+        "patch": [
+          {
+            "op": "replace",
+            "path": "/contract/meta",
+            "value": "Hot tub not heating? Oasis repairs most spa brands in Waukesha and Milwaukee. Same-week visits; call for a quote."
+          }
+        ],
+        "reason": "Client wants 'same-week visits' in the meta; still under 158 characters.",
+        "source": "os",
+        "created_by": {
+          "kind": "human",
+          "name": "Jane PM",
+          "osUserId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90",
+          "role": "PM",
+          "source": "os"
+        },
+        "created_at": "2026-10-21T09:00:00Z",
+        "decided_by": {
+          "kind": "human",
+          "id": "usr_7",
+          "name": "Site editor",
+          "role": "editor",
+          "source": "admin-panel"
+        },
+        "decided_at": "2026-10-21T09:30:00Z",
+        "decision_note": "OK, contract v4"
+      }
+    },
+    {
+      "eventId": "01JAH1EV00000000000000000E",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "seo.check_failed",
+      "at": "2026-10-21T09:40:00Z",
+      "cursor": 124,
+      "actor": {
+        "kind": "agent",
+        "id": "usr_agent",
+        "source": "mcp"
+      },
+      "check": {
+        "page_id": "P12",
+        "variant": "draft",
+        "trigger": "save",
+        "summary": {
+          "block": 1,
+          "warn": 2,
+          "info": 0
+        },
+        "failed": [
+          {
+            "id": "claims.placeholder",
+            "severity": "block",
+            "message": "[[CLIENT: b13]] placeholder in FAQ 3",
+            "path": "faq[2]"
+          }
+        ]
+      }
+    }
+  ]
+}

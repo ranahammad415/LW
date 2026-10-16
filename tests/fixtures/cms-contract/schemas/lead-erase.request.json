@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/lead-erase.request.json",
+  "title": "lead-erase (v1.5.0)",
+  "description": "Erase a lead (and its photos) on the site, e.g. after a data-subject request. The site answers when deleted and emits lead.erased.",
+  "type": "object",
+  "properties": {
+    "leadId": {
+      "$ref": "common.json#/$defs/id"
+    },
+    "reason": {
+      "enum": [
+        "subject_request",
+        "retention",
+        "spam",
+        "other"
+      ]
+    },
+    "actor": {
+      "$ref": "common.json#/$defs/osActor"
+    }
+  },
+  "required": [
+    "leadId",
+    "reason",
+    "actor"
+  ]
+}

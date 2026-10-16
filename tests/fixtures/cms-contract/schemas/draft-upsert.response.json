@@ -50,6 +50,43 @@
           "type": "null"
         }
       ]
+    },
+    "slug": {
+      "$ref": "common.json#/$defs/slug",
+      "description": "v1.2.0: slug actually stored"
+    },
+    "parent": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 100
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "bylines": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/slug"
+      }
+    },
+    "taxonomies": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "$ref": "common.json#/$defs/slug"
+        }
+      }
+    },
+    "seoCheck": {
+      "$ref": "common.json#/$defs/seoCheck"
+    },
+    "entry": {
+      "$ref": "common.json#/$defs/entry",
+      "description": "v1.2.0: the entry summary after the save (same shape as inventory)"
     }
   },
   "required": [

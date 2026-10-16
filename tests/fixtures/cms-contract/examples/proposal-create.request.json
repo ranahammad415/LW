@@ -1,0 +1,17 @@
+{
+  "page_id": "P12",
+  "patch": [
+    {
+      "op": "replace",
+      "path": "/contract/meta",
+      "value": "Hot tub not heating? Oasis repairs most spa brands in Waukesha and Milwaukee. Same-week visits; call for a quote."
+    }
+  ],
+  "reason": "Client wants 'same-week visits' in the meta; still under 158 characters.",
+  "actor": {
+    "kind": "human",
+    "osUserId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90",
+    "name": "Jane PM",
+    "role": "PM"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "target": {
+    "collection": "posts",
+    "slug": "spring-pool-opening"
+  },
+  "slugPolicy": "exact",
+  "title": "Spring Pool Opening Checklist",
+  "body": {
+    "markdown": "## Before you open\n\nCheck the cover, the pump basket and the water level."
+  },
+  "bylines": [
+    "oasis-team"
+  ],
+  "taxonomies": {
+    "category": [
+      "pool-care"
+    ]
+  },
+  "actor": {
+    "kind": "agent",
+    "osUserId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90",
+    "name": "Nova writer (for Jane PM)"
+  },
+  "reviewAfter": {
+    "pm": {
+      "memberId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90",
+      "name": "Jane PM"
+    },
+    "note": "Agent draft from the content map",
+    "contentType": "article"
+  }
+}

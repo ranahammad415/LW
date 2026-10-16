@@ -1,0 +1,25 @@
+{
+  "target": {
+    "collection": "posts",
+    "slug": "winterize-hot-tub"
+  },
+  "slugPolicy": "exact",
+  "title": "How to Winterize a Hot Tub",
+  "body": {
+    "markdown": "## Drain or keep running?\n\nIn Wisconsin most owners keep the spa running all winter."
+  },
+  "excerpt": "When to drain, when to keep it running, and what to check before the first freeze.",
+  "bylines": [
+    "oasis-team"
+  ],
+  "taxonomies": {
+    "category": [
+      "spa-care"
+    ]
+  },
+  "actor": {
+    "kind": "agent",
+    "osUserId": "45c48cce-2e2d-47fb-a3c1-9d8e7f6a5b41",
+    "name": "Nova writer"
+  }
+}

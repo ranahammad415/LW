@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/pipeline-publish.response.json",
+  "title": "pipeline-publish response (v1.3.0)",
+  "description": "",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
+    "review": {
+      "$ref": "common.json#/$defs/review"
+    },
+    "entry": {
+      "$ref": "common.json#/$defs/entry"
+    },
+    "publishedAt": {
+      "$ref": "common.json#/$defs/dateTime"
+    },
+    "liveRevisionId": {
+      "$ref": "common.json#/$defs/id"
+    },
+    "seoCheck": {
+      "$ref": "common.json#/$defs/seoCheck"
+    }
+  },
+  "required": [
+    "ok",
+    "review",
+    "publishedAt"
+  ]
+}

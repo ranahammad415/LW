@@ -85,6 +85,14 @@
         "$ref": "common.json#/$defs/member"
       }
     },
+    "team": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/member"
+      },
+      "maxItems": 500,
+      "description": "v1.2.1: roster of the project's OS team members (User.id + name) so the site admin maps bylines by picking a person; the OS mirrors site-info.bylines read-only"
+    },
     "keys": {
       "type": "object",
       "properties": {

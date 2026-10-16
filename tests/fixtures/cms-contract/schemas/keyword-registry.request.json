@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/keyword-registry.request.json",
+  "title": "keyword-registry (v1.4.0)",
+  "description": "Read the site's keyword registry (one primary owner per owner_key).",
+  "type": "object",
+  "properties": {
+    "role": {
+      "enum": [
+        "primary",
+        "secondary",
+        "question",
+        "avoid",
+        "candidate"
+      ]
+    },
+    "owner_page_id": {
+      "$ref": "common.json#/$defs/pageId"
+    },
+    "cursor": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 512
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100
+    }
+  },
+  "required": []
+}

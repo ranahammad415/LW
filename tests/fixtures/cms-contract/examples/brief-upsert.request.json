@@ -1,0 +1,14 @@
+{
+  "page_id": "P12",
+  "markdown": "---\nid: P12\n---\n# Hot tub repair\n\nCover the three most common faults first.",
+  "front_matter": {
+    "id": "P12"
+  },
+  "source_ref": "content-map:node/5b1e",
+  "actor": {
+    "kind": "human",
+    "osUserId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90",
+    "name": "Jane PM",
+    "role": "PM"
+  }
+}

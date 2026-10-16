@@ -1,0 +1,21 @@
+{
+  "ok": true,
+  "days": 30,
+  "total": 57,
+  "items": [
+    {
+      "path": "/hot-tubs-for-sale/",
+      "hits": 31,
+      "last_seen": "2026-10-22T09:00:00Z",
+      "top_referrer_host": "www.google.com",
+      "suggested_destination": "/spa-services/"
+    },
+    {
+      "path": "/wp-login.php",
+      "hits": 18,
+      "last_seen": "2026-10-22T11:00:00Z",
+      "top_referrer_host": null,
+      "suggested_destination": null
+    }
+  ]
+}

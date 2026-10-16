@@ -1,0 +1,10 @@
+{
+  "entryId": "01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+  "ttlSeconds": 900,
+  "actor": {
+    "kind": "human",
+    "osUserId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90",
+    "name": "Jane PM",
+    "role": "PM"
+  }
+}

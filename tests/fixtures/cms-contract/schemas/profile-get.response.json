@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/profile-get.response.json",
+  "title": "profile-get response (v1.4.0)",
+  "description": "<= 512 KiB; long lists are truncated (proposals 20, changes 50).",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
+    "profile": {
+      "$ref": "common.json#/$defs/profile"
+    }
+  },
+  "required": [
+    "ok",
+    "profile"
+  ]
+}

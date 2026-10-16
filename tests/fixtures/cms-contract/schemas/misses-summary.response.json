@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/misses-summary.response.json",
+  "title": "misses-summary response (v1.5.0)",
+  "description": "",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
+    "days": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^/",
+            "maxLength": 2048
+          },
+          "hits": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "last_seen": {
+            "$ref": "common.json#/$defs/dateTime"
+          },
+          "top_referrer_host": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 253
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "suggested_destination": {
+            "anyOf": [
+              {
+                "$ref": "common.json#/$defs/path"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "hits",
+          "last_seen"
+        ]
+      },
+      "maxItems": 100
+    }
+  },
+  "required": [
+    "ok",
+    "days",
+    "total",
+    "items"
+  ]
+}

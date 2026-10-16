@@ -1,0 +1,80 @@
+{
+  "contract": 1,
+  "siteId": "site_9f3c2a7b41d0",
+  "sentAt": "2026-10-22T15:30:02Z",
+  "events": [
+    {
+      "eventId": "01JAJ1EV00000000000000000A",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "lead.created",
+      "at": "2026-10-22T15:30:00Z",
+      "cursor": 140,
+      "actor": {
+        "kind": "system",
+        "source": "plugin"
+      },
+      "lead": {
+        "leadId": "01JAJ0LEAD0000000000000001",
+        "createdAt": "2026-10-22T15:30:00Z",
+        "form": {
+          "id": "quote",
+          "name": "Request a quote"
+        },
+        "source": {
+          "path": "/spa-services/hot-tub-repair/",
+          "referrerHost": "www.google.com",
+          "utm": {
+            "source": "google",
+            "medium": "organic"
+          }
+        },
+        "fields": {
+          "name": "Pat Example",
+          "phone": "+1 262 555 0100",
+          "email": "pat@example.com",
+          "town": "Waukesha",
+          "postalCode": "53186",
+          "service": "Hot tub repair",
+          "message": "Heater trips the breaker after 10 minutes."
+        },
+        "photos": [
+          {
+            "mediaId": "01JAJ0MEDIA000000000000001",
+            "url": "https://oasispoolspas.com/_emdash/api/plugins/oasis-leads/photo?id=01JAJ0MEDIA000000000000001&sig=abc",
+            "expiresAt": "2026-10-29T15:30:00Z",
+            "contentType": "image/jpeg",
+            "bytes": 412000
+          }
+        ],
+        "consent": {
+          "contact": true,
+          "marketing": false,
+          "text": "I agree that Oasis Pool and Spa may contact me about this request.",
+          "version": "2026-09",
+          "at": "2026-10-22T15:30:00Z"
+        },
+        "spam": {
+          "score": 0.04,
+          "verdict": "ok"
+        },
+        "siteRetentionDays": 30
+      }
+    },
+    {
+      "eventId": "01JAJ1EV00000000000000000B",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "lead.erased",
+      "at": "2026-11-02T10:00:00Z",
+      "cursor": 141,
+      "actor": {
+        "kind": "human",
+        "name": "Agency Owner",
+        "osUserId": "3b0d9a1e-6c2f-4d8a-9e57-0f1a2b3c4d5e",
+        "role": "OWNER",
+        "source": "os"
+      },
+      "leadId": "01JAJ0LEAD0000000000000001",
+      "reason": "subject_request"
+    }
+  ]
+}

@@ -5,16 +5,111 @@
     "name": "Jane PM",
     "role": "PM"
   },
+  "expectedProfileHash": "aa4058ea549d0e6e0d18dc8e6bec2fe917a5ed74ff4d8e9cdfb4892ae968eeee",
   "profile": {
     "page_id": "P12",
     "target": "pages:hot-tub-repair",
     "collection": "pages",
-    "path": "/spa-services/hot-tub-repair/"
+    "path": "/spa-services/hot-tub-repair/",
+    "page_type": "service",
+    "cluster": "hot-tub",
+    "locality": null,
+    "parent_page_id": "P03",
+    "working_title": "Hot Tub Repair for Most Brands",
+    "targeting": {
+      "primary_keyword": "hot tub repair",
+      "owner_key": "hot tub repair|",
+      "intent": "commercial",
+      "secondary_keywords": [
+        {
+          "term": "spa repair near me"
+        }
+      ],
+      "avoid_terms": [
+        {
+          "term": "hot tub installation",
+          "scope": "title-h1"
+        }
+      ],
+      "target_words": {
+        "min": 700,
+        "max": 1000
+      }
+    },
+    "contract": {
+      "title": "Hot Tub Repair in Waukesha & Milwaukee | Oasis Pool and Spa",
+      "h1": "Hot Tub Repair for Most Brands",
+      "meta": "Hot tub not heating or tripping the breaker? Oasis diagnoses and repairs most spa brands across Waukesha and Milwaukee. Call for a quote.",
+      "answer_first_lead": true,
+      "required_blocks": [
+        {
+          "block_type": "page_hero",
+          "position": "first"
+        },
+        {
+          "block_type": "faq",
+          "min_items": 5
+        },
+        {
+          "block_type": "related_links",
+          "position": "last"
+        }
+      ],
+      "locked_faq_questions": [
+        "Why is my hot tub not heating?"
+      ],
+      "required_links_out": [
+        {
+          "path": "/spa-services/"
+        }
+      ],
+      "schema_types": [
+        "WebPage",
+        "Service",
+        "BreadcrumbList",
+        "FAQPage"
+      ],
+      "allowed_prices": "call-for-quote"
+    },
+    "aeo": {
+      "answer_targets": [
+        {
+          "id": "q1",
+          "question": "Why is my hot tub not heating?",
+          "placement": "faq",
+          "wording_locked": true
+        }
+      ]
+    },
+    "facts": {
+      "used": [
+        {
+          "fact_key": "client.b13"
+        }
+      ]
+    },
+    "links": {
+      "out": [
+        {
+          "page_id": "P03",
+          "required": true
+        }
+      ]
+    },
+    "lifecycle": {
+      "publish_by": "2026-11-15",
+      "next_review_on": "2027-05-15"
+    },
+    "research": {
+      "brief_id": "P12",
+      "note": "OS content map v7"
+    }
   },
   "brief": {
-    "markdown": "---\nid: P12\n---\nBrief",
+    "markdown": "---\nid: P12\ntarget_words: 700-1,000\n---\n# Hot tub repair\n\nCover the three most common faults first.",
     "front_matter": {
-      "id": "P12"
+      "id": "P12",
+      "target_words": "700-1,000"
     }
   }
 }

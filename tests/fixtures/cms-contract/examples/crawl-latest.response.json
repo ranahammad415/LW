@@ -1,0 +1,20 @@
+{
+  "ok": true,
+  "report": {
+    "id": "crawl_2026-11-01",
+    "ran_at": "2026-11-01T03:00:00Z",
+    "trigger": "cron",
+    "pages": 61,
+    "must_fix": 2,
+    "should_fix": 7,
+    "items": [
+      {
+        "severity": "block",
+        "kind": "broken-link",
+        "url": "/about/",
+        "detail": "-> /team/ 404",
+        "fix": "Update the link or add a redirect"
+      }
+    ]
+  }
+}

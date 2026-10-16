@@ -1,0 +1,19 @@
+{
+  "items": [
+    {
+      "upload": {
+        "filename": "pixel.png",
+        "contentType": "image/png",
+        "dataBase64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+      },
+      "alt": "Test pixel",
+      "caption": null
+    }
+  ],
+  "actor": {
+    "kind": "human",
+    "osUserId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90",
+    "name": "Jane PM",
+    "role": "PM"
+  }
+}

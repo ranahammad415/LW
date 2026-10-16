@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/profile-get.request.json",
+  "title": "profile-get (v1.4.0)",
+  "description": "Resolution order page_id -> entry_id -> target (same as emdash-seo store.profiles.resolve).",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "page_id": {
+          "$ref": "common.json#/$defs/pageId"
+        }
+      },
+      "required": [
+        "page_id"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "entry_id": {
+          "$ref": "common.json#/$defs/id"
+        }
+      },
+      "required": [
+        "entry_id"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

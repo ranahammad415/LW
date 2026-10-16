@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/migration-map.response.json",
+  "title": "migration-map response (v1.5.0)",
+  "description": "",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
+    "migratedFrom": {
+      "$ref": "common.json#/$defs/migratedFrom"
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "wp_post_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "wp_post_type": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "old_url": {
+            "$ref": "common.json#/$defs/url"
+          },
+          "status": {
+            "enum": [
+              "migrated",
+              "redirected",
+              "dropped"
+            ]
+          },
+          "entry_id": {
+            "anyOf": [
+              {
+                "$ref": "common.json#/$defs/id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "entry_no": {
+            "anyOf": [
+              {
+                "$ref": "common.json#/$defs/surrogateNo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "collection": {
+            "anyOf": [
+              {
+                "$ref": "common.json#/$defs/collection"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "new_path": {
+            "anyOf": [
+              {
+                "$ref": "common.json#/$defs/path"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "redirect_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  301,
+                  410
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "wp_post_id",
+          "old_url",
+          "status"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "migrated"
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "required": [
+                "entry_id",
+                "entry_no",
+                "collection",
+                "new_path"
+              ]
+            }
+          }
+        ]
+      },
+      "maxItems": 500
+    },
+    "next": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 512
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "summary": {
+      "type": "object",
+      "properties": {
+        "migrated": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "redirected": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "dropped": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "migrated",
+        "redirected",
+        "dropped"
+      ]
+    }
+  },
+  "required": [
+    "ok",
+    "migratedFrom",
+    "items",
+    "next",
+    "summary"
+  ]
+}

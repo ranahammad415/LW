@@ -1,0 +1,38 @@
+{
+  "ok": false,
+  "error": {
+    "code": "CONTRACT_LOCKED",
+    "message": "The push would change 3 elements fixed by the locked SEO contract v3 of P12. Propose a contract change instead.",
+    "retryable": false,
+    "details": {
+      "pageId": "P12",
+      "contractVersion": 3,
+      "violations": [
+        {
+          "element": "title",
+          "contractValue": "Hot Tub Repair in Waukesha & Milwaukee | Oasis Pool and Spa",
+          "pushedValue": "Hot Tub Repair | Oasis",
+          "message": "seo.title differs from the locked title"
+        },
+        {
+          "element": "required_block",
+          "contractValue": {
+            "block_type": "faq",
+            "min_items": 5
+          },
+          "pushedValue": {
+            "block_type": "faq",
+            "items": 1
+          },
+          "message": "faq needs at least 5 items"
+        },
+        {
+          "element": "locked_faq_question",
+          "contractValue": "Why is my hot tub not heating?",
+          "pushedValue": null,
+          "message": "locked FAQ question removed"
+        }
+      ]
+    }
+  }
+}

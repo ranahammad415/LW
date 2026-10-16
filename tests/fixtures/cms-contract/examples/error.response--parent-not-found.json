@@ -1,0 +1,18 @@
+{
+  "ok": false,
+  "error": {
+    "code": "PARENT_NOT_FOUND",
+    "message": "Parent spa-repair is not a section of pages",
+    "retryable": false,
+    "details": {
+      "parent": "spa-repair",
+      "allowed": [
+        "None",
+        "pool-services",
+        "spa-services",
+        "equipment-diagnosis-repair",
+        "service-areas"
+      ]
+    }
+  }
+}

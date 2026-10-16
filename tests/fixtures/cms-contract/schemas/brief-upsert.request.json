@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/brief-upsert.request.json",
+  "title": "brief-upsert (v1.4.0)",
+  "description": "Store the OS brief for a page (OS wins; the site keeps the copy agents read with seo_get_brief).",
+  "type": "object",
+  "properties": {
+    "page_id": {
+      "$ref": "common.json#/$defs/pageId"
+    },
+    "markdown": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 65536
+    },
+    "front_matter": {
+      "type": "object"
+    },
+    "source_ref": {
+      "anyOf": [
+        {
+          "type": "string",
+          "maxLength": 200
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "actor": {
+      "$ref": "common.json#/$defs/osActor"
+    }
+  },
+  "required": [
+    "page_id",
+    "markdown",
+    "actor"
+  ]
+}

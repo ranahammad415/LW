@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/proposal-create.request.json",
+  "title": "proposal-create (v1.4.0, 'profile-propose')",
+  "description": "A PM/OWNER proposal to change a profile (RFC 6902 ops on /contract, /targeting, /aeo, /facts). Deciding stays in the EmDash admin (human session).",
+  "type": "object",
+  "properties": {
+    "page_id": {
+      "$ref": "common.json#/$defs/pageId"
+    },
+    "patch": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "op": {
+            "enum": [
+              "add",
+              "remove",
+              "replace"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "pattern": "^/(contract|targeting|aeo|facts)(/|$)",
+            "maxLength": 300
+          },
+          "value": {}
+        },
+        "required": [
+          "op",
+          "path"
+        ]
+      },
+      "minItems": 1,
+      "maxItems": 20
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 2000
+    },
+    "actor": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "human"
+        },
+        "osUserId": {
+          "$ref": "common.json#/$defs/uuid"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "role": {
+          "enum": [
+            "OWNER",
+            "PM"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "osUserId",
+        "name",
+        "role"
+      ]
+    }
+  },
+  "required": [
+    "page_id",
+    "patch",
+    "reason",
+    "actor"
+  ]
+}

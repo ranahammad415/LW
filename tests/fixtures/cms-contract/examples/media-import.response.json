@@ -1,0 +1,59 @@
+{
+  "ok": true,
+  "items": [
+    {
+      "index": 0,
+      "status": "imported",
+      "mediaId": "01JAF0MEDIA000000000000001",
+      "ref": {
+        "id": "01JAF0MEDIA000000000000001",
+        "src": "/_emdash/api/media/file/01JAF0MEDIA000000000000001.webp",
+        "alt": "Technician testing a hot tub heater element"
+      },
+      "sha256": "4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c",
+      "contentType": "image/webp",
+      "bytes": 182344,
+      "width": 1600,
+      "height": 1067
+    },
+    {
+      "index": 1,
+      "status": "reused",
+      "mediaId": "01JA90MEDIA000000000000042",
+      "ref": {
+        "id": "01JA90MEDIA000000000000042",
+        "src": "/_emdash/api/media/file/01JA90MEDIA000000000000042.jpg",
+        "alt": "Insulated spa cover on a hot tub"
+      },
+      "sha256": "63ef318d96b5d0d0ceba6e04a4e622b1158335cdc67c49e27839132c6f655058",
+      "contentType": "image/jpeg",
+      "bytes": 240112,
+      "width": 1400,
+      "height": 933
+    },
+    {
+      "index": 2,
+      "status": "imported",
+      "mediaId": "01JAF0MEDIA000000000000003",
+      "ref": {
+        "id": "01JAF0MEDIA000000000000003",
+        "src": "/_emdash/api/media/file/01JAF0MEDIA000000000000003.webp",
+        "alt": "Pool equipment pad after a filter rebuild"
+      },
+      "sha256": "9a8b7c6d5e4f30211a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7081",
+      "contentType": "image/webp",
+      "bytes": 301220,
+      "width": 1800,
+      "height": 1200
+    },
+    {
+      "index": 3,
+      "status": "failed",
+      "error": {
+        "code": "MEDIA_HOST_NOT_ALLOWED",
+        "message": "cdn.unknown.example is not in allowedSourceHosts",
+        "retryable": false
+      }
+    }
+  ]
+}

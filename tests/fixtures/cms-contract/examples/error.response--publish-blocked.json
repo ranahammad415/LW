@@ -1,0 +1,27 @@
+{
+  "ok": false,
+  "error": {
+    "code": "PUBLISH_BLOCKED",
+    "message": "SEO checks blocked publishing: claims.placeholder: [[CLIENT: b13]] placeholder in FAQ 3",
+    "retryable": false,
+    "details": {
+      "gates": [
+        {
+          "gate": "emdash-seo",
+          "ruleId": "claims.placeholder",
+          "severity": "block",
+          "message": "[[CLIENT: b13]] placeholder in FAQ 3",
+          "path": "faq[2]"
+        },
+        {
+          "gate": "emdash-seo",
+          "ruleId": "contract.title",
+          "severity": "block",
+          "message": "Title differs from the locked contract",
+          "path": "title"
+        }
+      ],
+      "origin": "plugin"
+    }
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/brief-upsert.response.json",
+  "title": "brief-upsert response (v1.4.0)",
+  "description": "",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
+    "brief": {
+      "type": "object",
+      "properties": {
+        "page_id": {
+          "$ref": "common.json#/$defs/pageId"
+        },
+        "hash": {
+          "$ref": "common.json#/$defs/sha256"
+        },
+        "imported_on": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "unchanged": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "page_id",
+        "hash",
+        "imported_on"
+      ]
+    }
+  },
+  "required": [
+    "ok",
+    "brief"
+  ]
+}

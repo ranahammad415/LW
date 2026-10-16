@@ -749,6 +749,10 @@
         "editUrl": {
           "$ref": "common.json#/$defs/url"
         },
+        "rev": {
+          "$ref": "common.json#/$defs/id",
+          "description": "v1.2.1: the exact token to send as draft-upsert baseRev (same value draft-upsert returns as rev)"
+        },
         "template": {
           "type": "null",
           "description": "Always null on EmDash (WP template/isElementor have no equivalent)"
@@ -1300,6 +1304,67 @@
         "updatedAt": {
           "$ref": "common.json#/$defs/dateTime"
         },
+        "publishedBy": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/siteActor",
+              "description": "v1.3.0: who published (admin human, or source os with osUserId)"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "publishOrigin": {
+          "anyOf": [
+            {
+              "enum": [
+                "admin",
+                "os",
+                "scheduler"
+              ],
+              "description": "v1.3.0"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "override": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "by": {
+                  "$ref": "common.json#/$defs/siteActor"
+                },
+                "reason": {
+                  "type": "string",
+                  "minLength": 20,
+                  "maxLength": 1000
+                },
+                "at": {
+                  "$ref": "common.json#/$defs/dateTime"
+                },
+                "action": {
+                  "enum": [
+                    "publish",
+                    "schedule"
+                  ]
+                }
+              },
+              "required": [
+                "by",
+                "reason",
+                "at"
+              ],
+              "description": "v1.3.0: OWNER override audit (publish without client_approved)"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "history": {
           "type": "array",
           "items": {
@@ -1482,6 +1547,22 @@
         },
         "timeline": {
           "type": "boolean"
+        },
+        "reports": {
+          "type": "boolean",
+          "description": "v1.5.0: redirect-ledger, misses-summary, crawl-latest"
+        },
+        "migrationMap": {
+          "type": "boolean",
+          "description": "v1.5.0: the site was migrated from WordPress and serves migration-map"
+        },
+        "draftPushFromOs": {
+          "type": "boolean",
+          "description": "v1.2.0: draft-upsert applies exact slug/parent/bylines/taxonomies through the site-only service token, returns seoCheck, enforces CONTRACT_LOCKED"
+        },
+        "seoGateOnPush": {
+          "type": "boolean",
+          "description": "v1.2.0: the site runs the emdash-seo draft checks and locked-contract guard on every OS push"
         }
       },
       "required": [
@@ -1516,6 +1597,27 @@
         },
         "label": {
           "type": "string"
+        },
+        "parentOptions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "maxItems": 200,
+          "description": "v1.2.0: allowed parent section values (select options); empty/absent = no parent field"
+        },
+        "hasBylines": {
+          "type": "boolean",
+          "description": "v1.2.0"
+        },
+        "taxonomies": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "description": "v1.2.0: taxonomy names attached to this collection"
         }
       },
       "required": [
@@ -1523,6 +1625,1026 @@
         "hasSeo",
         "routed"
       ]
+    },
+    "mediaInfo": {
+      "type": "object",
+      "properties": {
+        "maxBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "maxDimension": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "types": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^image/[a-z0-9.+-]+$"
+          },
+          "minItems": 1
+        },
+        "allowedSourceHosts": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 253
+          },
+          "maxItems": 50,
+          "description": "hosts the site may fetch from (its static allowedHosts); exact or *.domain, case-insensitive"
+        },
+        "allowedSourcePathPrefixes": {
+          "type": "array",
+          "items": {
+            "$ref": "common.json#/$defs/url",
+            "pattern": "^https://"
+          },
+          "maxItems": 20,
+          "description": "v1.2.1: https URL prefixes (origin + path) the site may fetch from, e.g. the OS staging area https://account.localwaves.ai/uploads/cms-staging/"
+        },
+        "itemsPerCall": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "uploadsPerCall": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "maxBytes",
+        "types",
+        "allowedSourceHosts"
+      ],
+      "description": "v1.2.0 media-import limits"
+    },
+    "seoCheck": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ran": {
+              "type": "boolean"
+            },
+            "variant": {
+              "enum": [
+                "draft"
+              ]
+            },
+            "ok": {
+              "type": "boolean"
+            },
+            "summary": {
+              "type": "object",
+              "properties": {
+                "block": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "warn": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "info": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "block",
+                "warn",
+                "info"
+              ]
+            },
+            "failed": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "maxLength": 100
+                  },
+                  "severity": {
+                    "enum": [
+                      "block",
+                      "warn",
+                      "info"
+                    ]
+                  },
+                  "message": {
+                    "type": "string",
+                    "maxLength": 500
+                  },
+                  "path": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 200
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "id",
+                  "severity",
+                  "message"
+                ]
+              },
+              "maxItems": 50
+            },
+            "contract": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "locked": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "locked"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "ran",
+            "ok",
+            "summary",
+            "failed"
+          ],
+          "description": "v1.2.0: emdash-seo draft check of the pushed draft (advisory at push time; the publish gate still decides)"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "pageId": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}$",
+      "description": "v1.4.0: profile page_id = OS ContentMapNode.pageId (e.g. P12)"
+    },
+    "profileContractState": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "locked": {
+          "type": "boolean"
+        },
+        "locked_on": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "locked_by": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fingerprint": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "locked"
+      ]
+    },
+    "profileSummary": {
+      "type": "object",
+      "properties": {
+        "page_id": {
+          "$ref": "common.json#/$defs/pageId"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200,
+              "description": "collection:slug"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "entry_id": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "collection": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/collection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/path"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "type": "string",
+          "maxLength": 32,
+          "description": "emdash-seo lifecycle status (planned, drafting, in-review, published, blocked, retired, …)"
+        },
+        "primary_keyword": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "contract": {
+          "$ref": "common.json#/$defs/profileContractState"
+        },
+        "checks": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "block": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "warn": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "info": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "ran_at": {
+                  "$ref": "common.json#/$defs/dateTime"
+                },
+                "variant": {
+                  "enum": [
+                    "draft",
+                    "live"
+                  ]
+                }
+              },
+              "required": [
+                "block",
+                "warn",
+                "info"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "facts": {
+          "type": "object",
+          "properties": {
+            "requested": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "placeholder": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "confirmed": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": []
+        },
+        "open_proposals": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "next_review_on": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "updated_at": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "profile_hash": {
+          "$ref": "common.json#/$defs/sha256",
+          "description": "hash of the stored profile; send as expectedProfileHash on profile-upsert"
+        }
+      },
+      "required": [
+        "page_id",
+        "status",
+        "contract",
+        "updated_at",
+        "profile_hash"
+      ]
+    },
+    "proposal": {
+      "type": "object",
+      "properties": {
+        "proposal_id": {
+          "$ref": "common.json#/$defs/id"
+        },
+        "page_id": {
+          "$ref": "common.json#/$defs/pageId"
+        },
+        "state": {
+          "enum": [
+            "open",
+            "approved",
+            "rejected",
+            "withdrawn"
+          ]
+        },
+        "patch": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "op": {
+                "enum": [
+                  "add",
+                  "remove",
+                  "replace"
+                ]
+              },
+              "path": {
+                "type": "string",
+                "pattern": "^/(contract|targeting|aeo|facts)(/|$)",
+                "maxLength": 300
+              },
+              "value": {}
+            },
+            "required": [
+              "op",
+              "path"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 20
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 20,
+          "maxLength": 2000
+        },
+        "source": {
+          "enum": [
+            "os",
+            "mcp",
+            "admin"
+          ]
+        },
+        "created_by": {
+          "$ref": "common.json#/$defs/siteActor"
+        },
+        "created_at": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "decided_by": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/siteActor"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decided_at": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decision_note": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 2000
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "proposal_id",
+        "page_id",
+        "state",
+        "patch",
+        "reason",
+        "source",
+        "created_at"
+      ]
+    },
+    "profile": {
+      "allOf": [
+        {
+          "$ref": "common.json#/$defs/profileSummary"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "page_type": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cluster": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "locality": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parent_page_id": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/pageId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "working_title": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 300
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "targeting": {
+          "type": "object",
+          "description": "primary_keyword, owner_key, intent, intent_note, secondary_keywords[], avoid_terms[], target_words"
+        },
+        "contract_body": {
+          "type": "object",
+          "description": "the contract content: title, h1, meta, answer_first_lead, required_blocks[], locked_faq_questions[], required_links_out[], schema_types[], allowed_prices"
+        },
+        "aeo": {
+          "type": "object",
+          "description": "answer_targets[]"
+        },
+        "facts_used": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "fact_key": {
+                "type": "string",
+                "maxLength": 100
+              },
+              "status": {
+                "type": "string",
+                "maxLength": 32
+              }
+            },
+            "required": [
+              "fact_key"
+            ]
+          },
+          "maxItems": 200
+        },
+        "links": {
+          "type": "object"
+        },
+        "lifecycle": {
+          "type": "object"
+        },
+        "research": {
+          "type": "object"
+        },
+        "brief": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "hash": {
+                  "$ref": "common.json#/$defs/sha256"
+                },
+                "imported_on": {
+                  "$ref": "common.json#/$defs/dateTime"
+                },
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "hash"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_check": {
+          "anyOf": [
+            {
+              "type": "object",
+              "description": "latest check run: summary + failed rules (<= 50)"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "proposals": {
+          "type": "array",
+          "items": {
+            "$ref": "common.json#/$defs/proposal"
+          },
+          "maxItems": 20,
+          "description": "open + most recent"
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "at": {
+                "$ref": "common.json#/$defs/dateTime"
+              },
+              "action": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "actor": {
+                "type": "object"
+              },
+              "summary": {
+                "type": "string",
+                "maxLength": 500
+              }
+            },
+            "required": [
+              "at",
+              "action"
+            ]
+          },
+          "maxItems": 50
+        },
+        "redirects": {
+          "type": "object",
+          "properties": {
+            "active": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "last_changed_at": {
+              "anyOf": [
+                {
+                  "$ref": "common.json#/$defs/dateTime"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "active"
+          ]
+        },
+        "site_health": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "last_crawl_at": {
+                  "anyOf": [
+                    {
+                      "$ref": "common.json#/$defs/dateTime"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "must_fix": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "should_fix": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": []
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "keywordEntry": {
+      "type": "object",
+      "properties": {
+        "term": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "owner_key": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "role": {
+          "enum": [
+            "primary",
+            "secondary",
+            "question",
+            "avoid",
+            "candidate"
+          ]
+        },
+        "owner_page_id": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/pageId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "status": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "updated_at": {
+          "$ref": "common.json#/$defs/dateTime"
+        }
+      },
+      "required": [
+        "term",
+        "owner_key",
+        "role"
+      ]
+    },
+    "migratedFrom": {
+      "type": "object",
+      "properties": {
+        "cms": {
+          "const": "wordpress"
+        },
+        "siteUrl": {
+          "$ref": "common.json#/$defs/url"
+        },
+        "migratedAt": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "mapEntries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "wpPluginKeyHint": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 8,
+              "description": "last 4 chars of the old WP bridge key, so the OWNER can recognise the project (never the key)"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "cms",
+        "siteUrl",
+        "migratedAt",
+        "mapEntries"
+      ],
+      "description": "v1.5.0: this EmDash site replaces a WordPress site the OS knew"
+    },
+    "lead": {
+      "type": "object",
+      "properties": {
+        "leadId": {
+          "$ref": "common.json#/$defs/id"
+        },
+        "createdAt": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "form": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "name": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          "required": [
+            "id"
+          ]
+        },
+        "source": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "$ref": "common.json#/$defs/path"
+            },
+            "referrerHost": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 253
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "utm": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                "medium": {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                "campaign": {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                "term": {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                "content": {
+                  "type": "string",
+                  "maxLength": 200
+                }
+              },
+              "required": []
+            }
+          },
+          "required": [
+            "path"
+          ]
+        },
+        "fields": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "phone": {
+              "type": "string",
+              "maxLength": 40
+            },
+            "email": {
+              "type": "string",
+              "maxLength": 254
+            },
+            "town": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "postalCode": {
+              "type": "string",
+              "maxLength": 20
+            },
+            "service": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "message": {
+              "type": "string",
+              "maxLength": 2000
+            },
+            "extra": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string",
+                "maxLength": 500
+              },
+              "description": "other form fields, plain text"
+            }
+          },
+          "required": [],
+          "description": "PII: only in lead events; never in logs, other events or snapshots"
+        },
+        "photos": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "mediaId": {
+                "$ref": "common.json#/$defs/id"
+              },
+              "url": {
+                "$ref": "common.json#/$defs/url"
+              },
+              "expiresAt": {
+                "$ref": "common.json#/$defs/dateTime"
+              },
+              "contentType": {
+                "type": "string",
+                "pattern": "^image/"
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "mediaId",
+              "url",
+              "expiresAt"
+            ]
+          },
+          "maxItems": 5,
+          "description": "private media, signed URLs valid 7 days"
+        },
+        "consent": {
+          "type": "object",
+          "properties": {
+            "contact": {
+              "const": true
+            },
+            "marketing": {
+              "type": "boolean"
+            },
+            "text": {
+              "type": "string",
+              "maxLength": 500
+            },
+            "version": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "at": {
+              "$ref": "common.json#/$defs/dateTime"
+            }
+          },
+          "required": [
+            "contact",
+            "text",
+            "at"
+          ]
+        },
+        "spam": {
+          "type": "object",
+          "properties": {
+            "score": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "verdict": {
+              "enum": [
+                "ok",
+                "suspect"
+              ]
+            }
+          },
+          "required": [
+            "verdict"
+          ]
+        },
+        "siteRetentionDays": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 365
+        }
+      },
+      "required": [
+        "leadId",
+        "createdAt",
+        "form",
+        "source",
+        "fields",
+        "consent"
+      ]
+    },
+    "mediaRef": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "common.json#/$defs/id"
+        },
+        "src": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "alt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        }
+      },
+      "required": [
+        "id",
+        "src",
+        "alt"
+      ],
+      "description": "v1.2.0: drop this object into a block image field"
     },
     "health": {
       "type": "object",
@@ -1695,6 +2817,9 @@
           "type": "string",
           "pattern": "^1\\.\\d+\\.\\d+$",
           "description": "v1.0.1+: errata level the sender implements (informational; X-AOS-Contract stays 1)"
+        },
+        "migratedFrom": {
+          "$ref": "common.json#/$defs/migratedFrom"
         }
       },
       "required": [
@@ -1803,6 +2928,113 @@
         "suggestion": {
           "$ref": "common.json#/$defs/suggestionChange"
         },
+        "profile": {
+          "$ref": "common.json#/$defs/profileSummary"
+        },
+        "changed": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "owner": {
+                "enum": [
+                  "os",
+                  "site",
+                  "os-until-locked"
+                ]
+              }
+            },
+            "required": [
+              "field",
+              "owner"
+            ]
+          },
+          "maxItems": 100,
+          "description": "v1.4.0 seo.profile_changed: changed fields and who owns them (owner os => OS drift row)"
+        },
+        "proposal": {
+          "$ref": "common.json#/$defs/proposal"
+        },
+        "check": {
+          "type": "object",
+          "properties": {
+            "page_id": {
+              "$ref": "common.json#/$defs/pageId"
+            },
+            "variant": {
+              "enum": [
+                "draft",
+                "live"
+              ]
+            },
+            "trigger": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "summary": {
+              "type": "object",
+              "properties": {
+                "block": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "warn": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "info": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "block",
+                "warn",
+                "info"
+              ]
+            },
+            "failed": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              },
+              "maxItems": 50
+            }
+          },
+          "required": [
+            "page_id",
+            "summary",
+            "failed"
+          ]
+        },
+        "lead": {
+          "$ref": "common.json#/$defs/lead"
+        },
+        "leadId": {
+          "$ref": "common.json#/$defs/id",
+          "description": "lead.erased: the erased lead"
+        },
+        "osRequest": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "idempotencyKey": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "route"
+          ],
+          "description": "v1.2.0: set on content.* events caused by a signed OS call (e.g. draft-upsert), so the OS can correlate"
+        },
         "suggestions": {
           "type": "array",
           "items": {
@@ -1852,6 +3084,107 @@
               "seq",
               "suggestion"
             ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "seo.profile_changed",
+                  "seo.contract_locked"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "profile"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "seo.proposal_opened",
+                  "seo.proposal_decided"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "proposal"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "seo.check_failed"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "check"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "lead.created"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "lead"
+            ],
+            "not": {
+              "required": [
+                "snapshotText"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "lead.erased"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "leadId"
+            ],
+            "not": {
+              "required": [
+                "lead"
+              ]
+            }
           }
         },
         {
@@ -1941,6 +3274,12 @@
             "SLUG_CHANGE_FORBIDDEN",
             "ALREADY_EXISTS",
             "COUNTER_REGRESSION",
+            "SLUG_TAKEN",
+            "PARENT_NOT_FOUND",
+            "CONTRACT_LOCKED",
+            "SERVICE_TOKEN_UNAVAILABLE",
+            "BYLINE_NOT_ALLOWED",
+            "ENTRY_LOCKED",
             "SUGGESTION_LIMIT",
             "SITE_MISMATCH",
             "PAYLOAD_TOO_LARGE",
@@ -2066,6 +3405,10 @@
         },
         "editUrl": {
           "$ref": "common.json#/$defs/url"
+        },
+        "rev": {
+          "$ref": "common.json#/$defs/id",
+          "description": "v1.2.1: the exact token to send as draft-upsert baseRev (same value draft-upsert returns as rev)"
         },
         "template": {
           "type": "null",

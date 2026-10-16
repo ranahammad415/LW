@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/media-import.request.json",
-  "title": "media-import (reserved, Phase 2)",
-  "description": "",
+  "title": "media-import (v1.2.0)",
+  "description": "Import images into the site's media library. Requires X-AOS-Idempotency-Key. https URLs on site-info.media.allowedSourceHosts, or ONE base64 upload per call (body <= 2 MiB). Alt text required.",
   "type": "object",
   "properties": {
     "items": {
@@ -11,30 +11,99 @@
         "type": "object",
         "properties": {
           "url": {
-            "$ref": "common.json#/$defs/url"
+            "$ref": "common.json#/$defs/url",
+            "pattern": "^https://",
+            "description": "https only; host must be in site-info.media.allowedSourceHosts"
+          },
+          "upload": {
+            "type": "object",
+            "properties": {
+              "filename": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "contentType": {
+                "type": "string",
+                "pattern": "^image/[a-z0-9.+-]+$"
+              },
+              "dataBase64": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1500000
+              }
+            },
+            "required": [
+              "filename",
+              "contentType",
+              "dataBase64"
+            ]
+          },
+          "sha256": {
+            "$ref": "common.json#/$defs/sha256",
+            "description": "optional, computed by the OS over the file bytes: lets the site dedupe before fetching"
           },
           "alt": {
             "type": "string",
-            "maxLength": 500
+            "minLength": 1,
+            "maxLength": 300,
+            "description": "required, plain text"
           },
           "filename": {
             "type": "string",
             "maxLength": 200
+          },
+          "caption": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
-          "url",
           "alt"
+        ],
+        "oneOf": [
+          {
+            "required": [
+              "url"
+            ],
+            "not": {
+              "required": [
+                "upload"
+              ]
+            }
+          },
+          {
+            "required": [
+              "upload"
+            ],
+            "not": {
+              "required": [
+                "url"
+              ]
+            }
+          }
         ]
       },
       "minItems": 1,
-      "maxItems": 50
+      "maxItems": 20
     },
     "dedupe": {
-      "type": "boolean"
+      "type": "boolean",
+      "description": "default true: reuse an existing media item with the same sha256"
+    },
+    "actor": {
+      "$ref": "common.json#/$defs/osActor"
     }
   },
   "required": [
-    "items"
+    "items",
+    "actor"
   ]
 }

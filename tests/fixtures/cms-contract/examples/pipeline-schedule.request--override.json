@@ -1,0 +1,12 @@
+{
+  "reviewId": "01JAC7Q2HV5M8N3P4R6S9T0W1X",
+  "at": "2026-11-01T13:00:00Z",
+  "actor": {
+    "kind": "human",
+    "osUserId": "3b0d9a1e-6c2f-4d8a-9e57-0f1a2b3c4d5e",
+    "name": "Agency Owner",
+    "role": "OWNER"
+  },
+  "override": true,
+  "overrideReason": "Launch date fixed with the client in the kickoff call"
+}

@@ -1,0 +1,21 @@
+{
+  "ok": true,
+  "items": [
+    {
+      "term": "hot tub repair",
+      "owner_key": "hot tub repair|",
+      "role": "primary",
+      "owner_page_id": "P12",
+      "status": "active",
+      "updated_at": "2026-10-20T14:02:00Z"
+    },
+    {
+      "term": "spa repair near me",
+      "owner_key": "spa repair near me|",
+      "role": "secondary",
+      "owner_page_id": "P12",
+      "status": "active"
+    }
+  ],
+  "next": null
+}

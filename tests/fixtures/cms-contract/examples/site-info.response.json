@@ -21,12 +21,25 @@
     {
       "name": "pages",
       "hasSeo": true,
-      "routed": true
+      "routed": true,
+      "parentOptions": [
+        "None",
+        "pool-services",
+        "spa-services",
+        "equipment-diagnosis-repair",
+        "service-areas"
+      ],
+      "hasBylines": false,
+      "taxonomies": []
     },
     {
       "name": "posts",
       "hasSeo": true,
-      "routed": true
+      "routed": true,
+      "hasBylines": true,
+      "taxonomies": [
+        "category"
+      ]
     }
   ],
   "contentTypes": [
@@ -42,7 +55,7 @@
   "capabilities": {
     "pushDrafts": true,
     "createEntries": true,
-    "mediaImport": false,
+    "mediaImport": true,
     "seoPanel": true,
     "seoProfiles": false,
     "publishFromOs": false,
@@ -53,7 +66,9 @@
     "nativeDraftRevisions": true,
     "autoLogin": false,
     "leads": false,
-    "timeline": true
+    "timeline": true,
+    "draftPushFromOs": true,
+    "seoGateOnPush": true
   },
   "health": {
     "schedulerLastRunAgoMin": 3,
@@ -395,7 +410,7 @@
       "scheduled": 1
     }
   },
-  "contractRevision": "1.0.7",
+  "contractRevision": "1.2.1",
   "previewConfigured": true,
   "navigation": [
     "/",
@@ -405,5 +420,57 @@
     "/contact/",
     "/privacy-policy/"
   ],
-  "sitemapUrl": "https://oasispoolspas.com/sitemap.xml"
+  "sitemapUrl": "https://oasispoolspas.com/sitemap.xml",
+  "bylines": [
+    {
+      "slug": "oasis-team",
+      "name": "Oasis Pool and Spa team",
+      "team": true,
+      "osUserId": null
+    },
+    {
+      "slug": "jane-pm",
+      "name": "Jane PM",
+      "team": false,
+      "osUserId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90"
+    }
+  ],
+  "taxonomies": {
+    "category": {
+      "label": "Category",
+      "terms": [
+        {
+          "slug": "pool-care",
+          "label": "Pool care"
+        },
+        {
+          "slug": "spa-care",
+          "label": "Spa & hot tub care"
+        },
+        {
+          "slug": "equipment",
+          "label": "Equipment"
+        }
+      ]
+    }
+  },
+  "media": {
+    "maxBytes": 1048576,
+    "maxDimension": 4000,
+    "types": [
+      "image/jpeg",
+      "image/png",
+      "image/webp",
+      "image/avif"
+    ],
+    "allowedSourceHosts": [
+      "old.oasispoolspas.com",
+      "*.localwaves-cdn.example"
+    ],
+    "itemsPerCall": 20,
+    "uploadsPerCall": 1,
+    "allowedSourcePathPrefixes": [
+      "https://account.localwaves.ai/uploads/cms-staging/"
+    ]
+  }
 }

@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/pipeline-unschedule.request.json",
+  "title": "pipeline-unschedule (v1.3.0)",
+  "description": "scheduled -> client_approved (the schedule is removed; nothing is published).",
+  "type": "object",
+  "properties": {
+    "reviewId": {
+      "$ref": "common.json#/$defs/id"
+    },
+    "expectedRev": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "actor": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "human"
+        },
+        "osUserId": {
+          "$ref": "common.json#/$defs/uuid"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "role": {
+          "enum": [
+            "OWNER",
+            "PM"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "osUserId",
+        "name",
+        "role"
+      ]
+    }
+  },
+  "required": [
+    "reviewId",
+    "actor"
+  ]
+}
