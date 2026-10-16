@@ -290,6 +290,10 @@ export async function applyReviewEvent({ project, event: n, log }) {
   // floods the timeline with duplicate rows at the same timestamp.
   // Skip links-regenerated — URL rotation should update stored previews without
   // adding a noisy timeline row (message still available via lastEventType).
+  // e2e O13 (EmDash): the OS mirrors the published Review from the publish response (or a pull) before the site's
+  // pipeline_published event arrives, so "already published" is true by then and nobody was told. For EmDash the
+  // publish announcement goes out once per review: unless a published timeline row already exists.
+  let priorPublishedEvent = false;
   if (eventType !== 'pipeline_resend_notification' && eventType !== 'pipeline_links_regenerated') {
     try {
       // Dedupe the "Published" entry: the OS publish proxy, this
@@ -301,7 +305,10 @@ export async function applyReviewEvent({ project, event: n, log }) {
           where: { contentReviewId: review.id, eventType: 'pipeline_published' },
           select: { id: true },
         });
-        if (existingPublished) skipCreate = true;
+        if (existingPublished) {
+          skipCreate = true;
+          priorPublishedEvent = true;
+        }
       }
       // EmDash: a heal/backfill may already have written this seq's timeline row (e2e OS issue 2).
       if (!skipCreate && isEmdash && Number.isInteger(n.cms?.seq)) {
@@ -369,7 +376,7 @@ export async function applyReviewEvent({ project, event: n, log }) {
       project,
       n,
       review,
-      alreadyPublished,
+      alreadyPublished: isEmdash && isPublishEvent ? priorPublishedEvent : alreadyPublished,
       portalProjectUrl,
     });
     if (testResponse) return { review, testResponse };

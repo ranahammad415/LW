@@ -430,3 +430,34 @@ describe('v1.2 draft push (§22, §23)', () => {
     expect(last.select).toEqual({ id: true, name: true });
   });
 });
+
+describe('e2e O13: an EmDash publish notifies once, even when the mirror saw "published" first', () => {
+  const project = { id: 'p1', leadPmId: 'pm1', name: 'Oasis', cmsMigration: null };
+  const publishedEvent = () => {
+    const r = { ...ex('review.response').review, status: 'published' };
+    return normalizeReviewEvent(r, { eventType: 'pipeline_published', seq: 12 });
+  };
+
+  it('row already published by the publish response mirror, no published timeline row yet → content_published', async () => {
+    const { notify } = await import('../../../src/lib/notificationService.js');
+    notify.mockClear();
+    db.overrides['wpContentReview.findUnique'] = async () => ({ id: 'r1', status: 'published', isPublished: true, cmsReviewId: ex('review.response').review.reviewId });
+    db.overrides['wpContentReview.updateMany'] = async () => ({ count: 1 });
+    db.overrides['wpContentReviewEvent.findFirst'] = async () => null;
+    db.overrides['user.findMany'] = async () => [{ id: 'owner-1' }];
+    await applyReviewEvent({ project, event: publishedEvent() });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(notify.mock.calls.map((c) => c[0].slug)).toContain('content_published');
+  });
+
+  it('a second publish event (timeline row exists) does not notify again', async () => {
+    const { notify } = await import('../../../src/lib/notificationService.js');
+    notify.mockClear();
+    db.overrides['wpContentReview.findUnique'] = async () => ({ id: 'r1', status: 'published', isPublished: true, cmsReviewId: ex('review.response').review.reviewId });
+    db.overrides['wpContentReview.updateMany'] = async () => ({ count: 1 });
+    db.overrides['wpContentReviewEvent.findFirst'] = async (args) => (args.where.eventType === 'pipeline_published' ? { id: 'e-pub' } : null);
+    await applyReviewEvent({ project, event: publishedEvent() });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(notify.mock.calls.map((c) => c[0].slug)).not.toContain('content_published');
+  });
+});
