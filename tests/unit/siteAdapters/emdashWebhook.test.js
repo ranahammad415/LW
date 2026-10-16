@@ -195,6 +195,9 @@ function createMemoryStore() {
     async isTombstoned() {
       return false;
     },
+    async listTeam() {
+      return [{ memberId: '8f14e45f-ceea-467a-9575-5f3c1b2a7d90', name: 'Jane PM' }, { memberId: '2c624232-cdd2-4f4a-9e8b-1d2c3b4a5f60', name: 'Sam Worker' }];
+    },
     async listPms() {
       return [{ memberId: '8f14e45f-ceea-467a-9575-5f3c1b2a7d90', name: 'Jane PM' }];
     },
@@ -313,10 +316,13 @@ describe('POST /handshake — pairing', () => {
     const json = res.json();
     expect(json).toMatchObject({ ok: true, contract: 1, siteId: SITE, projectId: PROJECT_ID, keys: { keyId: 1 } });
     expect(json.keys.inbound).toMatch(/^aosk1_[A-Za-z0-9_-]{43}$/);
-    expect(json.contractRevision).toBe('1.1.0');
+    expect(json.contractRevision).toBe('1.2.1');
     expect(json.counterFloor).toEqual({ reviewNo: 0, entryNo: 0 });
     expect(store.lastPairing).toEqual({ siteId: SITE, siteUrl: null, cursorBefore: null });
     expect(json.pms[0].memberId).toBe('8f14e45f-ceea-467a-9575-5f3c1b2a7d90');
+    // v1.2.1 §23(2): the team roster for byline mapping; the OS announces client review from the OS.
+    expect(json.team).toEqual([{ memberId: '8f14e45f-ceea-467a-9575-5f3c1b2a7d90', name: 'Jane PM' }, { memberId: '2c624232-cdd2-4f4a-9e8b-1d2c3b4a5f60', name: 'Sam Worker' }]);
+    expect(json.os.capabilities.clientReviewFromOs).toBe(true);
     const sig = verifyResponse({
       status: 200,
       path: HS,

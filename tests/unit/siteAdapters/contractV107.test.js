@@ -131,7 +131,8 @@ describe('site-info v1.0.7 fields', () => {
   });
 
   it('contractRevision is at least 1.0.7 and the deleted example carries hasPendingDraft:false without live', () => {
-    expect(CONTRACT_REVISION).toBe('1.1.0'); // v1.1.0 (§21) supersedes 1.0.7; the 1.0.7 rules still hold
+    // The OS revision only grows (later stages bump it); these rules still hold.
+    expect(CONTRACT_REVISION.localeCompare('1.1.0', undefined, { numeric: true })).toBeGreaterThanOrEqual(0);
     const del = fx('examples/events.request--deleted.json').events.find((e) => e.type === 'content.deleted');
     expect(del.entry.hasPendingDraft).toBe(false);
     expect(del.entry).not.toHaveProperty('live');

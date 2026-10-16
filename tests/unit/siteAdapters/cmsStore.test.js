@@ -403,3 +403,30 @@ describe('contract v1.0.5: Reviews scoped by siteId', () => {
     expect(calls('wpContentReview.updateMany').length).toBe(before + 1);
   });
 });
+
+describe('v1.2 draft push (§22, §23)', () => {
+  it('content.saved with osRequest confirms our push row; the entry rev is stored on WpPage', async () => {
+    const ev = ex('events.request--os-push').events.find((e) => e.type === 'content.saved');
+    await applyEmdashContentEvent({ id: 'p1', wpUrl: 'https://oasispoolspas.com' }, ev);
+    const confirm = calls('cmsDraftPush.updateMany')[0].args;
+    expect(confirm.where).toMatchObject({ projectId: 'p1', idempotencyKey: ev.osRequest.idempotencyKey, confirmedAt: null });
+    const page = calls('wpPage.create')[0]?.args.data || calls('wpPage.update')[0]?.args.data;
+    expect(page.cmsRev).toBe(ev.entry.rev);
+  });
+
+  it('listTeam: PMs, task and node assignees, owners, as { memberId, name } (≤ 500)', async () => {
+    const { listTeam } = await import('../../../src/lib/cmsStore.js');
+    db.overrides['task.findMany'] = async () => [{ assignees: [{ id: 'u-tm' }] }];
+    db.overrides['contentMapNode.findMany'] = async () => [{ assigneeId: 'u-node' }];
+    db.overrides['user.findMany'] = async (args) =>
+      args.where?.role === 'OWNER'
+        ? [{ id: 'u-owner' }]
+        : (args.where?.id?.in || []).map((id) => ({ id, name: `Name ${id}` }));
+    const team = await listTeam({ id: 'p1', leadPmId: 'u-pm', clientId: null });
+    expect(team.map((m) => m.memberId).sort()).toEqual(['u-node', 'u-owner', 'u-pm', 'u-tm']);
+    expect(team[0]).toEqual({ memberId: expect.any(String), name: expect.stringMatching(/^Name /) });
+    const last = calls('user.findMany').at(-1).args;
+    expect(last.take).toBe(500);
+    expect(last.select).toEqual({ id: true, name: true });
+  });
+});

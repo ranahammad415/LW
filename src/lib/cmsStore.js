@@ -64,7 +64,7 @@ export async function loadEmdashConnection(projectId) {
 }
 
 /** Lead PM + secondary PM of the project's client, as contract `member`s (fallback: active OWNERs). */
-async function listPms(project) {
+export async function listPms(project) {
   const ids = new Set();
   if (project.leadPmId) ids.add(project.leadPmId);
   if (project.clientId) {
@@ -81,6 +81,26 @@ async function listPms(project) {
   if (users.length === 0) {
     users = await prisma.user.findMany({ where: { role: 'OWNER', isActive: true }, select: { id: true, name: true }, take: 10 });
   }
+  return users.map((u) => ({ memberId: u.id, name: String(u.name || 'Agency OS user').slice(0, 200) }));
+}
+
+/**
+ * v1.2.1 §23(2): the project's OS team for byline mapping on the site ({ memberId, name }, ≤ 500): PMs, task
+ * assignees, content-map node assignees and active OWNERs. Names only (no email or other PII).
+ */
+export async function listTeam(project) {
+  const ids = new Set((await listPms(project)).map((m) => m.memberId));
+  const [tasks, nodes] = await Promise.all([
+    prisma.task.findMany({ where: { projectId: project.id }, select: { assignees: { select: { id: true } } }, take: 2000 }),
+    prisma.contentMapNode.findMany({ where: { map: { projectId: project.id }, assigneeId: { not: null } }, select: { assigneeId: true }, take: 2000 }),
+  ]);
+  for (const t of tasks) for (const a of t.assignees || []) ids.add(a.id);
+  for (const n of nodes) if (n.assigneeId) ids.add(n.assigneeId);
+  const owners = await prisma.user.findMany({ where: { role: 'OWNER', isActive: true }, select: { id: true }, take: 50 });
+  for (const o of owners) ids.add(o.id);
+  const users = ids.size
+    ? await prisma.user.findMany({ where: { id: { in: [...ids] }, isActive: true }, select: { id: true, name: true }, orderBy: { name: 'asc' }, take: 500 })
+    : [];
   return users.map((u) => ({ memberId: u.id, name: String(u.name || 'Agency OS user').slice(0, 200) }));
 }
 
@@ -498,6 +518,7 @@ export const prismaCmsStore = {
   },
 
   listPms,
+  listTeam,
 
   async applyPipelineEvent(project, normalized, log) {
     return applyReviewEvent({ project, event: normalized, log });
@@ -545,6 +566,13 @@ export async function applyEmdashContentEvent(project, ev) {
     where: { projectId_wpPostId: { projectId: project.id, wpPostId } },
     select: { id: true, title: true, contentHash: true, content: true },
   });
+  // v1.2 §22.2: a save caused by an OS push carries osRequest { route, idempotencyKey }: confirm our push row
+  // (no notification: content.* events never notify; reviewAfter notifies once through pipeline_submitted).
+  if (ev.osRequest?.idempotencyKey) {
+    await prisma.cmsDraftPush
+      .updateMany({ where: { projectId: project.id, idempotencyKey: String(ev.osRequest.idempotencyKey).slice(0, 64), confirmedAt: null }, data: { confirmedAt: now } })
+      .catch(() => {});
+  }
   const actor = ev.actor || {};
   const who = {
     wpUserId: actor.osUserId || actor.id ? String(actor.osUserId || actor.id).slice(0, 255) : null,

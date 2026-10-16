@@ -288,7 +288,21 @@ export const emdashRoutes = {
   pipelineClientReview: (conn, body, opts) => siteRequest(conn, 'pipeline-client-review', compact(body), opts),
   /** v1.1.0 §21.3: { reviewId, state?, round?, cursor?, limit<=100 } → { items, next }. */
   pipelineSuggestions: (conn, q, opts) => siteRequest(conn, 'pipeline-suggestions', compact({ limit: 100, ...q }), opts),
+  /** v1.2 §22.2 (capability draftPushFromOs for exact slug/bylines/terms). Mutation; body ≤ 2 MiB. */
+  draftUpsert: (conn, body, opts) => siteRequest(conn, 'draft-upsert', compact(body), opts),
+  /** v1.2 §22.3 (capability mediaImport). Mutation; the OS waits 30 s (v1.2.1 §23(3)). */
+  mediaImport: (conn, body, opts) => siteRequest(conn, 'media-import', compact(body), { timeoutMs: 30_000, ...opts }),
 };
+
+/** v1.2 §22: OS draft push (exact slug, bylines, terms) and media import, as advertised by the site. */
+export function hasDraftPushFromOs(project) {
+  const caps = project?.cmsCapabilities && typeof project.cmsCapabilities === 'object' ? project.cmsCapabilities : {};
+  return caps.draftPushFromOs === true;
+}
+export function hasMediaImport(project) {
+  const caps = project?.cmsCapabilities && typeof project.cmsCapabilities === 'object' ? project.cmsCapabilities : {};
+  return caps.mediaImport === true;
+}
 
 /** v1.1.0 §21.1: the site implements client review from the OS (else: keep the review-link flow). */
 export function hasClientReviewFromOs(project) {
@@ -522,6 +536,8 @@ export function entryToPageData(entry, siteUrl) {
       modifiedAt: parseDate(e.updatedAt),
       // Entry-level publish time (never a draft value); null for never-published entries.
       cmsPublishedAt: parseDate(e.publishedAt),
+      // v1.2.1 §23(1): the exact baseRev token for draft-upsert updates (never derived from draftRevisionId).
+      ...(e.rev ? { cmsRev: str(e.rev, 64) } : {}),
       cmsHasPendingDraft: pending,
       cmsDraftTitle: pending ? String(e.title || '').slice(0, 500) : null,
       cmsWordCount: wordCount,

@@ -534,6 +534,8 @@ model Project {
   cmsPairingCodes      CmsPairingCode[]
   cmsEventReceipts     CmsEventReceipt[]
   cmsReviewSuggestions CmsReviewSuggestion[]
+  cmsDrafts            CmsDraft[]
+  cmsMediaRefs         CmsMediaRef[]
 
   @@map("project")
 }
@@ -769,6 +771,7 @@ model Task {
   @@index([workCycleId])
   @@index([clonedFromTaskId])
   @@map("task")
+  cmsDrafts           CmsDraft[]
 }
 
 model DeliverableVersion {
@@ -1096,6 +1099,8 @@ model WpPage {
   cmsOutlineHash     String?  @db.VarChar(64)
   /// EmDash: when the entry was (last) published (entry `publishedAt`; `live` carries no publishedAt in v1.0.6).
   cmsPublishedAt     DateTime?
+  /// EmDash v1.2.1: the entry's `rev` (opaque baseRev token for draft-upsert updates) from entry summaries.
+  cmsRev             String?  @db.VarChar(64)
 
   project            Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
   task               Task?               @relation(fields: [taskId], references: [id], onDelete: SetNull)
@@ -1250,6 +1255,109 @@ model CmsReviewSuggestion {
   @@unique([projectId, cmsSuggestionId])
   @@index([contentReviewId, round])
   @@map("cmsreviewsuggestion")
+}
+
+/// EmDash v1.2 (§22): a page/post draft written in Agency OS and pushed to the site with draft-upsert. Linked to a
+/// content-map node or a task. The site always stores it as a draft (nothing is published from here).
+model CmsDraft {
+  id                String    @id @default(uuid())
+  projectId         String
+  contentMapNodeId  String?
+  taskId            String?
+  /// Site collection (site-info.collections[].name), e.g. pages | posts.
+  collection        String    @db.VarChar(64)
+  title             String    @db.VarChar(500)
+  slug              String?   @db.VarChar(200)
+  /// Parent section (collections[].parentOptions value) or a parent entry id.
+  parent            String?   @db.VarChar(100)
+  /// layout (approved blocks) | markdown (posts)
+  contentKind       String    @default("layout") @db.VarChar(16)
+  layout            Json?
+  markdown          String?   @db.LongText
+  excerpt           String?   @db.Text
+  seoTitle          String?   @db.VarChar(500)
+  seoDescription    String?   @db.VarChar(1000)
+  /// [bylineSlug] (from site-info.bylines; only the requester's mapped byline or the team byline)
+  bylines           Json?
+  /// { taxonomyName: [termSlug] } (existing terms only)
+  taxonomies        Json?
+  /// true while the content is AI-written and not edited by a person: the push actor is then kind "agent".
+  aiGenerated       Boolean   @default(false)
+  /// Site entry once pushed (create → then updates with baseRev = cmsRev).
+  cmsEntryId        String?   @db.VarChar(64)
+  cmsEntryNo        Int?
+  cmsRev            String?   @db.VarChar(64)
+  cmsEditUrl        String?   @db.VarChar(1000)
+  cmsPath           String?   @db.VarChar(500)
+  /// never | ok | failed | conflict | locked
+  lastPushStatus    String    @default("never") @db.VarChar(16)
+  lastPushAt        DateTime?
+  /// { code, message, details } of the last refused push (CONFLICT_REV entry, CONTRACT_LOCKED violations, …)
+  lastPushError     Json?
+  lastPushWarnings  Json?
+  lastSeoCheck      Json?
+  createdById       String?
+  updatedById       String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @default(now()) @updatedAt
+
+  project        Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  contentMapNode ContentMapNode?  @relation(fields: [contentMapNodeId], references: [id], onDelete: SetNull)
+  task           Task?            @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  pushes         CmsDraftPush[]
+
+  @@index([projectId])
+  @@index([contentMapNodeId])
+  @@index([taskId])
+  @@map("cmsdraft")
+}
+
+/// Audit + idempotency of OS → site draft pushes and media imports (v1.2). One row per user action; retries reuse
+/// the key. content.saved events carrying osRequest.idempotencyKey confirm the row.
+model CmsDraftPush {
+  id             String    @id @default(uuid())
+  projectId      String
+  draftId        String?
+  /// draft-upsert | media-import
+  route          String    @db.VarChar(32)
+  idempotencyKey String    @unique @db.VarChar(64)
+  /// human | agent
+  actorKind      String    @db.VarChar(16)
+  actorUserId    String?
+  /// pending | ok | failed
+  status         String    @default("pending") @db.VarChar(16)
+  errorCode      String?   @db.VarChar(64)
+  summary        Json?
+  confirmedAt    DateTime?
+  createdAt      DateTime  @default(now())
+
+  draft CmsDraft? @relation(fields: [draftId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, createdAt])
+  @@index([draftId])
+  @@map("cmsdraftpush")
+}
+
+/// Site media imported from the OS (v1.2 media-import), deduplicated by the file's sha256 per site.
+model CmsMediaRef {
+  id          String   @id @default(uuid())
+  projectId   String
+  siteId      String   @db.VarChar(64)
+  sha256      String   @db.VarChar(64)
+  mediaId     String   @db.VarChar(64)
+  /// { id, src, alt } as returned by the site (used in image fields)
+  ref         Json
+  contentType String?  @db.VarChar(64)
+  bytes       Int?
+  width       Int?
+  height      Int?
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, siteId, sha256])
+  @@map("cmsmediaref")
 }
 
 /// Owner-deleted pipeline ids. Sync and webhooks must not recreate these rows.
@@ -1835,6 +1943,7 @@ model ContentMapNode {
   wpContentReview WpContentReview?    @relation(fields: [wpContentReviewId], references: [id], onDelete: SetNull)
   workCycle       WorkCycle?          @relation(fields: [workCycleId], references: [id], onDelete: SetNull)
   assignee        User?               @relation("ContentMapNodeAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  cmsDrafts       CmsDraft[]
 
   @@index([mapId, parentId, sortOrder])
   @@index([mapId, slug])

@@ -287,8 +287,11 @@ export async function emdashWebhookRoutes(app, opts = {}) {
       projectId: project.id,
       projectName: String(project.name || '').slice(0, 200),
       serverTime: Math.floor(now / 1000),
-      os: { version: OS_VERSION, capabilities: { clientReviewFromOs: false, seoProfiles: false } },
+      // The OS implements client review from the OS (v1.1.0); profiles come in stage 3.
+      os: { version: OS_VERSION, capabilities: { clientReviewFromOs: true, seoProfiles: false } },
       pms: await store.listPms(project),
+      // v1.2.1 §23(2): roster for byline mapping on the site (the OS mirrors site-info.bylines read-only).
+      ...(store.listTeam ? { team: await store.listTeam(project) } : {}),
       // v1.0.3 §16(b): key ids continue across re-pairs (current id + 1); first pairing = 1.
       keys: { keyId: paired?.keyId || 1, inbound, outbound },
       // v1.0.3 (additive): the plugin seeds its surrogate counters to max(local, floor) + 1.
@@ -348,8 +351,11 @@ export async function emdashWebhookRoutes(app, opts = {}) {
       projectId: project.id,
       projectName: String(project.name || '').slice(0, 200),
       serverTime: Math.floor(now / 1000),
-      os: { version: OS_VERSION, capabilities: { clientReviewFromOs: false, seoProfiles: false } },
+      // The OS implements client review from the OS (v1.1.0); profiles come in stage 3.
+      os: { version: OS_VERSION, capabilities: { clientReviewFromOs: true, seoProfiles: false } },
       pms: await store.listPms(project),
+      // v1.2.1 §23(2): roster for byline mapping on the site (the OS mirrors site-info.bylines read-only).
+      ...(store.listTeam ? { team: await store.listTeam(project) } : {}),
       counterFloor: await store.getCounterFloor(project.id),
       ...(rotate ? { rotate } : {}),
     });

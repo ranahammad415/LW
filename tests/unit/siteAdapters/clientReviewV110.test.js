@@ -120,7 +120,8 @@ describe('pipeline-client-review request (§21.2) reproduces the contract exampl
     expect(MUTATION_ROUTES.has('pipeline-client-review')).toBe(true);
     expect(MUTATION_ROUTES.has('pipeline-suggestions')).toBe(false);
     expect(ERROR_CODES.SUGGESTION_LIMIT).toEqual({ status: 422, retryable: false });
-    expect(CONTRACT_REVISION).toBe('1.1.0');
+    // The OS revision only grows (later stages bump it); these rules still hold.
+    expect(CONTRACT_REVISION.localeCompare('1.1.0', undefined, { numeric: true })).toBeGreaterThanOrEqual(0);
     expect(hasClientReviewFromOs({ cmsCapabilities: { clientReviewFromOs: true } })).toBe(true);
     expect(hasClientReviewFromOs({ cmsCapabilities: {} })).toBe(false);
     expect(clientReviewErrorMessage({ code: 'SUGGESTION_LIMIT' })).toMatch(/maximum number of suggestions/);
