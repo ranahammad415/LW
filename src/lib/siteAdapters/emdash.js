@@ -45,6 +45,8 @@ export const MUTATION_ROUTES = new Set([
   'proposal-create',
   'profile-upsert',
   'brief-upsert',
+  // v1.5.0 §26
+  'lead-erase',
 ]);
 
 export class CmsBridgeError extends Error {
@@ -311,6 +313,14 @@ export const emdashRoutes = {
   keywordRegistry: (conn, q = {}, opts) => siteRequest(conn, 'keyword-registry', compact({ limit: 100, ...q }), opts),
   briefGet: (conn, ref, opts) => siteRequest(conn, 'brief-get', compact(ref), opts),
   proposalCreate: (conn, body, opts) => siteRequest(conn, 'proposal-create', compact(body), opts),
+  /** v1.5.0 §26.1 (capability leads): erase a lead and its photos on the site. */
+  leadErase: (conn, body, opts) => siteRequest(conn, 'lead-erase', compact(body), opts),
+  /** v1.5.0 §26.2 (capability reports): read-only dashboards. */
+  redirectLedger: (conn, q = {}, opts) => siteRequest(conn, 'redirect-ledger', compact({ limit: 500, ...q }), opts),
+  missesSummary: (conn, q = {}, opts) => siteRequest(conn, 'misses-summary', compact({ days: 30, limit: 100, ...q }), opts),
+  crawlLatest: (conn, q = {}, opts) => siteRequest(conn, 'crawl-latest', compact(q), opts),
+  /** v1.5.0 §26.3 (capability migrationMap): WP post id → entry map, paged. */
+  migrationMap: (conn, q = {}, opts) => siteRequest(conn, 'migration-map', compact({ limit: 500, ...q }), opts),
 };
 
 function siteCaps(project) {

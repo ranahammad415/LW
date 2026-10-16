@@ -56,12 +56,19 @@ export async function projectCmsRoutes(app) {
   app.post('/:id/cms/pairing-code', { onRequest: [app.verifyJwt] }, async (request, reply) => {
     const project = await loadForStaff(request, reply);
     if (!project) return reply;
-    if (project.cmsType !== 'EMDASH') {
+    // v1.5.0 §26.3: `mode: "migrate"` pairs the EmDash site that replaces this WordPress project's site (OWNER only).
+    const migrate = request.body?.mode === 'migrate';
+    if (migrate) {
+      if (request.user.role !== 'OWNER') return reply.status(403).send({ message: 'Only an Owner can start a WordPress → EmDash migration.' });
+      if (project.cmsType !== 'WORDPRESS') return reply.status(400).send({ message: 'Only a WordPress project can be migrated.' });
+      if (project.cmsMigration?.state === 'applied') return reply.status(409).send({ message: 'This project was already migrated.' });
+      if (!request.body?.siteUrl) return reply.status(400).send({ message: 'Enter the new EmDash site URL.' });
+    } else if (project.cmsType !== 'EMDASH') {
       return reply.status(400).send({ message: 'Switch this project to EmDash before creating a pairing code.' });
     }
     if (!isCmsKeyCryptoConfigured()) return reply.status(503).send({ code: 'CMS_KEY_ENCRYPTION_KEY_MISSING', message: KEY_MISSING_MESSAGE });
 
-    const site = await validateSiteUrl(request.body?.siteUrl || project.wpUrl);
+    const site = await validateSiteUrl(migrate ? request.body.siteUrl : request.body?.siteUrl || project.wpUrl);
     if (!site.ok) return reply.status(400).send({ message: site.message });
 
     // Counters never reset on the site (contract v1.0.2 C1): re-pairing reuses the project's siteId.
@@ -89,6 +96,7 @@ export async function projectCmsRoutes(app) {
           signingKeyEnc: encryptCmsSecret(pairingSigningKey(code), cmsAad(project.id, 'pairing')),
           expiresAt,
           createdById: request.user.id,
+          mode: migrate ? 'migrate' : 'pair',
         },
       }),
     ]);
@@ -104,6 +112,50 @@ export async function projectCmsRoutes(app) {
       ttlSeconds: PAIRING_CODE_TTL_SEC,
       message: 'Paste this code into the site admin (Plugins → Agency OS bridge → Pair). It is shown only once and expires in 15 minutes.',
     });
+  });
+
+  // ── WordPress → EmDash migration (v1.5.0 §26.3, OWNER) ───────────────────
+  // Status (no site call), preview (dry run: fetches the whole map, writes nothing but the preview), apply (one
+  // transaction + cut-over; idempotent). See lib/cmsMigration.js for exactly what moves.
+  const migrationError = (reply, err, log) => {
+    if (err instanceof CmsBridgeError) {
+      const status = err.status === 401 || (err.status >= 500 && err.status !== 503) ? 502 : err.status || 502;
+      return reply.status(status).send({ code: err.code, message: err.message, ...(err.details ? { details: err.details } : {}) });
+    }
+    log?.error?.({ err }, 'Migration request failed');
+    return reply.status(500).send({ message: 'Migration request failed' });
+  };
+  app.get('/:id/cms/migration', { onRequest: [app.verifyJwt, app.requireOwner] }, async (request, reply) => {
+    const project = await prisma.project.findUnique({ where: { id: request.params.id }, select: { id: true, cmsType: true, wpUrl: true, cmsMigration: true, cmsPairedAt: true } });
+    if (!project) return reply.status(404).send({ message: 'Project not found' });
+    return reply.send({ cmsType: project.cmsType, migration: project.cmsMigration || null, pairedAt: project.cmsPairedAt });
+  });
+  app.post('/:id/cms/migration/preview', { onRequest: [app.verifyJwt, app.requireOwner] }, async (request, reply) => {
+    try {
+      const { previewMigration } = await import('../lib/cmsMigration.js');
+      return reply.send(await previewMigration(request.params.id, { user: request.user, log: request.log }));
+    } catch (err) {
+      return migrationError(reply, err, request.log);
+    }
+  });
+  app.post('/:id/cms/migration/apply', { onRequest: [app.verifyJwt, app.requireOwner] }, async (request, reply) => {
+    try {
+      if (request.body?.confirm !== true) return reply.status(400).send({ message: 'Confirm the migration.' });
+      const { applyMigration } = await import('../lib/cmsMigration.js');
+      const result = await applyMigration(request.params.id, {
+        user: request.user,
+        mapHash: request.body?.mapHash,
+        confirmIdentity: request.body?.confirmIdentity === true,
+        log: request.log,
+      });
+      if (!result.alreadyApplied) {
+        // After cut-over: import the EmDash inventory (time-boxed, fire-and-forget) and reconcile the maps.
+        import('../lib/emdashSync.js').then((m) => m.scheduleInventoryAfterPairing(request.params.id, request.log, { delayMs: 1000 })).catch(() => {});
+      }
+      return reply.send({ success: true, result });
+    } catch (err) {
+      return migrationError(reply, err, request.log);
+    }
   });
 
   // ── Disconnect (OWNER) ───────────────────────────────────────────────────

@@ -297,6 +297,10 @@ export async function syncAllEmdashProjects() {
   for (const id of ids) {
     try {
       results.push({ projectId: id, ...(await syncEmdashInventory(id)) });
+      // v1.5.0 §26.2: daily report pull (only sites with `reports`; bounded, read-only).
+      const { pullSiteReports, hasReports } = await import('./cmsReports.js');
+      const p = await prisma.project.findUnique({ where: { id }, select: { cmsCapabilities: true } });
+      if (hasReports(p)) await pullSiteReports(id).catch(() => {});
     } catch (err) {
       results.push({ projectId: id, error: err.message });
     }
@@ -477,6 +481,9 @@ export function startEmdashSyncInterval(logger) {
     try {
       await checkCmsConnections(logger);
       await cleanupCmsTables();
+      // v1.5.0 §26.1: lead retention + pending photo copies (7-day window), leader only.
+      const { leadHousekeeping } = await import('./cmsLeads.js');
+      await leadHousekeeping({ log: logger });
     } catch (err) {
       logger.error({ err }, 'EmDash hourly maintenance failed');
     }

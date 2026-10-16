@@ -496,6 +496,12 @@ model Project {
   /// the site lost its storage and must re-pair as a new siteId. Cleared by the next pairing.
   cmsRepairNeededAt  DateTime?
   cmsRepairReason    String?       @db.VarChar(300)
+  /// v1.5.0 §26.3 WP → EmDash migration of THIS (WordPress) project: { state: paired | previewed | applied, siteUrl,
+  /// migratedFrom, pairedAt, preview: { mapHash, counts, at }, appliedAt, appliedById, oldWpUrl, result }. Until
+  /// `applied` the project stays WORDPRESS (WP sync unchanged); the EmDash site only heartbeats.
+  cmsMigration       Json?
+  /// v1.5.0 §26.1: how long the OS keeps EmDash leads (months, default 24).
+  cmsLeadRetentionMonths Int    @default(24)
   /// EmDash: set by an OWNER or site-initiated disconnect (keys deleted). Distinguishes 401 UNKNOWN_KEY
   /// (disconnected) from 503 NOT_PAIRED (first pairing never completed). Cleared by the next pairing.
   cmsDisconnectedAt  DateTime?
@@ -538,6 +544,8 @@ model Project {
   cmsMediaRefs         CmsMediaRef[]
   cmsSeoProfiles       CmsSeoProfile[]
   cmsSeoProposals      CmsSeoProposal[]
+  cmsLeads             CmsLead[]
+  cmsSiteReports       CmsSiteReport[]
 
   @@map("project")
 }
@@ -576,6 +584,8 @@ model CmsPairingCode {
   siteId         String    @db.VarChar(64)
   /// Site URL to apply to Project.wpUrl when this code completes pairing (validated at creation).
   siteUrl        String?   @db.VarChar(500)
+  /// pair | migrate (v1.5.0: an EmDash site that replaces this WordPress project's site; OWNER only)
+  mode           String    @default("pair") @db.VarChar(16)
   verifier       String    @unique @db.VarChar(64)
   signingKeyEnc  String?   @db.Text
   expiresAt      DateTime
@@ -1105,6 +1115,9 @@ model WpPage {
   cmsRev             String?  @db.VarChar(64)
   /// EmDash v1.3.0: scheduled publish time of a `scheduled` entry.
   cmsScheduledAt     DateTime?
+  /// v1.5.0 WP → EmDash move record: { status: migrated | redirected | dropped | unmatched, oldWpPostId, oldUrl,
+  /// newPath?, redirectType? }. Rows are never deleted by the move.
+  cmsMigration       Json?
 
   project            Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
   task               Task?               @relation(fields: [taskId], references: [id], onDelete: SetNull)
@@ -1432,6 +1445,76 @@ model CmsSeoProposal {
   @@unique([projectId, proposalId])
   @@index([projectId, pageId])
   @@map("cmsseoproposal")
+}
+
+/// EmDash v1.5.0 §26.1: quote requests from the site (PII). Access-controlled; never logged; kept
+/// cmsLeadRetentionMonths (default 24). An erased lead keeps only this row's ids (tombstone, PII cleared).
+model CmsLead {
+  id                String    @id @default(uuid())
+  projectId         String
+  leadId            String    @db.VarChar(64)
+  siteId            String?   @db.VarChar(64)
+  formId            String?   @db.VarChar(64)
+  formName          String?   @db.VarChar(200)
+  sourcePath        String?   @db.VarChar(500)
+  utm               Json?
+  /// PII: { name, phone, email, town, postalCode, service, message, extra }
+  fields            Json?
+  consentMarketing  Boolean   @default(false)
+  /// { text, version, at } (contact consent is always true; no consent = no lead)
+  consent           Json?
+  spamVerdict       String?   @db.VarChar(16)
+  spamScore         Float?
+  siteCreatedAt     DateTime?
+  siteRetentionDays Int?
+  erasedAt          DateTime?
+  /// subject_request | retention | spam | other | site
+  erasedReason      String?   @db.VarChar(32)
+  receivedAt        DateTime  @default(now())
+
+  project Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  photos  CmsLeadPhoto[]
+
+  @@unique([projectId, leadId])
+  @@index([projectId, receivedAt])
+  @@map("cmslead")
+}
+
+/// A lead photo: copied from the site's 7-day signed URL into private OS storage (CMS_LEADS_DIR). The signed URL is
+/// kept only until the copy succeeds or it expires.
+model CmsLeadPhoto {
+  id              String    @id @default(uuid())
+  leadRowId       String
+  mediaId         String    @db.VarChar(64)
+  sourceUrl       String?   @db.VarChar(2000)
+  sourceExpiresAt DateTime?
+  storageName     String?   @db.VarChar(100)
+  contentType     String?   @db.VarChar(64)
+  bytes           Int?
+  copiedAt        DateTime?
+  /// last copy error code (no PII)
+  error           String?   @db.VarChar(64)
+  createdAt       DateTime  @default(now())
+
+  lead CmsLead @relation(fields: [leadRowId], references: [id], onDelete: Cascade)
+
+  @@index([leadRowId])
+  @@index([copiedAt, sourceExpiresAt])
+  @@map("cmsleadphoto")
+}
+
+/// EmDash v1.5.0 §26.2: latest pulled site reports (kind: redirect-ledger | misses-summary | crawl-latest).
+model CmsSiteReport {
+  id        String   @id @default(uuid())
+  projectId String
+  kind      String   @db.VarChar(32)
+  data      Json
+  fetchedAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, kind])
+  @@map("cmssitereport")
 }
 
 /// Owner-deleted pipeline ids. Sync and webhooks must not recreate these rows.

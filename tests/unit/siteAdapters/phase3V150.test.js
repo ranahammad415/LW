@@ -1,0 +1,279 @@
+/**
+ * Contract v1.5.0 §26: leads (PII rules, photos, erasure, retention), site reports, and the WordPress → EmDash
+ * history move (port of planWpHistoryMove, renumbering, preview, one-transaction apply, idempotency).
+ */
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
+import os from 'node:os';
+import path from 'node:path';
+import { mkdtempSync, existsSync, readdirSync } from 'node:fs';
+
+const db = vi.hoisted(() => ({ calls: [], overrides: {} }));
+const site = vi.hoisted(() => ({ handler: null, routes: [] }));
+
+vi.mock('../../../src/lib/prisma.js', () => {
+  const model = (name) =>
+    new Proxy({}, {
+      get(_, method) {
+        const key = `${name}.${String(method)}`;
+        return async (args) => {
+          db.calls.push({ key, args });
+          if (db.overrides[key]) return db.overrides[key](args);
+          if (method === 'findMany') return [];
+          if (method === 'count') return 0;
+          if (method === 'updateMany' || method === 'deleteMany') return { count: 1 };
+          if (method === 'create' || method === 'update' || method === 'upsert') return { id: 'row-1', ...(args?.data || args?.create || {}) };
+          return null;
+        };
+      },
+    });
+  const base = {
+    $queryRaw: async () => {
+      db.calls.push({ key: '$queryRaw' });
+      return [];
+    },
+  };
+  const prisma = new Proxy(
+    {
+      ...base,
+      $transaction: async (fn) => {
+        db.calls.push({ key: '$transaction' });
+        return typeof fn === 'function' ? fn(prisma) : Promise.all(fn);
+      },
+    },
+    { get: (t, n) => (n in t ? t[n] : model(String(n))) }
+  );
+  return { prisma };
+});
+vi.mock('../../../src/lib/cmsStore.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  loadEmdashConnection: async () => ({ conn: { siteId: 'site_9f3c2a7b41d0', siteUrl: 'https://s.example' } }),
+}));
+vi.mock('../../../src/lib/siteAdapters/emdash.js', async (importOriginal) => {
+  const orig = await importOriginal();
+  const call = (route) => async (_c, body) => {
+    site.routes.push(route);
+    return site.handler(route, body);
+  };
+  return {
+    ...orig,
+    credentialToRings: () => ({ inbound: { current: { id: 1, secret: 'x' }, prev: null }, outbound: { current: { id: 1, secret: 'y' }, prev: null } }),
+    emdashRoutes: { ...orig.emdashRoutes, leadErase: call('lead-erase'), redirectLedger: call('redirect-ledger'), missesSummary: call('misses-summary'), crawlLatest: call('crawl-latest'), migrationMap: call('migration-map') },
+  };
+});
+
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { planWpHistoryMove, buildRekeyPlan, sanitizeMigratedFrom } from '../../../src/lib/siteAdapters/migration.js';
+import { validateLeadEvent, leadToRow } from '../../../src/lib/siteAdapters/leads.js';
+import { applyLeadEvent, copyLeadPhotos, eraseLocalLead, eraseLead } from '../../../src/lib/cmsLeads.js';
+import { pullSiteReports, sanitizeReport } from '../../../src/lib/cmsReports.js';
+import { previewMigration, applyMigration, mapHash, identityCheck, isMigrationActive } from '../../../src/lib/cmsMigration.js';
+import { processEventBatch } from '../../../src/routes/webhooks/emdash.js';
+import { MUTATION_ROUTES } from '../../../src/lib/siteAdapters/emdash.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const ex = (n) => JSON.parse(readFileSync(path.join(here, '../../fixtures/cms-contract/examples', `${n}.json`), 'utf8'));
+const calls = (key) => db.calls.filter((c) => c.key === key);
+const leadEvents = () => ex('events.request--lead').events;
+const PROJECT = { id: 'p1', cmsSiteId: 'site_9f3c2a7b41d0' };
+
+beforeAll(() => {
+  process.env.CMS_LEADS_DIR = mkdtempSync(path.join(os.tmpdir(), 'cms-leads-test-'));
+});
+beforeEach(() => {
+  db.calls = [];
+  db.overrides = {};
+  site.routes = [];
+  site.handler = null;
+});
+
+describe('leads (§26.1)', () => {
+  it('validation: consent required, no snapshotText, ≤ 5 photos; messages never contain lead data', () => {
+    const [created, erased] = leadEvents();
+    expect(validateLeadEvent(created)).toBeNull();
+    expect(validateLeadEvent(erased)).toBeNull();
+    expect(validateLeadEvent({ ...created, lead: { ...created.lead, consent: { contact: false } } })).toMatch(/consent/);
+    expect(validateLeadEvent({ ...created, snapshotText: 'x' })).toMatch(/snapshotText/);
+    const msg = validateLeadEvent({ ...created, lead: { ...created.lead, photos: Array(6).fill(created.lead.photos[0]) } });
+    expect(msg).not.toContain(created.lead.fields.email);
+    expect(MUTATION_ROUTES.has('lead-erase')).toBe(true);
+  });
+
+  it('lead.created → CmsLead with PII + photo rows; analytics row carries no PII', async () => {
+    const [created] = leadEvents();
+    expect(await applyLeadEvent(PROJECT, created)).toBe('applied');
+    const row = calls('cmsLead.create')[0].args.data;
+    expect(row).toMatchObject({ projectId: 'p1', leadId: created.lead.leadId, fields: { email: 'pat@example.com' }, consentMarketing: false, spamVerdict: 'ok' });
+    const photo = calls('cmsLeadPhoto.create')[0].args.data;
+    expect(photo).toMatchObject({ mediaId: created.lead.photos[0].mediaId, sourceUrl: created.lead.photos[0].url });
+    const analytics = calls('siteLeadEvent.create')[0].args.data;
+    expect(analytics).toMatchObject({ eventType: 'form_submit', pagePath: '/spa-services/hot-tub-repair/' });
+    for (const pii of ['Pat Example', 'pat@example.com', '555', 'Heater trips']) expect(JSON.stringify(analytics)).not.toContain(pii);
+    expect(calls('siteLeadDailyMetric.create')[0].args.data).toMatchObject({ formSubmits: 1, leads: 1 });
+  });
+
+  it('a known or erased lead is never resurrected', async () => {
+    db.overrides['cmsLead.findUnique'] = async () => ({ id: 'l1' });
+    expect(await applyLeadEvent(PROJECT, leadEvents()[0])).toBe('stale');
+    expect(calls('cmsLead.create')).toHaveLength(0);
+  });
+
+  it('lead.erased clears PII and photos, keeps an id-only tombstone; unknown leads get a tombstone', async () => {
+    db.overrides['cmsLead.findUnique'] = async () => ({ id: 'l1', erasedAt: null, photos: [{ storageName: '0123456789abcdef0123456789abcdef.jpeg' }] });
+    expect(await applyLeadEvent(PROJECT, leadEvents()[1])).toBe('applied');
+    expect(calls('cmsLead.update')[0].args.data).toMatchObject({ fields: null, consent: null, utm: null, erasedReason: 'site' });
+    expect(calls('cmsLeadPhoto.deleteMany')).toHaveLength(1);
+    db.calls = [];
+    db.overrides['cmsLead.findUnique'] = async () => null;
+    await eraseLocalLead('p1', '01JAJ0LEAD0000000000000009', 'site');
+    expect(calls('cmsLead.create')[0].args.data).toMatchObject({ leadId: '01JAJ0LEAD0000000000000009', erasedReason: 'site' });
+    expect(calls('cmsLead.create')[0].args.data.fields).toBeUndefined();
+  });
+
+  it('photos: copied into private storage (never kept as URLs), expired links dropped, non-images refused', async () => {
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0, 0, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x02, 0x58, 0x03, 0x20, 0x03]);
+    const future = new Date(Date.now() + 86_400_000);
+    db.overrides['cmsLeadPhoto.findMany'] = async () => [
+      { id: 'ph1', sourceUrl: 'https://s.example/photo?sig=a', sourceExpiresAt: future },
+      { id: 'ph2', sourceUrl: 'https://s.example/photo?sig=b', sourceExpiresAt: new Date(Date.now() - 1000) },
+      { id: 'ph3', sourceUrl: 'https://s.example/photo?sig=c', sourceExpiresAt: future },
+    ];
+    const fetchImpl = async (url) => new Response(url.endsWith('=c') ? Buffer.from('<svg/>') : jpeg, { status: 200 });
+    expect(await copyLeadPhotos(null, { fetchImpl })).toBe(1);
+    const updates = calls('cmsLeadPhoto.update').map((c) => [c.args.where.id, c.args.data]);
+    expect(updates[0][1]).toMatchObject({ sourceUrl: null, contentType: 'image/jpeg' });
+    expect(updates[1][1]).toEqual({ sourceUrl: null, error: 'EXPIRED' });
+    expect(updates[2][1]).toEqual({ error: 'NOT_IMAGE' });
+    expect(readdirSync(process.env.CMS_LEADS_DIR)).toHaveLength(1);
+  });
+
+  it('OS lead-erase: site first (OWNER actor + reason), then our copy', async () => {
+    site.handler = () => ex('lead-erase.response');
+    db.overrides['cmsLead.findUnique'] = async () => ({ id: 'l1', erasedAt: null, photos: [] });
+    await expect(eraseLead({ projectId: 'p1', leadId: 'L', reason: 'whatever', user: { id: 'o', role: 'OWNER' } })).rejects.toMatchObject({ code: 'VALIDATION' });
+    const out = await eraseLead({ projectId: 'p1', leadId: '01JAJ0LEAD0000000000000001', reason: 'subject_request', user: { id: 'o', name: 'Owner', role: 'OWNER' } });
+    expect(out).toEqual({ erased: true, alreadyGone: false });
+    expect(site.routes).toEqual(['lead-erase']);
+    expect(calls('cmsLead.update')[0].args.data.erasedReason).toBe('subject_request');
+  });
+
+  it('a failing lead apply is logged with a code only (no lead data)', async () => {
+    const logged = [];
+    const store = {
+      claimReceipt: async () => 'new',
+      finalizeReceipt: async () => {},
+      releaseReceipt: async () => {},
+      applyLeadEvent: async () => {
+        throw Object.assign(new Error('Unique constraint failed on value pat@example.com'), { code: 'P2002' });
+      },
+    };
+    const log = { error: (obj) => logged.push(obj) };
+    const r = await processEventBatch({ store, project: PROJECT, events: [leadEvents()[0]], log });
+    expect(r.rejected[0]).toMatchObject({ code: 'INTERNAL', retryable: true });
+    expect(JSON.stringify(logged)).not.toContain('pat@example.com');
+    expect(JSON.stringify(r)).not.toContain('pat@example.com');
+  });
+});
+
+describe('reports (§26.2)', () => {
+  it('pulls the three reports (read-only) and stores them; sites without `reports` are refused', async () => {
+    db.overrides['project.findUnique'] = async () => ({ cmsType: 'EMDASH', cmsCapabilities: { reports: true }, cmsRepairNeededAt: null });
+    site.handler = (route) => ex(`${route}.response`);
+    expect(await pullSiteReports('p1')).toEqual({ 'redirect-ledger': 'ok', 'misses-summary': 'ok', 'crawl-latest': 'ok' });
+    expect(calls('cmsSiteReport.upsert')).toHaveLength(3);
+    expect(sanitizeReport('misses-summary', ex('misses-summary.response')).items[0]).toMatchObject({ path: '/hot-tubs-for-sale/', hits: 31 });
+    db.overrides['project.findUnique'] = async () => ({ cmsType: 'EMDASH', cmsCapabilities: {} });
+    await expect(pullSiteReports('p1')).rejects.toMatchObject({ code: 'NOT_IMPLEMENTED' });
+  });
+});
+
+describe('WordPress → EmDash migration (§26.3)', () => {
+  const map = ex('migration-map.response');
+  const wpPages = [
+    { id: 'pg118', wpPostId: 118, url: 'https://old.oasispoolspas.com/hot-tub-repair/' },
+    { id: 'pg204', wpPostId: 204, url: 'https://old.oasispoolspas.com/2023/winter-tips/' },
+    { id: 'pg311', wpPostId: 311, url: 'https://old.oasispoolspas.com/old-promo/' },
+    { id: 'pg900', wpPostId: 900, url: 'https://old.oasispoolspas.com/unknown/' },
+  ];
+  const WPP = {
+    id: 'p1', cmsType: 'WORDPRESS', wpUrl: 'https://old.oasispoolspas.com', wpApiKey: 'aaaa9c1f', cmsSiteId: 'site_9f3c2a7b41d0',
+    cmsMigration: { state: 'paired', siteUrl: 'https://oasispoolspas.com' },
+  };
+
+  it('port of planWpHistoryMove + renumbering with collisions', () => {
+    const plan = planWpHistoryMove({ wpPages, wpReviews: [{ wpPipelineId: 7, wpPostId: 118, status: 'published', isPublished: true }, { wpPipelineId: 8, wpPostId: 204, status: 'pending_pm_review' }] }, map.items);
+    expect(plan.pages.map((p) => p.wpPostId)).toEqual([118]);
+    expect(plan.redirected.map((p) => p.wpPostId)).toEqual([204]);
+    expect(plan.dropped.map((p) => p.wpPostId)).toEqual([311]);
+    expect(plan.unmatched).toEqual([900]);
+    expect(plan.blockers).toEqual([8]);
+    expect(plan.ok).toBe(false);
+    // entry_no 204 for post 118 while WP post 204 still exists: 204 is parked at -204, 118 moves to 204.
+    const p2 = planWpHistoryMove({ wpPages, wpReviews: [] }, [{ ...map.items[0], entry_no: 204 }, map.items[1]]);
+    expect(buildRekeyPlan(p2, wpPages)).toEqual({ moves: [{ from: 118, to: 204 }], parks: [{ from: 204, to: -204 }], conflicts: [] });
+    expect(buildRekeyPlan(planWpHistoryMove({ wpPages, wpReviews: [] }, [map.items[0], { ...map.items[0], wp_post_id: 311 }]), wpPages).conflicts).toHaveLength(1);
+    expect(sanitizeMigratedFrom({ ...map.migratedFrom, wpPluginKeyHint: 'secretkey9c1f' }).wpPluginKeyHint).toBe('9c1f');
+  });
+
+  it('identity check: old URL host and the key hint', () => {
+    expect(identityCheck(WPP, map.migratedFrom)).toMatchObject({ siteUrlMatches: true, keyHintMatches: true });
+    expect(identityCheck({ ...WPP, wpUrl: 'https://other.example' }, map.migratedFrom).siteUrlMatches).toBe(false);
+    expect(isMigrationActive(WPP)).toBe(true);
+    expect(isMigrationActive({ ...WPP, cmsType: 'EMDASH' })).toBe(false);
+  });
+
+  it('preview is a dry run: only the preview summary is stored', async () => {
+    db.overrides['project.findUnique'] = async () => WPP;
+    db.overrides['cmsCredential.findUnique'] = async () => ({ keyId: 1 });
+    db.overrides['wpPage.findMany'] = async () => wpPages;
+    db.overrides['wpContentReview.findMany'] = async () => [{ id: 'r7', wpPipelineId: 7, wpPostId: 118, status: 'published', isPublished: true, postTitle: 'Hot tub' }];
+    site.handler = () => map;
+    const out = await previewMigration('p1', { user: { id: 'o' } });
+    expect(out).toMatchObject({ canApply: true, summary: { pagesMigrated: 1, reviewsMoved: 1, redirected: 1, dropped: 1, unmatched: 1, blockers: [] } });
+    expect(out.mapHash).toBe(mapHash(map.items.map((i) => i)));
+    const writes = db.calls.filter((c) => /\.(update|updateMany|create|upsert|delete|deleteMany)$/.test(c.key));
+    expect(writes.map((w) => w.key)).toEqual(['project.update']);
+    expect(writes[0].args.data.cmsMigration).toMatchObject({ state: 'previewed', preview: { mapHash: out.mapHash } });
+  });
+
+  it('apply: one transaction, project row locked, history moved (nothing deleted), cut-over; second call is a no-op', async () => {
+    let state = { ...WPP, cmsMigration: { ...WPP.cmsMigration, state: 'previewed', preview: { mapHash: mapHash(map.items) } } };
+    db.overrides['project.findUnique'] = async () => state;
+    db.overrides['cmsCredential.findUnique'] = async () => ({ keyId: 1 });
+    db.overrides['wpPage.findMany'] = async () => wpPages;
+    db.overrides['wpContentReview.findMany'] = async () => [{ id: 'r7', wpPipelineId: 7, wpPostId: 118, parentWpPostId: null, status: 'published', isPublished: true }];
+    db.overrides['contentMapNode.updateMany'] = async () => ({ count: 2 });
+    site.handler = () => map;
+    await expect(applyMigration('p1', { user: { id: 'o' }, mapHash: 'stale' })).rejects.toMatchObject({ code: 'CONFLICT_REV' });
+    const out = await applyMigration('p1', { user: { id: 'o' }, mapHash: mapHash(map.items) });
+    expect(out).toMatchObject({ pagesMigrated: 1, reviewsMoved: 1, redirected: 1, dropped: 1, unmatched: 1, nodesRewritten: 2 });
+    expect(calls('$transaction')).toHaveLength(1);
+    expect(calls('$queryRaw')).toHaveLength(1);
+    expect(db.calls.some((c) => /\.(delete|deleteMany)$/.test(c.key))).toBe(false);
+    const pageUpdates = calls('wpPage.update').map((c) => [c.args.where.id, c.args.data]);
+    expect(pageUpdates.find(([id]) => id === 'pg118')[1]).toMatchObject({ cmsEntryId: map.items[0].entry_id, cmsCollection: 'pages', url: 'https://oasispoolspas.com/spa-services/hot-tub-repair/', cmsMigration: { status: 'migrated', oldWpPostId: 118 } });
+    expect(pageUpdates.find(([id]) => id === 'pg204')[1].cmsMigration).toMatchObject({ status: 'redirected', redirectType: 301 });
+    expect(pageUpdates.find(([id]) => id === 'pg900')[1].cmsMigration).toMatchObject({ status: 'unmatched' });
+    expect(calls('wpContentReview.update')[0].args.data).toEqual({ cmsEntryId: map.items[0].entry_id, wpPostId: 118 });
+    const cut = calls('project.update').at(-1).args.data;
+    expect(cut).toMatchObject({ cmsType: 'EMDASH', wpUrl: 'https://oasispoolspas.com', wpApiKey: null, cmsMigration: { state: 'applied', oldWpUrl: 'https://old.oasispoolspas.com', oldWpKeyHint: '9c1f' } });
+    // idempotent: once applied, the stored result comes back without any write
+    state = { ...state, cmsType: 'EMDASH', cmsMigration: cut.cmsMigration };
+    db.calls = [];
+    expect(await applyMigration('p1', { user: { id: 'o' }, mapHash: mapHash(map.items) })).toMatchObject({ alreadyApplied: true, pagesMigrated: 1 });
+    expect(db.calls.filter((c) => /\.(update|create)$/.test(c.key))).toHaveLength(0);
+  });
+
+  it('open WordPress reviews block the move; an identity mismatch needs explicit confirmation', async () => {
+    const state = { ...WPP, cmsMigration: { ...WPP.cmsMigration, state: 'previewed', preview: { mapHash: mapHash(map.items) } } };
+    db.overrides['project.findUnique'] = async () => state;
+    db.overrides['cmsCredential.findUnique'] = async () => ({ keyId: 1 });
+    db.overrides['wpPage.findMany'] = async () => wpPages;
+    db.overrides['wpContentReview.findMany'] = async () => [{ id: 'r8', wpPipelineId: 8, wpPostId: 204, status: 'pending_pm_review', isPublished: false }];
+    site.handler = () => map;
+    await expect(applyMigration('p1', { user: { id: 'o' }, mapHash: mapHash(map.items) })).rejects.toMatchObject({ code: 'MIGRATION_BLOCKED', details: { blockers: [8] } });
+    expect(calls('wpPage.update')).toHaveLength(0);
+    db.overrides['project.findUnique'] = async () => ({ ...state, wpUrl: 'https://different.example' });
+    await expect(applyMigration('p1', { user: { id: 'o' }, mapHash: mapHash(map.items) })).rejects.toMatchObject({ code: 'IDENTITY_UNCONFIRMED' });
+  });
+});

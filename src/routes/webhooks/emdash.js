@@ -34,6 +34,8 @@ import {
 import { CmsKeyConfigError } from '../../lib/cmsKeyCrypto.js';
 import { credentialToRings, normalizeReviewEvent } from '../../lib/siteAdapters/emdash.js';
 import { suggestionEventMessage, clientActorFromEvent } from '../../lib/siteAdapters/clientReview.js';
+import { validateLeadEvent } from '../../lib/siteAdapters/leads.js';
+import { isMigrationActive } from '../../lib/cmsMigration.js';
 
 export const OS_VERSION = '2026.10.16';
 
@@ -93,6 +95,9 @@ export function validateEvent(ev) {
     if (ev.suggestions !== undefined && (!Array.isArray(ev.suggestions) || ev.suggestions.length > 200)) {
       return 'suggestions must be an array of at most 200 items';
     }
+  } else if (ev.type.startsWith('lead.')) {
+    const leadErr = validateLeadEvent(ev);
+    if (leadErr) return leadErr;
   } else if (ev.type.startsWith('seo.')) {
     // v1.4.0 §25.4: no per-review seq; ordered by profile.updated_at. Reserved seo.* types are stored only.
     if (ev.type === 'seo.profile_changed' || ev.type === 'seo.contract_locked') {
@@ -183,7 +188,8 @@ export async function emdashWebhookRoutes(app, opts = {}) {
 
   const resolveOutbound = async (siteId, keyId, now) => {
     const project = await store.findProjectBySiteId(siteId);
-    if (!project || project.cmsType !== 'EMDASH') return undefined;
+    // v1.5.0: a WordPress project with an EmDash site paired for migration accepts its signed calls too.
+    if (!project || (project.cmsType !== 'EMDASH' && !isMigrationActive(project))) return undefined;
     const cred = await store.getCredential(project.id);
     // v1.0.4 §17(b): 503 NOT_PAIRED only while the first pairing never completed; a disconnected site
     // gets 401 UNKNOWN_KEY ("re-pair needed" on the site).
@@ -265,7 +271,10 @@ export async function emdashWebhookRoutes(app, opts = {}) {
     // The code (not Project.cmsSiteId) names the project: a re-pair as a NEW siteId switches
     // Project.cmsSiteId only when pairing completes, so the old credential keeps working until then.
     const project = await store.findProjectById(code.projectId);
-    if (!project || project.cmsType !== 'EMDASH' || !(await store.consumePairingCode(code.id, new Date(now)))) {
+    // v1.5.0: a `migrate` code pairs an EmDash site into a WordPress project (no CMS switch until cut-over).
+    const migrate = code.mode === 'migrate';
+    const cmsOk = migrate ? project?.cmsType === 'WORDPRESS' : project?.cmsType === 'EMDASH';
+    if (!project || !cmsOk || !(await store.consumePairingCode(code.id, new Date(now)))) {
       return sendError(reply, 'PAIRING_CODE_INVALID', 'Pairing code is invalid, expired or already used');
     }
 
@@ -280,11 +289,13 @@ export async function emdashWebhookRoutes(app, opts = {}) {
       inbound,
       outbound,
       now: new Date(now),
+      mode: migrate ? 'migrate' : 'pair',
     });
-    request.log.info({ projectId: project.id, siteId: v.siteId }, 'EmDash site paired');
+    request.log.info({ projectId: project.id, siteId: v.siteId, migrate }, 'EmDash site paired');
     // Import the inventory right away, like WordPress after connecting (fire-and-forget, delayed, time-boxed).
+    // Never for a migration pairing: the WordPress rows move onto the EmDash ids only at cut-over.
     try {
-      onPaired(project.id, request.log);
+      if (!migrate) onPaired(project.id, request.log);
     } catch (err) {
       request.log.warn({ err: { message: err?.message } }, 'Could not schedule the first EmDash inventory');
     }
@@ -458,6 +469,19 @@ export async function emdashWebhookRoutes(app, opts = {}) {
     if (!Array.isArray(batch.events) || batch.events.length < 1 || batch.events.length > MAX_EVENTS_PER_BATCH) {
       return sendError(reply, 'VALIDATION', `events must hold 1..${MAX_EVENTS_PER_BATCH} items`);
     }
+    // v1.5.0 migration window: nothing is applied to the WordPress project before cut-over. Every event is refused
+    // as retryable so the site's outbox keeps it; after cut-over it is delivered (or replayed from the cursor).
+    if (project.cmsType !== 'EMDASH') {
+      return reply.status(200).type('application/json').send(
+        JSON.stringify({
+          ok: true,
+          accepted: [],
+          duplicate: [],
+          rejected: batch.events.map((e) => ({ eventId: typeof e?.eventId === 'string' ? e.eventId.slice(0, 64) : 'unknown', code: 'INTERNAL', retryable: true, message: 'Site migration in progress; retry later' })),
+          lastCursor: 0,
+        })
+      );
+    }
 
     // v1.0.2 C1: a NEW eventId reusing a stored cursor, a stored (review, seq) of another event, or a
     // known reviewNo/entryNo mapped to another ULID means the site lost its storage. Whole request:
@@ -603,6 +627,9 @@ export async function processEventBatch({ store, project, events, log }) {
         }
         // v1.1.0: suggestions and the client-decision actor (ordered per suggestion; never on tombstoned rows).
         if (outcome !== 'tombstoned') await store.applyReviewExtras?.(project, ev, outcome);
+      } else if (ev.type.startsWith('lead.')) {
+        // v1.5.0 §26.1: PII only in the leads store; receipts keep ids only.
+        outcome = (await store.applyLeadEvent?.(project, ev)) || 'stored';
       } else if (ev.type.startsWith('seo.')) {
         outcome = (await store.applySeoEvent?.(project, ev)) || 'stored';
       } else if (ev.type.startsWith('content.')) {
@@ -622,7 +649,9 @@ export async function processEventBatch({ store, project, events, log }) {
       accepted.push(ev.eventId);
       storedCursor = Math.max(storedCursor, ev.cursor);
     } catch (err) {
-      log?.error?.({ err, eventId: ev.eventId, type: ev.type }, 'EmDash event apply failed');
+      // Lead events: never log the error object (it could echo lead data); code only.
+      if (ev.type.startsWith('lead.')) log?.error?.({ code: err?.code || 'INTERNAL', eventId: ev.eventId, type: ev.type }, 'EmDash event apply failed');
+      else log?.error?.({ err, eventId: ev.eventId, type: ev.type }, 'EmDash event apply failed');
       await store.releaseReceipt(project.id, ev.eventId).catch(() => {});
       seenInBatch.delete(ev.eventId);
       const validation = err?.code === 'VALIDATION';

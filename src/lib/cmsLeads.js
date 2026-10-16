@@ -1,0 +1,182 @@
+/**
+ * EmDash v1.5.0 §26.1 (D11): leads from EmDash sites.
+ * - `lead.created` → CmsLead (PII, access-controlled) + a PII-free SiteLeadEvent / SiteLeadDailyMetric bump so the
+ *   lead dashboards stay comparable with WordPress (form_submit). Receipts keep only ids (as for every event).
+ * - Photos come as 7-day signed URLs: copied into private storage (CMS_LEADS_DIR, never under the public /uploads),
+ *   the URL is dropped once copied or expired. Bounded: ≤ 5 photos, ≤ 10 MiB each, images only.
+ * - `lead.erased` / OS `lead-erase` → PII and photo files deleted; the row stays as a tombstone (ids only) so a
+ *   replayed `lead.created` never resurrects the lead.
+ * - Retention: leads older than Project.cmsLeadRetentionMonths (default 24) are erased by the leader-only hourly job.
+ * Nothing here logs lead data.
+ */
+import crypto from 'node:crypto';
+import path from 'node:path';
+import { promises as fsp } from 'node:fs';
+import { prisma } from './prisma.js';
+import { probeImage } from './imageProbe.js';
+import { guardedFetch } from './siteAdapters/netGuard.js';
+import { leadToRow, leadAnalyticsMeta, LEAD_PHOTO_MAX_BYTES, LEAD_ERASE_REASONS } from './siteAdapters/leads.js';
+import { CmsBridgeError, emdashRoutes, INTERACTIVE_RETRY_DELAYS_MS } from './siteAdapters/emdash.js';
+import { loadEmdashConnection } from './cmsStore.js';
+
+export function leadsDir() {
+  return process.env.CMS_LEADS_DIR ? path.resolve(process.env.CMS_LEADS_DIR) : path.resolve(process.cwd(), 'private-uploads', 'cms-leads');
+}
+
+/** Errors leaving this module never carry lead data (Prisma messages can echo values). */
+function scrub(err) {
+  const e = new Error('Lead store failed');
+  e.code = err?.code || 'INTERNAL';
+  return e;
+}
+
+function utcDay(d) {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+}
+
+async function bumpLeadMetrics(projectId, row) {
+  const occurredAt = row.siteCreatedAt || new Date();
+  const ruleId = `emdash:${row.formId || 'form'}`.slice(0, 80);
+  await prisma.siteLeadEvent.create({
+    data: { projectId, eventType: 'form_submit', ruleId, ruleLabel: row.formName, pagePath: row.sourcePath, occurredAt, meta: leadAnalyticsMeta(row) },
+  });
+  const day = utcDay(occurredAt);
+  const existing = await prisma.siteLeadDailyMetric.findUnique({ where: { projectId_date: { projectId, date: day } } });
+  const b = existing?.breakdowns && typeof existing.breakdowns === 'object' ? existing.breakdowns : {};
+  const rules = Array.isArray(b.rules) ? [...b.rules] : [];
+  const paths = Array.isArray(b.paths) ? [...b.paths] : [];
+  const r = rules.find((x) => x.eventType === 'form_submit' && (x.ruleId || x.ruleLabel) === ruleId);
+  if (r) r.count += 1;
+  else rules.push({ ruleId, ruleLabel: row.formName || null, eventType: 'form_submit', count: 1 });
+  if (row.sourcePath) {
+    const p = paths.find((x) => x.path === row.sourcePath);
+    if (p) p.count += 1;
+    else paths.push({ path: row.sourcePath, count: 1 });
+  }
+  if (existing) {
+    await prisma.siteLeadDailyMetric.update({
+      where: { id: existing.id },
+      data: { formSubmits: { increment: 1 }, leads: { increment: 1 }, breakdowns: { rules, paths } },
+    });
+  } else {
+    await prisma.siteLeadDailyMetric.create({ data: { projectId, date: day, formSubmits: 1, leads: 1, breakdowns: { rules, paths } } });
+  }
+}
+
+/** Apply a lead event. Returns 'applied' | 'stale' (tombstoned / already known). */
+export async function applyLeadEvent(project, ev) {
+  try {
+    if (ev.type === 'lead.created') {
+      const { row, photos } = leadToRow(ev.lead, project.cmsSiteId);
+      const existing = await prisma.cmsLead.findUnique({ where: { projectId_leadId: { projectId: project.id, leadId: row.leadId } }, select: { id: true } });
+      if (existing) return 'stale'; // known or erased (tombstone): never resurrect
+      const created = await prisma.cmsLead.create({ data: { projectId: project.id, ...row } });
+      for (const p of photos) await prisma.cmsLeadPhoto.create({ data: { leadRowId: created.id, ...p } });
+      await bumpLeadMetrics(project.id, row).catch(() => {});
+      if (photos.length) copyLeadPhotos(created.id).catch(() => {});
+      return 'applied';
+    }
+    if (ev.type === 'lead.erased') {
+      const done = await eraseLocalLead(project.id, ev.leadId, 'site');
+      return done ? 'applied' : 'stale';
+    }
+    return 'stored';
+  } catch (err) {
+    throw scrub(err);
+  }
+}
+
+/** Copy pending photos of one lead (or of all leads with `leadRowId` null), within the 7-day window. */
+export async function copyLeadPhotos(leadRowId = null, { fetchImpl = guardedFetch, now = new Date(), limit = 25 } = {}) {
+  const rows = await prisma.cmsLeadPhoto.findMany({
+    where: { ...(leadRowId ? { leadRowId } : {}), copiedAt: null, sourceUrl: { not: null } },
+    take: limit,
+  });
+  let copied = 0;
+  for (const ph of rows) {
+    if (ph.sourceExpiresAt && ph.sourceExpiresAt <= now) {
+      await prisma.cmsLeadPhoto.update({ where: { id: ph.id }, data: { sourceUrl: null, error: 'EXPIRED' } });
+      continue;
+    }
+    try {
+      const res = await fetchImpl(ph.sourceUrl, { signal: AbortSignal.timeout(20_000), headers: { 'User-Agent': 'Localwaves-AgencyOS/1.0 (+https://localwaves; leads)' } });
+      if (!res.ok) throw Object.assign(new Error('fetch'), { code: res.status >= 300 && res.status < 400 ? 'REDIRECT' : `HTTP_${res.status}` });
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length > LEAD_PHOTO_MAX_BYTES) throw Object.assign(new Error('size'), { code: 'TOO_LARGE' });
+      const probe = probeImage(buf);
+      if (!probe) throw Object.assign(new Error('type'), { code: 'NOT_IMAGE' });
+      const name = `${crypto.randomBytes(16).toString('hex')}.${probe.contentType.split('/')[1]}`;
+      await fsp.mkdir(leadsDir(), { recursive: true });
+      await fsp.writeFile(path.join(leadsDir(), name), buf, { mode: 0o600 });
+      await prisma.cmsLeadPhoto.update({
+        where: { id: ph.id },
+        data: { storageName: name, contentType: probe.contentType, bytes: buf.length, copiedAt: new Date(), sourceUrl: null, error: null },
+      });
+      copied += 1;
+    } catch (err) {
+      await prisma.cmsLeadPhoto.update({ where: { id: ph.id }, data: { error: String(err?.code || 'FAILED').slice(0, 64) } }).catch(() => {});
+    }
+  }
+  return copied;
+}
+
+async function deletePhotoFiles(photos) {
+  for (const p of photos) {
+    if (!p.storageName || !/^[0-9a-f]{32}\.[a-z0-9]+$/.test(p.storageName)) continue;
+    await fsp.unlink(path.join(leadsDir(), p.storageName)).catch(() => {});
+  }
+}
+
+/** Delete our copy: PII cleared, photos deleted; the row stays as an id-only tombstone. */
+export async function eraseLocalLead(projectId, leadId, reason) {
+  const lead = await prisma.cmsLead.findUnique({ where: { projectId_leadId: { projectId, leadId: String(leadId).slice(0, 64) } }, include: { photos: true } });
+  if (!lead) {
+    // Unknown lead: record a tombstone so a late lead.created cannot create it.
+    await prisma.cmsLead.create({ data: { projectId, leadId: String(leadId).slice(0, 64), erasedAt: new Date(), erasedReason: reason } }).catch(() => {});
+    return true;
+  }
+  if (lead.erasedAt) return false;
+  await deletePhotoFiles(lead.photos);
+  await prisma.cmsLeadPhoto.deleteMany({ where: { leadRowId: lead.id } });
+  await prisma.cmsLead.update({
+    where: { id: lead.id },
+    data: { fields: null, consent: null, utm: null, formName: null, sourcePath: null, erasedAt: new Date(), erasedReason: reason },
+  });
+  return true;
+}
+
+/** OS → site lead-erase (OWNER), then our own erasure path. */
+export async function eraseLead({ projectId, leadId, reason, user, log }) {
+  if (!LEAD_ERASE_REASONS.includes(reason)) throw new CmsBridgeError({ status: 400, code: 'VALIDATION', message: 'Choose a reason.' });
+  const { conn } = await loadEmdashConnection(projectId);
+  const res = await emdashRoutes.leadErase(
+    conn,
+    { leadId: String(leadId), reason, actor: { kind: 'human', osUserId: String(user.id), name: String(user.name || 'Agency OS user').slice(0, 200), role: user.role } },
+    { retryDelays: INTERACTIVE_RETRY_DELAYS_MS }
+  );
+  await eraseLocalLead(projectId, leadId, reason);
+  log?.info?.({ projectId, reason }, 'EmDash lead erased');
+  return { erased: !!res?.erased, alreadyGone: !!res?.alreadyGone };
+}
+
+/** Leader-only: erase leads past the project's retention and copy pending photos. Bounded per run. */
+export async function leadHousekeeping({ now = new Date(), log } = {}) {
+  let erased = 0;
+  const projects = await prisma.project.findMany({ where: { cmsType: 'EMDASH' }, select: { id: true, cmsLeadRetentionMonths: true }, take: 500 });
+  for (const p of projects) {
+    const months = Number.isInteger(p.cmsLeadRetentionMonths) && p.cmsLeadRetentionMonths > 0 ? p.cmsLeadRetentionMonths : 24;
+    const cutoff = new Date(now);
+    cutoff.setUTCMonth(cutoff.getUTCMonth() - months);
+    const old = await prisma.cmsLead.findMany({ where: { projectId: p.id, erasedAt: null, receivedAt: { lt: cutoff } }, select: { leadId: true }, take: 200 });
+    for (const l of old) if (await eraseLocalLead(p.id, l.leadId, 'retention')) erased += 1;
+  }
+  const copied = await copyLeadPhotos(null, { now }).catch(() => 0);
+  if (erased || copied) log?.info?.({ erased, copied }, 'EmDash lead housekeeping');
+  return { erased, copied };
+}
+
+/** Absolute path of a copied photo (validated name) for the authenticated download route. */
+export function photoPath(storageName) {
+  if (!/^[0-9a-f]{32}\.[a-z0-9]+$/.test(String(storageName || ''))) return null;
+  return path.join(leadsDir(), storageName);
+}

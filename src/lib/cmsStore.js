@@ -20,6 +20,7 @@ import {
   CmsBridgeError,
 } from './siteAdapters/emdash.js';
 import { KEY_ROTATION_OVERLAP_SEC, PAIRING_MAX_FAILED_ATTEMPTS } from './siteAdapters/signing.js';
+import { sanitizeMigratedFrom } from './siteAdapters/migration.js';
 import {
   suggestionToRow,
   suggestionChangeToUpdate,
@@ -47,6 +48,8 @@ export const PROJECT_CMS_SELECT = {
   cmsLastSeenAt: true,
   cmsLastCursor: true,
   cmsDisconnectedAt: true,
+  // v1.5.0: a WordPress project with an EmDash site paired for migration (heartbeats only until cut-over).
+  cmsMigration: true,
 };
 
 function isUniqueViolation(err) {
@@ -144,6 +147,11 @@ function siteInfoProjectData(siteInfo, contract, now) {
       // v1.0.7 §20: template-linked paths (orphan logic) and the advertised sitemap URL (validated again on use).
       navigation: sanitizeNavigation(siteInfo?.navigation),
       sitemapUrl: sanitizeAbsoluteUrl(siteInfo?.sitemapUrl),
+      // v1.5.0 §26: the WordPress site this EmDash site replaces (key hint only, never the key) and lead forms.
+      ...(sanitizeMigratedFrom(siteInfo?.migratedFrom) ? { migratedFrom: sanitizeMigratedFrom(siteInfo.migratedFrom) } : {}),
+      ...(siteInfo?.leads && typeof siteInfo.leads === 'object'
+        ? { leads: { forms: Array.isArray(siteInfo.leads.forms) ? siteInfo.leads.forms.slice(0, 20).map((f) => ({ id: String(f?.id || '').slice(0, 64), name: String(f?.name || '').slice(0, 200) })) : [], siteRetentionDays: Number.isInteger(siteInfo.leads.siteRetentionDays) ? siteInfo.leads.siteRetentionDays : null } }
+        : {}),
       // site-info only (errata v1.0.1 adds framework.blockSchemas): stored for later use, not relied on.
       ...(siteInfo?.framework && typeof siteInfo.framework === 'object' ? { framework: siteInfo.framework } : {}),
       ...(Array.isArray(siteInfo?.plugins) ? { plugins: siteInfo.plugins.slice(0, 50) } : {}),
@@ -224,7 +232,8 @@ export const prismaCmsStore = {
    * v1.0.2 C1), so cmsLastCursor is kept when the siteId is unchanged and cleared only for a new siteId.
    * The site URL stored on the pairing code is applied only now (review S11).
    */
-  async completePairing({ projectId, siteId, siteUrl = null, siteInfo, contract, inbound, outbound, now = new Date() }) {
+  async completePairing({ projectId, siteId, siteUrl = null, siteInfo, contract, inbound, outbound, now = new Date(), mode = 'pair' }) {
+    const migrate = mode === 'migrate';
     const before = await prisma.project.findUnique({ where: { id: projectId }, select: { cmsSiteId: true } });
     const siteChanged = !!siteId && before?.cmsSiteId !== siteId;
     // v1.0.3 §16(b): key ids continue across a re-pair (current id + 1); the first pairing gets 1.
@@ -257,7 +266,10 @@ export const prismaCmsStore = {
           cmsKeyId: keyId,
           cmsPairedAt: now,
           ...(siteId ? { cmsSiteId: siteId } : {}),
-          ...(siteUrl ? { wpUrl: siteUrl } : {}),
+          // v1.5.0 migrate pairing: the WordPress project keeps its URL and keys until cut-over; the EmDash URL is
+          // kept in cmsMigration (heartbeats only; events wait in the site's outbox).
+          ...(siteUrl && !migrate ? { wpUrl: siteUrl } : {}),
+          ...(migrate ? { cmsMigration: { state: 'paired', siteUrl, pairedAt: now.toISOString(), migratedFrom: sanitizeMigratedFrom(siteInfo?.migratedFrom) } } : {}),
           // New siteId (e2e OS issue 1): start replay at the cursor the site reports, never at 0, so a site
           // that kept its storage does not import events that belonged to its previous pairing.
           ...(siteChanged ? { cmsLastCursor: Number.isInteger(siteInfo?.health?.lastCursor) && siteInfo.health.lastCursor >= 0 ? siteInfo.health.lastCursor : null } : {}),
@@ -534,6 +546,12 @@ export const prismaCmsStore = {
   },
 
   /** v1.4.0 §25.4: seo.* events (profile mirror, proposals, drift rows for OS-owned fields). */
+  /** v1.5.0 §26.1: lead.created / lead.erased (PII only in CmsLead; never logged). */
+  async applyLeadEvent(project, ev) {
+    const { applyLeadEvent } = await import('./cmsLeads.js');
+    return applyLeadEvent(project, ev);
+  },
+
   async applySeoEvent(project, ev) {
     const { applySeoEvent } = await import('./cmsSeoProfiles.js');
     return applySeoEvent(project.id, ev);

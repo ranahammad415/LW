@@ -97,9 +97,13 @@ function createMemoryStore() {
       c.signingKeyEnc = null;
       return true;
     },
-    async completePairing({ projectId, siteId, siteUrl, contract, inbound, outbound, now }) {
+    async completePairing({ projectId, siteId, siteUrl, contract, inbound, outbound, now, mode = 'pair' }) {
       const proj = s.projects.get(projectId);
-      s.lastPairing = { siteId, siteUrl, cursorBefore: proj.cmsLastCursor };
+      s.lastPairing = { siteId, siteUrl, cursorBefore: proj.cmsLastCursor, mode };
+      if (mode === 'migrate') {
+        proj.cmsMigration = { state: 'paired', siteUrl };
+        siteUrl = null; // the WordPress project keeps its URL until cut-over
+      }
       if (siteId && proj.cmsSiteId !== siteId) proj.cmsLastCursor = null;
       if (siteId) proj.cmsSiteId = siteId;
       const prevCred = s.creds.get(projectId);
@@ -236,9 +240,10 @@ function addProject(overrides = {}) {
   });
 }
 
-function addCode({ expiresInMs = 900_000 } = {}) {
+function addCode({ expiresInMs = 900_000, mode = 'pair' } = {}) {
   const code = createPairingCode(SITE);
   store.codes.push({
+    mode,
     id: `code-${store.codes.length + 1}`,
     projectId: PROJECT_ID,
     siteId: SITE,
@@ -319,7 +324,7 @@ describe('POST /handshake — pairing', () => {
     expect(json.keys.inbound).toMatch(/^aosk1_[A-Za-z0-9_-]{43}$/);
     expect(json.contractRevision).toBe(CONTRACT_REVISION);
     expect(json.counterFloor).toEqual({ reviewNo: 0, entryNo: 0 });
-    expect(store.lastPairing).toEqual({ siteId: SITE, siteUrl: null, cursorBefore: null });
+    expect(store.lastPairing).toEqual({ siteId: SITE, siteUrl: null, cursorBefore: null, mode: 'pair' });
     expect(json.pms[0].memberId).toBe('8f14e45f-ceea-467a-9575-5f3c1b2a7d90');
     // v1.2.1 §23(2): the team roster for byline mapping; the OS announces client review from the OS.
     expect(json.team).toEqual([{ memberId: '8f14e45f-ceea-467a-9575-5f3c1b2a7d90', name: 'Jane PM' }, { memberId: '2c624232-cdd2-4f4a-9e8b-1d2c3b4a5f60', name: 'Sam Worker' }]);
@@ -892,5 +897,44 @@ describe('item 2: inventory scheduled after pairing', () => {
     const again = await post(HS, handshakeBody('pair'), { secret: pairingSigningKey(code), keyId: 'pairing' });
     expect(again.statusCode).toBe(401);
     expect(onPaired).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('v1.5.0 WordPress → EmDash migration window (§26.3)', () => {
+  it('a migrate code pairs an EmDash site into a WordPress project without switching it or importing anything', async () => {
+    onPaired.mockClear();
+    addProject({ cmsType: 'WORDPRESS', wpUrl: 'https://old.oasispoolspas.com', cmsSiteId: null });
+    const code = addCode({ mode: 'migrate' });
+    store.codes.at(-1).siteUrl = 'https://oasispoolspas.com';
+    const res = await post(HS, handshakeBody('pair'), { secret: pairingSigningKey(code), keyId: 'pairing' });
+    expect(res.statusCode).toBe(200);
+    expect(store.lastPairing.mode).toBe('migrate');
+    const proj = store.projects.get(PROJECT_ID);
+    expect(proj.cmsType).toBe('WORDPRESS');
+    expect(proj.wpUrl).toBe('https://old.oasispoolspas.com');
+    expect(proj.cmsMigration).toMatchObject({ state: 'paired', siteUrl: 'https://oasispoolspas.com' });
+    expect(onPaired).not.toHaveBeenCalled();
+  });
+
+  it('a normal code never pairs into a WordPress project', async () => {
+    addProject({ cmsType: 'WORDPRESS', cmsSiteId: null });
+    const code = addCode();
+    const res = await post(HS, handshakeBody('pair'), { secret: pairingSigningKey(code), keyId: 'pairing' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('during the window every event is refused as retryable and nothing is applied', async () => {
+    addProject({ cmsType: 'WORDPRESS', cmsMigration: { state: 'paired', siteUrl: 'https://oasispoolspas.com' } });
+    const keys = pairKeys();
+    const events = ex('events.request').events;
+    const res = await post(EV, eventsBody(events), { secret: keys.outbound, keyId: 1 });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().accepted).toEqual([]);
+    expect(res.json().rejected.every((r) => r.retryable === true)).toBe(true);
+    expect(store.applied).toHaveLength(0);
+    expect(store.contentApplied).toHaveLength(0);
+    // heartbeats keep working
+    const hb = await post(HS, handshakeBody('heartbeat'), { secret: keys.outbound, keyId: 1 });
+    expect(hb.statusCode).toBe(200);
   });
 });
