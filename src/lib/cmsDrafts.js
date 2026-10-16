@@ -117,6 +117,16 @@ export async function draftAccess(user, project, scope, target = {}) {
   return { read: projectAccess || write, write };
 }
 
+/** The entry's open review in our mirror (not published, not cancelled), or null. */
+export async function openReviewForEntry(projectId, cmsEntryId) {
+  if (!cmsEntryId) return null;
+  return prisma.wpContentReview.findFirst({
+    where: { projectId, cmsEntryId: String(cmsEntryId), isPublished: false, status: { notIn: ['published', 'cancelled'] } },
+    orderBy: { updatedAt: 'desc' },
+    select: { wpPipelineId: true, status: true },
+  });
+}
+
 /** Validate that the node / task belongs to the project. */
 export async function validateLink(projectId, { contentMapNodeId = null, taskId = null }) {
   if (!contentMapNodeId && !taskId) throw bad('Link the draft to a content-map node or a task.');
@@ -345,35 +355,61 @@ async function pushClaimedDraft({ draft, project, user, opts, log }) {
   const collectionInfo = ctx.collections.find((c) => c.name === draft.collection) || null;
   const slugPolicy = opts.slugPolicy === 'best-effort' || !ctx.capabilities.draftPushFromOs ? 'best-effort' : 'exact';
 
+  // e2e O3: a review request never costs the user their changes. With an open review on the entry (our mirror) the
+  // push goes without reviewAfter; if the site still refuses the transition, the same changes are pushed once more
+  // without it. Either way a REVIEW_ALREADY_OPEN warning says so.
+  const extraWarnings = [];
+  const reviewSkipped = (status) => ({
+    code: 'REVIEW_ALREADY_OPEN',
+    path: '$.reviewAfter',
+    message: `This page already has an open review${status ? ` (${status})` : ''}: your changes were saved without a new review request.`,
+  });
   let reviewAfter = null;
   if (opts.reviewAfter) {
-    const pm = await reviewAfterPm(project);
-    if (pm) reviewAfter = { pm, ...(opts.reviewAfter.note ? { note: String(opts.reviewAfter.note).slice(0, 10_000) } : {}) };
-  }
-  const body = buildDraftUpsertBody(draft, { user, ctx, collectionInfo, slugPolicy, baseRev: opts.baseRev, changeUrl: !!opts.changeUrl, reviewAfter });
-  const check = checkDraftBody(siteInfo, body, draft.collection);
-  if (!check.ok) {
-    throw bad('Fix the problems before pushing.', 'VALIDATION', 422, { errors: check.errors, warnings: check.warnings });
+    const open = draft.cmsEntryId ? await openReviewForEntry(project.id, draft.cmsEntryId) : null;
+    if (open) extraWarnings.push(reviewSkipped(open.status));
+    else {
+      const pm = await reviewAfterPm(project);
+      if (pm) reviewAfter = { pm, ...(opts.reviewAfter.note ? { note: String(opts.reviewAfter.note).slice(0, 10_000) } : {}) };
+    }
   }
 
-  // One key per user action. A retry of the SAME body after an unknown outcome (timeout) reuses the key, so the
-  // site replays its stored response and never creates a second entry (§7).
-  const bodySha = sha(JSON.stringify(body));
-  const last = await prisma.cmsDraftPush.findFirst({ where: { draftId: draft.id, route: 'draft-upsert' }, orderBy: { createdAt: 'desc' } });
-  const reuse = last && last.status === 'unknown' && last.summary?.bodySha === bodySha && Date.now() - new Date(last.createdAt).getTime() < 23 * 3600_000;
-  const idempotencyKey = reuse ? last.idempotencyKey : crypto.randomUUID();
-  const pushRow = reuse
-    ? last
-    : await prisma.cmsDraftPush.create({
-        data: { projectId: project.id, draftId: draft.id, route: 'draft-upsert', idempotencyKey, actorKind: body.actor.kind, actorUserId: user.id, status: 'pending', summary: { bodySha } },
-      });
+  const attemptOnce = async (withReview) => {
+    const body = buildDraftUpsertBody(draft, { user, ctx, collectionInfo, slugPolicy, baseRev: opts.baseRev, changeUrl: !!opts.changeUrl, reviewAfter: withReview });
+    const check = checkDraftBody(siteInfo, body, draft.collection);
+    if (!check.ok) {
+      throw bad('Fix the problems before pushing.', 'VALIDATION', 422, { errors: check.errors, warnings: check.warnings });
+    }
+    // One key per user action. A retry of the SAME body after an unknown outcome (timeout) reuses the key, so the
+    // site replays its stored response and never creates a second entry (§7).
+    const bodySha = sha(JSON.stringify(body));
+    const last = await prisma.cmsDraftPush.findFirst({ where: { draftId: draft.id, route: 'draft-upsert' }, orderBy: { createdAt: 'desc' } });
+    const reuse = last && last.status === 'unknown' && last.summary?.bodySha === bodySha && Date.now() - new Date(last.createdAt).getTime() < 23 * 3600_000;
+    const idempotencyKey = reuse ? last.idempotencyKey : crypto.randomUUID();
+    const pushRow = reuse
+      ? last
+      : await prisma.cmsDraftPush.create({
+          data: { projectId: project.id, draftId: draft.id, route: 'draft-upsert', idempotencyKey, actorKind: body.actor.kind, actorUserId: user.id, status: 'pending', summary: { bodySha } },
+        });
+    try {
+      const { conn } = await loadEmdashConnection(project.id);
+      return { body, check, bodySha, pushRow, res: await emdashRoutes.draftUpsert(conn, body, { ...INTERACTIVE, idempotencyKey }) };
+    } catch (err) {
+      if (!(err instanceof CmsBridgeError)) throw err;
+      return { body, check, bodySha, pushRow, err };
+    }
+  };
 
-  let res;
-  try {
-    const { conn } = await loadEmdashConnection(project.id);
-    res = await emdashRoutes.draftUpsert(conn, body, { ...INTERACTIVE, idempotencyKey });
-  } catch (err) {
-    if (!(err instanceof CmsBridgeError)) throw err;
+  let attempt = await attemptOnce(reviewAfter);
+  if (attempt.err && reviewAfter && attempt.err.code === 'INVALID_TRANSITION') {
+    await prisma.cmsDraftPush.update({ where: { id: attempt.pushRow.id }, data: { status: 'failed', errorCode: attempt.err.code, summary: { bodySha: attempt.bodySha } } });
+    extraWarnings.push(reviewSkipped(null));
+    attempt = await attemptOnce(null);
+  }
+  const { body, bodySha, pushRow, res } = attempt;
+  const check = { ...attempt.check, warnings: [...attempt.check.warnings, ...extraWarnings] };
+  if (attempt.err) {
+    const err = attempt.err;
     const unknownOutcome = err.retryable === true || err.code === 'UPSTREAM_UNAVAILABLE';
     const rec = errorRecord(err);
     const status = err.code === 'CONFLICT_REV' ? 'conflict' : err.code === 'ENTRY_LOCKED' ? 'locked' : 'failed';
@@ -383,7 +419,7 @@ async function pushClaimedDraft({ draft, project, user, opts, log }) {
       data: { lastPushStatus: status, lastPushAt: new Date(), lastPushError: rec, lastPushWarnings: check.warnings.length ? check.warnings : null },
     });
     log?.info?.({ projectId: project.id, draftId: draft.id, code: err.code, actor: body.actor.kind }, 'EmDash draft push refused');
-    return { draft: updated, result: { ok: false, error: rec, retryable: unknownOutcome } };
+    return { draft: updated, result: { ok: false, error: rec, retryable: unknownOutcome, warnings: check.warnings } };
   }
 
   const warnings = [...check.warnings, ...(Array.isArray(res.warnings) ? res.warnings.slice(0, 50) : [])];

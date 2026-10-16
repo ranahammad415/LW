@@ -23,6 +23,7 @@ import {
   parseAiDraft,
   pushErrorMessage,
   createDraftFromEntry,
+  openReviewForEntry,
   draftAccess,
   draftEditMarkers,
 } from '../../lib/cmsDrafts.js';
@@ -102,7 +103,7 @@ function sanitizeEdit(body) {
   return data;
 }
 
-function formatDraft(d, { canWrite = false } = {}) {
+function formatDraft(d, { canWrite = false, openReview = null } = {}) {
   return {
     id: d.id,
     projectId: d.projectId,
@@ -131,6 +132,8 @@ function formatDraft(d, { canWrite = false } = {}) {
     lastPushWarnings: d.lastPushWarnings || [],
     lastSeoCheck: d.lastSeoCheck,
     canWrite,
+    // e2e O3: the entry already has an open review → the editor starts with "Submit for PM review" off.
+    openReview: openReview ? { status: openReview.status } : null,
     updatedAt: d.updatedAt,
   };
 }
@@ -176,7 +179,7 @@ export async function pmCmsDraftRoutes(app) {
         take: 100,
       });
       const out = [];
-      for (const d of rows) out.push(formatDraft(d, { canWrite: await canWriteDraft(request.user, project, d) }));
+      for (const d of rows) out.push(formatDraft(d, { canWrite: await canWriteDraft(request.user, project, d), openReview: await openReviewForEntry(project.id, d.cmsEntryId) }));
       return reply.send(out);
     } catch (err) {
       return sendError(reply, err, request.log);
@@ -214,7 +217,7 @@ export async function pmCmsDraftRoutes(app) {
         user: request.user,
         log: request.log,
       });
-      return reply.send(formatDraft(d, { canWrite: true }));
+      return reply.send(formatDraft(d, { canWrite: true, openReview: await openReviewForEntry(d.projectId, d.cmsEntryId) }));
     } catch (err) {
       return sendError(reply, err, request.log);
     }
@@ -224,7 +227,7 @@ export async function pmCmsDraftRoutes(app) {
     try {
       const ctx = await loadDraftFor(request, reply, request.params.id);
       if (!ctx) return;
-      return reply.send(formatDraft(ctx.draft, { canWrite: ctx.canWrite }));
+      return reply.send(formatDraft(ctx.draft, { canWrite: ctx.canWrite, openReview: await openReviewForEntry(ctx.project.id, ctx.draft.cmsEntryId) }));
     } catch (err) {
       return sendError(reply, err, request.log);
     }
@@ -299,7 +302,7 @@ export async function pmCmsDraftRoutes(app) {
         },
         log: request.log,
       });
-      return reply.status(out.result.ok ? 200 : 409).send({ draft: formatDraft(out.draft, { canWrite: true }), result: out.result });
+      return reply.status(out.result.ok ? 200 : 409).send({ draft: formatDraft(out.draft, { canWrite: true, openReview: await openReviewForEntry(out.draft.projectId, out.draft.cmsEntryId) }), result: out.result });
     } catch (err) {
       return sendError(reply, err, request.log);
     }

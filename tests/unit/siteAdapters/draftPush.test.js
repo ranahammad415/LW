@@ -494,3 +494,41 @@ describe('e2e O1: one draft-access helper (whoever may push may read; ensureProj
     expect(calls('cmsDraft.updateMany')).toHaveLength(0); // refused before the push claim
   });
 });
+
+describe('e2e O3: a review request never costs the user their changes', () => {
+  const UPD = { id: 'd3', projectId: 'p1', contentMapNodeId: null, taskId: null, collection: 'pages', title: 'T', slug: 's', parent: null, contentKind: 'layout', layout: [], cmsEntryId: 'E1', cmsRev: 'v1', lastPushStatus: 'ok' };
+
+  it('an open review in the mirror: pushed without reviewAfter, with a warning', async () => {
+    db.overrides['cmsDraft.findUnique'] = async () => UPD;
+    db.overrides['wpContentReview.findFirst'] = async () => ({ wpPipelineId: 7, status: 'pending_pm_review' });
+    site.upsert = async () => ({ ok: true, entryId: 'E1', rev: 'v2' });
+    const out = await pushDraft({ draftId: 'd3', user: JANE, opts: { reviewAfter: { note: 'x' } } });
+    expect(site.bodies[0]).not.toHaveProperty('reviewAfter');
+    expect(out.result.ok).toBe(true);
+    expect(out.result.warnings).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'REVIEW_ALREADY_OPEN' })]));
+  });
+
+  it('the site refuses the transition: the same changes are pushed once more without reviewAfter', async () => {
+    db.overrides['cmsDraft.findUnique'] = async () => UPD;
+    db.overrides['wpContentReview.findFirst'] = async () => null;
+    site.upsert = async (body) => {
+      if (body.reviewAfter) throw new CmsBridgeError({ status: 409, code: 'INVALID_TRANSITION', message: 'already has an open review (pending_pm_review)' });
+      return { ok: true, entryId: 'E1', rev: 'v2' };
+    };
+    const out = await pushDraft({ draftId: 'd3', user: JANE, opts: { reviewAfter: {} } });
+    expect(site.bodies).toHaveLength(2);
+    expect(site.bodies[0].reviewAfter).toBeTruthy();
+    expect(site.bodies[1]).not.toHaveProperty('reviewAfter');
+    expect(site.opts[0].idempotencyKey).not.toBe(site.opts[1].idempotencyKey);
+    expect(out.result).toMatchObject({ ok: true });
+    expect(out.result.warnings.map((w) => w.code)).toContain('REVIEW_ALREADY_OPEN');
+    expect(calls('cmsDraft.update').at(-1).args.data.lastPushStatus).toBe('ok');
+    // other refusals are not retried
+    site.bodies = [];
+    site.upsert = async () => {
+      throw new CmsBridgeError({ status: 409, code: 'CONFLICT_REV', message: 'changed' });
+    };
+    expect((await pushDraft({ draftId: 'd3', user: JANE, opts: { reviewAfter: {} } })).result.ok).toBe(false);
+    expect(site.bodies).toHaveLength(1);
+  });
+});
