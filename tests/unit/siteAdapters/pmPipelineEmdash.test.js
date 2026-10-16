@@ -102,7 +102,8 @@ describe('EmDash projects', () => {
     emdashProject();
     const r = await app.inject({ method: 'POST', url: `/api/pm/pipeline/${PID}/42/publish` });
     expect(r.statusCode).toBe(403);
-    expect(r.json()).toMatchObject({ code: 'PUBLISH_NOT_ALLOWED', message: 'Approved. Publish in the site admin.', editUrl: EDIT });
+    // e2e O10: the refusal names the real reason (the site does not allow OS publishing), not "Approved" for any status
+    expect(r.json()).toMatchObject({ code: 'PUBLISH_NOT_ALLOWED', message: 'This site does not allow publishing from Agency OS. Publish in the site admin.', editUrl: EDIT });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

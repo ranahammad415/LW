@@ -135,7 +135,11 @@ async function projectCaps(projectId) {
 
 /** Local refusal in the contract's terms (osPublishDecision / schedule checks). */
 function decisionError(d, editUrl) {
-  if (d.error === 'PUBLISH_NOT_ALLOWED') return publishNotAllowed(editUrl);
+  // e2e O10: keep the decision's own message ("Approved. Publish in the site admin." only fits a site without OS publish).
+  if (d.error === 'PUBLISH_NOT_ALLOWED') {
+    const e = publishNotAllowed(editUrl);
+    return new CmsBridgeError({ status: e.status, code: e.code, message: d.message || e.message, retryable: false, details: e.details });
+  }
   const status = d.error === 'FORBIDDEN' ? 403 : d.error === 'INVALID_TRANSITION' ? 409 : 400;
   return new CmsBridgeError({ status, code: d.error, message: d.message, retryable: false });
 }
