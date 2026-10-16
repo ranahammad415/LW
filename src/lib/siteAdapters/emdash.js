@@ -38,6 +38,9 @@ export const MUTATION_ROUTES = new Set([
   'pipeline-client-review',
   'pipeline-publish',
   'pipeline-schedule',
+  // v1.3.0 §24
+  'pipeline-unschedule',
+  'preview-link',
 ]);
 
 export class CmsBridgeError extends Error {
@@ -292,7 +295,27 @@ export const emdashRoutes = {
   draftUpsert: (conn, body, opts) => siteRequest(conn, 'draft-upsert', compact(body), opts),
   /** v1.2 §22.3 (capability mediaImport). Mutation; the OS waits 30 s (v1.2.1 §23(3)). */
   mediaImport: (conn, body, opts) => siteRequest(conn, 'media-import', compact(body), { timeoutMs: 30_000, ...opts }),
+  /** v1.3.0 §24 (capabilities publishFromOs / scheduleFromOs): human OWNER/PM only; OWNER override needs a reason. */
+  pipelinePublish: (conn, body, opts) => siteRequest(conn, 'pipeline-publish', compact(body), opts),
+  pipelineSchedule: (conn, body, opts) => siteRequest(conn, 'pipeline-schedule', compact(body), opts),
+  pipelineUnschedule: (conn, body, opts) => siteRequest(conn, 'pipeline-unschedule', compact(body), opts),
+  /** v1.3.0 §24.3: short-lived staff preview URL; never stored or logged by the OS, never shown to clients. */
+  previewLink: (conn, body, opts) => siteRequest(conn, 'preview-link', compact(body), opts),
 };
+
+function siteCaps(project) {
+  return project?.cmsCapabilities && typeof project.cmsCapabilities === 'object' ? project.cmsCapabilities : {};
+}
+/** v1.3.0: the site allows publishing / scheduling from the OS (build option AND admin setting). */
+export function hasPublishFromOs(project) {
+  return siteCaps(project).publishFromOs === true;
+}
+export function hasScheduleFromOs(project) {
+  return siteCaps(project).scheduleFromOs === true;
+}
+export function hasPreviewLinks(project) {
+  return siteCaps(project).previewLinks === true;
+}
 
 /** v1.2 §22: OS draft push (exact slug, bylines, terms) and media import, as advertised by the site. */
 export function hasDraftPushFromOs(project) {
@@ -404,8 +427,24 @@ export function normalizeReviewEvent(review, { eventType, seq, message = null, o
       suggestionCounts: suggestionCounts(r.suggestionCounts),
       // v1.1.0: who made a client decision (names only), for notification wording.
       clientActor: clientActor && typeof clientActor === 'object' ? clientActor : null,
+      // v1.3.0 §24: scheduled state and publish audit (names only).
+      scheduledAt: str(r.scheduledAt, 40),
+      publishOrigin: ['admin', 'os', 'scheduler'].includes(r.publishOrigin) ? r.publishOrigin : null,
+      publishedBy: r.publishedBy && typeof r.publishedBy === 'object' ? { name: str(r.publishedBy.name, 200), source: str(r.publishedBy.source, 32), osUserId: str(r.publishedBy.osUserId, 64) } : null,
+      override: r.override && typeof r.override === 'object' ? { byName: str(r.override.by?.name, 200), reason: str(r.override.reason, 1000), at: str(r.override.at, 40), action: str(r.override.action, 16) } : null,
     },
   };
+}
+
+/** v1.3.0 Review fields → WpContentReview columns (scheduledAt follows the status: cleared when not scheduled). */
+export function emdashPublishColumns(cms) {
+  if (!cms) return {};
+  const out = {};
+  out.cmsScheduledAt = cms.scheduledAt ? parseDate(cms.scheduledAt) : null;
+  if (cms.publishOrigin) out.cmsPublishOrigin = cms.publishOrigin;
+  if (cms.publishedBy) out.cmsPublishedBy = cms.publishedBy;
+  if (cms.override) out.cmsOverride = cms.override;
+  return out;
 }
 
 function suggestionCounts(c) {
@@ -476,6 +515,7 @@ export function reviewToMirrorData(review) {
       ...(Number.isInteger(n.cms.rev) ? { cmsRev: n.cms.rev } : {}),
       ...(n.cms.clientDecisionSource ? { cmsClientDecisionSource: n.cms.clientDecisionSource } : {}),
       ...(n.cms.suggestionCounts ? { cmsSuggestionCounts: n.cms.suggestionCounts } : {}),
+      ...emdashPublishColumns(n.cms),
       ...(isPublished || isCancelled ? { isPublished: true } : {}),
     },
     postTitle: n.postTitle || 'Untitled',
@@ -538,6 +578,8 @@ export function entryToPageData(entry, siteUrl) {
       cmsPublishedAt: parseDate(e.publishedAt),
       // v1.2.1 §23(1): the exact baseRev token for draft-upsert updates (never derived from draftRevisionId).
       ...(e.rev ? { cmsRev: str(e.rev, 64) } : {}),
+      // v1.3.0: scheduled entries carry their publish time.
+      cmsScheduledAt: e.status === 'scheduled' ? parseDate(e.scheduledAt) : null,
       cmsHasPendingDraft: pending,
       cmsDraftTitle: pending ? String(e.title || '').slice(0, 500) : null,
       cmsWordCount: wordCount,

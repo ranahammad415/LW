@@ -45,6 +45,9 @@ function normalizeSuggestionInput(list) {
 import {
   emdashPmReview,
   emdashPublish,
+  emdashSchedule,
+  emdashUnschedule,
+  emdashStaffPreview,
   emdashRenewPreview,
   emdashChangeType,
   emdashDelete,
@@ -155,6 +158,7 @@ function formatReview(r) {
   // EmDash (contract v1): OS approval = "ready to publish"; a human publishes in the site admin.
   const cmsType = r.project?.cmsType || 'WORDPRESS';
   const isEmdash = cmsType === 'EMDASH';
+  const emdashCaps = isEmdash && r.project?.cmsCapabilities && typeof r.project.cmsCapabilities === 'object' ? r.project.cmsCapabilities : {};
   return {
     id: r.id,
     projectId: r.projectId,
@@ -205,8 +209,15 @@ function formatReview(r) {
     editUrl: r.cmsEditUrl || null,
     // EmDash v1.0.1: token-free link state; URLs come only from the minting call (renew = rotate-links).
     previewLinks: r.cmsLinks || null,
-    canPublishFromOs: !isEmdash,
+    // EmDash v1.3.0: the site decides (capabilities publishFromOs / scheduleFromOs / previewLinks).
+    canPublishFromOs: !isEmdash || emdashCaps.publishFromOs === true,
+    canScheduleFromOs: isEmdash && emdashCaps.scheduleFromOs === true,
+    canStaffPreview: isEmdash && emdashCaps.previewLinks === true && !!r.cmsEntryId,
     readyToPublish: isEmdash && effectiveStatus === 'client_approved',
+    scheduledAt: isEmdash && r.cmsScheduledAt ? new Date(r.cmsScheduledAt).toISOString() : null,
+    publishOrigin: isEmdash ? r.cmsPublishOrigin || null : null,
+    publishedByName: isEmdash ? r.cmsPublishedBy?.name || null : null,
+    override: isEmdash && r.cmsOverride ? { byName: r.cmsOverride.byName || null, reason: r.cmsOverride.reason || null, at: r.cmsOverride.at || null, action: r.cmsOverride.action || null } : null,
     // EmDash v1.1.0 (§21): client decision channel, suggestion counts, "decided by <owner> for the client".
     ...emdashReviewExtras(r, r.project),
   };
@@ -564,8 +575,8 @@ export async function pmPipelineRoutes(app) {
           if (request.user.role === 'PM' && project.leadPmId !== request.user.id) {
             return reply.status(403).send({ message: 'Access denied' });
           }
-          // Phase 1: approval marks "ready to publish"; a human publishes in the EmDash admin.
-          return emdashPublish({ request, reply, projectId, wpPipelineId });
+          // v1.3.0: publish from the OS only when the site allows it (else 403 PUBLISH_NOT_ALLOWED + editUrl).
+          return emdashPublish({ request, reply, projectId, wpPipelineId, formatReview });
         }
         if (!project || !project.wpUrl || !project.wpApiKey) {
           return reply.status(404).send({ message: 'Project not found or no WP config' });
@@ -1557,5 +1568,23 @@ export async function pmPipelineRoutes(app) {
       }
       return reply.send({ suggestions: await listSuggestions(row.id), ...(refreshError ? { refreshError } : {}) });
     }
+  );
+  // ── EmDash v1.3.0 (§24): schedule / unschedule / staff preview (OWNER or the project's lead PM) ──
+  const emdashOnly = async (request, reply, handler) => {
+    const { projectId, wpPipelineId } = request.params;
+    const project = await prisma.project.findUnique({ where: { id: projectId }, select: { leadPmId: true, cmsType: true } });
+    if (!project) return reply.status(404).send({ message: 'Project not found' });
+    if (project.cmsType !== 'EMDASH') return reply.status(400).send({ message: 'Only for EmDash sites.' });
+    if (request.user.role === 'PM' && project.leadPmId !== request.user.id) return reply.status(403).send({ message: 'Access denied' });
+    return handler({ request, reply, projectId, wpPipelineId, formatReview });
+  };
+  app.post('/pipeline/:projectId/:wpPipelineId/schedule', { onRequest: [app.verifyJwt, requirePmOrOwner] }, (request, reply) =>
+    emdashOnly(request, reply, emdashSchedule)
+  );
+  app.post('/pipeline/:projectId/:wpPipelineId/unschedule', { onRequest: [app.verifyJwt, requirePmOrOwner] }, (request, reply) =>
+    emdashOnly(request, reply, emdashUnschedule)
+  );
+  app.post('/pipeline/:projectId/:wpPipelineId/preview-link', { onRequest: [app.verifyJwt, requirePmOrOwner] }, (request, reply) =>
+    emdashOnly(request, reply, emdashStaffPreview)
   );
 }

@@ -15,6 +15,7 @@
  *   written; the event row carries cmsSeq.
  */
 import { prisma } from './prisma.js';
+import { emdashPublishColumns } from './siteAdapters/emdash.js';
 import { maybeGenerateSummary } from './wpSync.js';
 import { notify, notifyTest } from './notificationService.js';
 import { publish as publishRealtime } from './realtimeBus.js';
@@ -154,6 +155,7 @@ export async function applyReviewEvent({ project, event: n, log }) {
         ...(Number.isInteger(n.cms.rev) ? { cmsRev: n.cms.rev } : {}),
         ...(n.cms.clientDecisionSource ? { cmsClientDecisionSource: n.cms.clientDecisionSource } : {}),
         ...(n.cms.suggestionCounts ? { cmsSuggestionCounts: n.cms.suggestionCounts } : {}),
+        ...emdashPublishColumns(n.cms),
         ...(Number.isInteger(n.cms.seq) ? { cmsSeq: n.cms.seq } : {}),
       }
     : {};

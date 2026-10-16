@@ -1101,6 +1101,8 @@ model WpPage {
   cmsPublishedAt     DateTime?
   /// EmDash v1.2.1: the entry's `rev` (opaque baseRev token for draft-upsert updates) from entry summaries.
   cmsRev             String?  @db.VarChar(64)
+  /// EmDash v1.3.0: scheduled publish time of a `scheduled` entry.
+  cmsScheduledAt     DateTime?
 
   project            Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
   task               Task?               @relation(fields: [taskId], references: [id], onDelete: SetNull)
@@ -1206,6 +1208,14 @@ model WpContentReview {
   cmsSuggestionCounts Json?
   /// v1.1.0: who made the last client decision { name, role, source, onBehalfOfClient } (no ids, no PII).
   cmsClientActor     Json?
+  /// v1.3.0 §24: scheduled publish time (status `scheduled`), who/where published, OWNER override record.
+  cmsScheduledAt     DateTime?
+  /// admin | os | scheduler
+  cmsPublishOrigin   String?   @db.VarChar(16)
+  /// { name, source, osUserId? } of the publisher (site actor; names only)
+  cmsPublishedBy     Json?
+  /// { byName, reason, at, action } when an OWNER overrode the review state
+  cmsOverride        Json?
 
   project         Project                  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   events          WpContentReviewEvent[]

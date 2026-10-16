@@ -22,6 +22,7 @@ import {
   INTERACTIVE_RETRY_DELAYS_MS,
 } from '../../lib/siteAdapters/emdash.js';
 import { CmsKeyConfigError } from '../../lib/cmsKeyCrypto.js';
+import { osPublishDecision, checkScheduleAt, STAFF_PREVIEW_MAX_TTL_SEC } from '../../lib/siteAdapters/publish.js';
 
 const INTERACTIVE = { retryDelays: INTERACTIVE_RETRY_DELAYS_MS, timeoutMs: 8000 };
 
@@ -72,7 +73,7 @@ async function loadReview(projectId, wpPipelineId) {
   if (!pipelineId) throw new CmsBridgeError({ status: 400, code: 'VALIDATION', message: 'Invalid pipeline id' });
   const row = await prisma.wpContentReview.findUnique({
     where: { projectId_wpPipelineId: { projectId, wpPipelineId: pipelineId } },
-    select: { id: true, cmsReviewId: true, cmsEditUrl: true, status: true, isPublished: true },
+    select: { id: true, cmsReviewId: true, cmsEntryId: true, cmsEditUrl: true, status: true, isPublished: true },
   });
   if (!row || !row.cmsReviewId) {
     throw new CmsBridgeError({ status: 404, code: 'NOT_FOUND', message: 'Content review not found' });
@@ -122,11 +123,138 @@ export async function emdashPmReview({ request, reply, projectId, wpPipelineId, 
   }
 }
 
-/** POST .../publish → 403 PUBLISH_NOT_ALLOWED with the admin edit URL (no site call). */
-export async function emdashPublish({ request, reply, projectId, wpPipelineId }) {
+/** Human OWNER/PM actor for publish/schedule (v1.3.0 §24.2: agents never publish). */
+function publishActor(user) {
+  return { kind: 'human', osUserId: String(user.id), name: String(user.name || 'Agency OS user').slice(0, 200), role: user.role };
+}
+
+async function projectCaps(projectId) {
+  const p = await prisma.project.findUnique({ where: { id: projectId }, select: { cmsCapabilities: true } });
+  return p?.cmsCapabilities && typeof p.cmsCapabilities === 'object' ? p.cmsCapabilities : {};
+}
+
+/** Local refusal in the contract's terms (osPublishDecision / schedule checks). */
+function decisionError(d, editUrl) {
+  if (d.error === 'PUBLISH_NOT_ALLOWED') return publishNotAllowed(editUrl);
+  const status = d.error === 'FORBIDDEN' ? 403 : d.error === 'INVALID_TRANSITION' ? 409 : 400;
+  return new CmsBridgeError({ status, code: d.error, message: d.message, retryable: false });
+}
+
+/** v1.3.0 messages for the publish family. */
+function publishErrorMessage(err) {
+  if (err.code === 'PUBLISH_BLOCKED') {
+    const gates = Array.isArray(err.details?.gates) ? err.details.gates : [];
+    return gates.length
+      ? `Publishing was blocked by ${gates.length} rule${gates.length > 1 ? 's' : ''} on the site. Nothing was published.`
+      : 'Publishing was blocked by the site. Nothing was published.';
+  }
+  if (err.code === 'PUBLISH_NOT_ALLOWED') return 'This site does not allow publishing from Agency OS. Publish in the site admin.';
+  if (err.code === 'INVALID_TRANSITION') return 'The review is not approved by the client (or its state changed). Reload; an OWNER may override with a reason.';
+  return null;
+}
+
+/**
+ * POST .../publish. v1.3.0: with the site's publishFromOs capability → signed pipeline-publish (human OWNER/PM;
+ * client_approved, or OWNER override with a reason ≥ 20 chars). Without it → 403 PUBLISH_NOT_ALLOWED + editUrl
+ * (no site call, v1 behaviour).
+ */
+export async function emdashPublish({ request, reply, projectId, wpPipelineId, formatReview }) {
   try {
     const row = await loadReview(projectId, wpPipelineId);
-    return sendEmdashError(reply, publishNotAllowed(row.cmsEditUrl), request.log);
+    const caps = await projectCaps(projectId);
+    const b = request.body || {};
+    const override = b.override === true;
+    const overrideReason = override ? String(b.overrideReason || '').trim().slice(0, 1000) : null;
+    const actor = publishActor(request.user);
+    const d = osPublishDecision({ status: row.status }, { actor, override, overrideReason }, caps);
+    if (!d.ok) return sendEmdashError(reply, decisionError(d, row.cmsEditUrl), request.log);
+    const { conn } = await loadEmdashConnection(projectId);
+    const res = await emdashRoutes.pipelinePublish(
+      conn,
+      { reviewId: row.cmsReviewId, actor, ...(d.override ? { override: true, overrideReason } : {}) },
+      INTERACTIVE
+    );
+    if (d.override) request.log.info({ projectId, wpPipelineId, by: request.user.id }, 'EmDash publish with OWNER override');
+    const pipeline = res?.review && formatReview ? await mirrorAndFormat(projectId, res.review, formatReview, request.log) : null;
+    return reply.send({ success: true, pipeline, publishedAt: res?.publishedAt || null, seoCheck: res?.seoCheck ?? null });
+  } catch (err) {
+    if (err instanceof CmsBridgeError) {
+      const m = publishErrorMessage(err);
+      if (m) err.message = m;
+      if (err.code === 'CONFLICT_REV' && err.details?.review) await mirrorEmdashReview(projectId, err.details.review, { log: request.log }).catch(() => {});
+    }
+    await onSiteMismatch(projectId, wpPipelineId, err, request.log);
+    return sendEmdashError(reply, err, request.log);
+  }
+}
+
+/** POST .../schedule { at, override?, overrideReason? } (capability scheduleFromOs). */
+export async function emdashSchedule({ request, reply, projectId, wpPipelineId, formatReview }) {
+  try {
+    const row = await loadReview(projectId, wpPipelineId);
+    const caps = await projectCaps(projectId);
+    const b = request.body || {};
+    const override = b.override === true;
+    const overrideReason = override ? String(b.overrideReason || '').trim().slice(0, 1000) : null;
+    const actor = publishActor(request.user);
+    // Same rules as publish; the site advertises scheduling separately.
+    const d = osPublishDecision({ status: row.status }, { actor, override, overrideReason }, { publishFromOs: caps.scheduleFromOs === true });
+    if (!d.ok) return sendEmdashError(reply, decisionError(d, row.cmsEditUrl), request.log);
+    const when = checkScheduleAt(b.at);
+    if (!when.ok) return sendEmdashError(reply, decisionError(when, row.cmsEditUrl), request.log);
+    const { conn } = await loadEmdashConnection(projectId);
+    const res = await emdashRoutes.pipelineSchedule(
+      conn,
+      { reviewId: row.cmsReviewId, at: when.at, actor, ...(d.override ? { override: true, overrideReason } : {}) },
+      INTERACTIVE
+    );
+    const pipeline = res?.review && formatReview ? await mirrorAndFormat(projectId, res.review, formatReview, request.log) : null;
+    return reply.send({ success: true, pipeline });
+  } catch (err) {
+    if (err instanceof CmsBridgeError) {
+      const m = publishErrorMessage(err);
+      if (m) err.message = m;
+    }
+    await onSiteMismatch(projectId, wpPipelineId, err, request.log);
+    return sendEmdashError(reply, err, request.log);
+  }
+}
+
+/** POST .../unschedule (scheduled → client_approved). */
+export async function emdashUnschedule({ request, reply, projectId, wpPipelineId, formatReview }) {
+  try {
+    const row = await loadReview(projectId, wpPipelineId);
+    const caps = await projectCaps(projectId);
+    if (caps.scheduleFromOs !== true) return sendEmdashError(reply, publishNotAllowed(row.cmsEditUrl), request.log);
+    if (row.status !== 'scheduled') {
+      return sendEmdashError(reply, new CmsBridgeError({ status: 409, code: 'INVALID_TRANSITION', message: 'The review is not scheduled.' }), request.log);
+    }
+    const { conn } = await loadEmdashConnection(projectId);
+    const res = await emdashRoutes.pipelineUnschedule(conn, { reviewId: row.cmsReviewId, actor: publishActor(request.user) }, INTERACTIVE);
+    const pipeline = res?.review && formatReview ? await mirrorAndFormat(projectId, res.review, formatReview, request.log) : null;
+    return reply.send({ success: true, pipeline });
+  } catch (err) {
+    await onSiteMismatch(projectId, wpPipelineId, err, request.log);
+    return sendEmdashError(reply, err, request.log);
+  }
+}
+
+/**
+ * POST .../preview-link → a short-lived staff preview URL of the entry's draft (v1.3.0 §24.3). Returned to the
+ * caller only: never stored, never logged, never shown to clients.
+ */
+export async function emdashStaffPreview({ request, reply, projectId, wpPipelineId }) {
+  try {
+    const row = await loadReview(projectId, wpPipelineId);
+    const caps = await projectCaps(projectId);
+    if (caps.previewLinks !== true || !row.cmsEntryId) {
+      return sendEmdashError(reply, new CmsBridgeError({ status: 409, code: 'NOT_IMPLEMENTED', message: 'This site does not offer staff previews.' }), request.log);
+    }
+    const ttl = Math.min(STAFF_PREVIEW_MAX_TTL_SEC, Math.max(60, Number(request.body?.ttlSeconds) || STAFF_PREVIEW_MAX_TTL_SEC));
+    const { conn } = await loadEmdashConnection(projectId);
+    const res = await emdashRoutes.previewLink(conn, { entryId: row.cmsEntryId, ttlSeconds: ttl, actor: osActor(request.user) }, INTERACTIVE);
+    reply.header('cache-control', 'no-store');
+    return reply.send({ url: res.url, expiresAt: res.expiresAt, editUrl: res.editUrl || row.cmsEditUrl || null });
   } catch (err) {
     return sendEmdashError(reply, err, request.log);
   }

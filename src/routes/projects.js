@@ -787,6 +787,7 @@ export async function projectRoutes(app) {
           cmsDraftTitle: p.cmsDraftTitle ?? null,
           cmsWordCount: p.cmsWordCount ?? null,
           cmsPublishedAt: p.cmsPublishedAt ?? null,
+          cmsScheduledAt: p.cmsScheduledAt ?? null,
           modifiedAt: p.modifiedAt,
           syncedAt: p.syncedAt,
           createdAt: p.createdAt,

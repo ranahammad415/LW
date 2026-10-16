@@ -232,3 +232,98 @@ describe('contract v1.0.5: 409 SITE_MISMATCH', () => {
     expect(db.calls.find((c) => c.key === 'wpContentReviewEvent.create').args.data.eventType).toBe('pipeline_site_mismatch');
   });
 });
+
+describe('v1.3.0 publish / schedule from the OS (§24)', () => {
+  function withCaps(caps, status = 'client_approved') {
+    emdashProject();
+    const base = db.overrides['project.findUnique'];
+    db.overrides['project.findUnique'] = async (args) => (args.select?.cmsCapabilities && !args.select?.cmsSiteId ? { cmsCapabilities: caps } : base(args));
+    db.overrides['wpContentReview.findUnique'] = async () => ({
+      id: 'r1', cmsReviewId: '01JAC7Q2HV5M8N3P4R6S9T0W1X', cmsEntryId: '01JAB4M9ZQ7X3K2V8N5T6R1W0C', cmsEditUrl: EDIT, status, isPublished: false, cmsSeq: 2,
+    });
+  }
+  const sent = () => JSON.parse(fetchMock.mock.calls[0][1].body);
+  const routeOf = () => fetchMock.mock.calls[0][0].split('/').pop();
+
+  it('publishFromOs on: a client-approved review is published by a human OWNER/PM through pipeline-publish', async () => {
+    withCaps({ publishFromOs: true });
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify(ex('pipeline-publish.response')), { status: 200 }));
+    const r = await app.inject({ method: 'POST', url: `/api/pm/pipeline/${PID}/42/publish` });
+    expect(r.statusCode).toBe(200);
+    expect(routeOf()).toBe('pipeline-publish');
+    expect(sent()).toEqual({ reviewId: '01JAC7Q2HV5M8N3P4R6S9T0W1X', actor: { kind: 'human', osUserId: db.user.id, name: 'Agency Owner', role: 'OWNER' } });
+    expect(fetchMock.mock.calls[0][1].headers['x-aos-idempotency-key']).toBeTruthy();
+  });
+
+  it('not client-approved: refused locally unless an OWNER overrides with a reason (≥ 20 chars); PMs cannot override', async () => {
+    withCaps({ publishFromOs: true }, 'pending_client_review');
+    const r1 = await app.inject({ method: 'POST', url: `/api/pm/pipeline/${PID}/42/publish` });
+    expect(r1.statusCode).toBe(409);
+    expect(r1.json().code).toBe('INVALID_TRANSITION');
+    const r2 = await app.inject({ method: 'POST', url: `/api/pm/pipeline/${PID}/42/publish`, payload: { override: true, overrideReason: 'too short' } });
+    expect(r2.statusCode).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify(ex('pipeline-publish.response')), { status: 200 }));
+    const reason = 'Client approved by phone on 16 Oct, email to follow';
+    const r3 = await app.inject({ method: 'POST', url: `/api/pm/pipeline/${PID}/42/publish`, payload: { override: true, overrideReason: reason } });
+    expect(r3.statusCode).toBe(200);
+    expect(sent()).toMatchObject({ override: true, overrideReason: reason });
+    fetchMock.mockReset();
+    db.user = { id: 'pm-1', role: 'PM', name: 'Jane PM' };
+    const r4 = await app.inject({ method: 'POST', url: `/api/pm/pipeline/${PID}/42/publish`, payload: { override: true, overrideReason: reason } });
+    expect(r4.statusCode).toBe(403);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('409 PUBLISH_BLOCKED lists the failing gates; 403 PUBLISH_NOT_ALLOWED keeps the edit link', async () => {
+    withCaps({ publishFromOs: true });
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify(ex('error.response--publish-blocked')), { status: 409 }));
+    const r = await app.inject({ method: 'POST', url: `/api/pm/pipeline/${PID}/42/publish` });
+    expect(r.statusCode).toBe(409);
+    expect(r.json().code).toBe('PUBLISH_BLOCKED');
+    expect(r.json().message).toMatch(/blocked by 2 rules/);
+    expect(r.json().details.gates.map((g) => g.ruleId)).toEqual(['claims.placeholder', 'contract.title']);
+    expect(fetchMock).toHaveBeenCalledTimes(1); // not retried
+    fetchMock.mockReset();
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify(ex('error.response--publish-not-allowed')), { status: 403 }));
+    const r2 = await app.inject({ method: 'POST', url: `/api/pm/pipeline/${PID}/42/publish` });
+    expect(r2.statusCode).toBe(403);
+    expect(r2.json()).toMatchObject({ code: 'PUBLISH_NOT_ALLOWED' });
+    expect(r2.json().editUrl || r2.json().details?.editUrl).toBeTruthy();
+  });
+
+  it('schedule (future, ≤ 365 days) and unschedule; scheduling needs scheduleFromOs', async () => {
+    withCaps({ publishFromOs: true, scheduleFromOs: false });
+    const at = new Date(Date.now() + 3 * 86_400_000).toISOString();
+    expect((await app.inject({ method: 'POST', url: `/api/pm/pipeline/${PID}/42/schedule`, payload: { at } })).statusCode).toBe(403);
+    withCaps({ publishFromOs: true, scheduleFromOs: true });
+    expect((await app.inject({ method: 'POST', url: `/api/pm/pipeline/${PID}/42/schedule`, payload: { at: '2001-01-01T00:00:00Z' } })).statusCode).toBe(400);
+    expect((await app.inject({ method: 'POST', url: `/api/pm/pipeline/${PID}/42/schedule`, payload: { at: new Date(Date.now() + 400 * 86_400_000).toISOString() } })).statusCode).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify(ex('review.response--scheduled')), { status: 200 }));
+    const r = await app.inject({ method: 'POST', url: `/api/pm/pipeline/${PID}/42/schedule`, payload: { at } });
+    expect(r.statusCode).toBe(200);
+    expect(routeOf()).toBe('pipeline-schedule');
+    expect(sent().at).toBe(at.replace(/\.\d{3}Z$/, 'Z'));
+    fetchMock.mockReset();
+    withCaps({ scheduleFromOs: true }, 'scheduled');
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify(ex('review.response--ready')), { status: 200 }));
+    const u = await app.inject({ method: 'POST', url: `/api/pm/pipeline/${PID}/42/unschedule` });
+    expect(u.statusCode).toBe(200);
+    expect(routeOf()).toBe('pipeline-unschedule');
+  });
+
+  it('staff preview link: returned once, not stored; needs previewLinks', async () => {
+    withCaps({ previewLinks: false });
+    expect((await app.inject({ method: 'POST', url: `/api/pm/pipeline/${PID}/42/preview-link` })).statusCode).toBe(409);
+    withCaps({ previewLinks: true });
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify(ex('preview-link.response')), { status: 200 }));
+    const r = await app.inject({ method: 'POST', url: `/api/pm/pipeline/${PID}/42/preview-link` });
+    expect(r.statusCode).toBe(200);
+    expect(r.headers['cache-control']).toBe('no-store');
+    expect(r.json().url).toBe(ex('preview-link.response').url);
+    expect(sent()).toMatchObject({ entryId: '01JAB4M9ZQ7X3K2V8N5T6R1W0C', ttlSeconds: 3600 });
+    const writes = db.calls.filter((c) => /\.(create|update|updateMany|upsert)$/.test(c.key));
+    expect(JSON.stringify(writes)).not.toContain(ex('preview-link.response').url);
+  });
+});
