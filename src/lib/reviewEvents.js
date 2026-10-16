@@ -100,8 +100,14 @@ export async function applyReviewEvent({ project, event: n, log }) {
       where: {
         projectId_wpPipelineId: { projectId: project.id, wpPipelineId },
       },
-      select: { isPublished: true, assignedWorkerId: true, status: true, clientReviewedAt: true },
+      select: { isPublished: true, assignedWorkerId: true, status: true, clientReviewedAt: true, cmsReviewId: true },
     });
+    // Review MEDIUM-HIGH-2: on a project migrated from WordPress, a row without an EmDash review id is WordPress
+    // history (parked); an EmDash event never merges into it.
+    if (isEmdash && existingReview && !existingReview.cmsReviewId && project?.cmsMigration?.state === 'applied') {
+      log?.warn?.({ projectId: project.id, wpPipelineId }, 'EmDash review event skipped: the number belongs to WordPress history');
+      return { skipped: 'foreign_row' };
+    }
     // WP keeps its historical rule (isPublished flag). EmDash: only an actual published status counts,
     // because cancelled rows also carry isPublished (e2e OS issue 2).
     alreadyPublished = isEmdash ? existingReview?.status === 'published' : existingReview?.isPublished || false;

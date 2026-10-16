@@ -46,6 +46,7 @@ vi.mock('../../../src/lib/cmsStore.js', () => ({
   mirrorEmdashReview: async () => null,
   backfillEmdashHistory: async () => 0,
   closeForeignReview: async () => true,
+  isForeignWpPage: (row) => !!row && !row.cmsEntryId && !!row.cmsMigration,
   prismaCmsStore: {
     flagRepairNeeded: async (pid, reason) => {
       h.flagged.push({ pid, reason });
@@ -158,6 +159,24 @@ describe('inventory: omitted outlines (v1.0.6 size guard)', () => {
     const outlineWrites = h.pageUpdates.filter((u) => u.data.cmsOutline);
     expect(outlineWrites).toHaveLength(25);
     expect(outlineWrites[0].data.cmsOutlineHash).toBe('h-E2');
+  });
+});
+
+describe('inventory on a migrated project (review HIGH-1)', () => {
+  it('never updates, overwrites or marks deleted a WordPress row kept by the migration', async () => {
+    h.entryGets = [];
+    h.pageUpdates = [];
+    const item = (n) => ({ entryId: `E${n}`, entryNo: n, collection: 'pages', slug: `s${n}`, path: `/s${n}/`, title: `T${n}`, status: 'published', hasPendingDraft: false, draftRevisionId: null, liveRevisionId: 'L', contentHash: 'b'.repeat(64), updatedAt: '2026-10-15T12:00:00Z' });
+    h.inventory = { ok: true, items: [item(5), item(118)], next: null };
+    h.pages = [
+      // a WordPress row that (defensively) still holds a positive number, and a parked one
+      { id: 'wp-5', wpPostId: 5, contentHash: 'a'.repeat(64), content: 'wp', status: 'published', cmsEntryId: null, cmsMigration: { status: 'unmatched' } },
+      { id: 'wp-p', wpPostId: -204, contentHash: 'a'.repeat(64), content: 'wp', status: 'published', cmsEntryId: null, cmsMigration: { status: 'redirected', parked: true } },
+      { id: 'em-118', wpPostId: 118, contentHash: 'a'.repeat(64), content: '', status: 'published', cmsEntryId: 'E118', cmsMigration: { status: 'migrated' } },
+    ];
+    const r = await syncEmdashInventory('p1');
+    expect(h.pageUpdates.map((u) => u.where.id)).toEqual(['em-118']);
+    expect(r).toMatchObject({ created: 0, updated: 1, deleted: 0 });
   });
 });
 

@@ -68,6 +68,8 @@ import { validateLeadEvent, leadToRow } from '../../../src/lib/siteAdapters/lead
 import { applyLeadEvent, copyLeadPhotos, eraseLocalLead, eraseLead } from '../../../src/lib/cmsLeads.js';
 import { pullSiteReports, sanitizeReport } from '../../../src/lib/cmsReports.js';
 import { previewMigration, applyMigration, mapHash, identityCheck, isMigrationActive } from '../../../src/lib/cmsMigration.js';
+import { applyEmdashContentEvent, mirrorEmdashReview, prismaCmsStore, isForeignWpPage } from '../../../src/lib/cmsStore.js';
+import { applyReviewEvent } from '../../../src/lib/reviewEvents.js';
 import { processEventBatch } from '../../../src/routes/webhooks/emdash.js';
 import { MUTATION_ROUTES } from '../../../src/lib/siteAdapters/emdash.js';
 
@@ -208,9 +210,15 @@ describe('WordPress → EmDash migration (§26.3)', () => {
     expect(plan.unmatched).toEqual([900]);
     expect(plan.blockers).toEqual([8]);
     expect(plan.ok).toBe(false);
-    // entry_no 204 for post 118 while WP post 204 still exists: 204 is parked at -204, 118 moves to 204.
+    // entry_no 204 for post 118: 118 moves to 204; EVERY other WordPress page is parked at -id (review HIGH-1),
+    // every WordPress review at -reviewNo (review MEDIUM-HIGH-2); postIdMap re-points review page references.
     const p2 = planWpHistoryMove({ wpPages, wpReviews: [] }, [{ ...map.items[0], entry_no: 204 }, map.items[1]]);
-    expect(buildRekeyPlan(p2, wpPages)).toEqual({ moves: [{ from: 118, to: 204 }], parks: [{ from: 204, to: -204 }], conflicts: [] });
+    const rk = buildRekeyPlan(p2, wpPages, [{ wpPipelineId: 7 }, { wpPipelineId: 12, cmsReviewId: '01R' }]);
+    expect(rk).toMatchObject({ moves: [{ from: 118, to: 204 }], parks: [{ from: 204, to: -204 }, { from: 311, to: -311 }, { from: 900, to: -900 }], reviewParks: [{ from: 7, to: -7 }], conflicts: [] });
+    expect([...rk.postIdMap]).toEqual([[118, 204], [204, -204], [311, -311], [900, -900]]);
+    // a parking number already taken, or an entry_no held by an EmDash row, is a conflict (apply refuses)
+    expect(buildRekeyPlan(p2, [...wpPages, { wpPostId: -311 }]).conflicts).toEqual([{ wpPostId: 311, reason: 'parking number -311 is taken' }]);
+    expect(buildRekeyPlan(p2, [...wpPages.filter((p) => p.wpPostId !== 204), { wpPostId: 204, cmsEntryId: '01E' }]).conflicts).toHaveLength(1);
     expect(buildRekeyPlan(planWpHistoryMove({ wpPages, wpReviews: [] }, [map.items[0], { ...map.items[0], wp_post_id: 311 }]), wpPages).conflicts).toHaveLength(1);
     expect(sanitizeMigratedFrom({ ...map.migratedFrom, wpPluginKeyHint: 'secretkey9c1f' }).wpPluginKeyHint).toBe('9c1f');
   });
@@ -234,6 +242,17 @@ describe('WordPress → EmDash migration (§26.3)', () => {
     const writes = db.calls.filter((c) => /\.(update|updateMany|create|upsert|delete|deleteMany)$/.test(c.key));
     expect(writes.map((w) => w.key)).toEqual(['project.update']);
     expect(writes[0].args.data.cmsMigration).toMatchObject({ state: 'previewed', preview: { mapHash: out.mapHash } });
+    expect(calls('$queryRaw')).toHaveLength(1); // project row locked for the write
+  });
+
+  it('review LOW-7: a preview never overwrites an applied migration', async () => {
+    let n = 0;
+    // first read (outside the lock) still says paired; the locked re-read sees another instance's apply
+    db.overrides['project.findUnique'] = async () => (n++ === 0 ? WPP : { ...WPP, cmsType: 'EMDASH', cmsMigration: { ...WPP.cmsMigration, state: 'applied' } });
+    db.overrides['cmsCredential.findUnique'] = async () => ({ keyId: 1 });
+    site.handler = () => map;
+    await expect(previewMigration('p1', { user: { id: 'o' } })).rejects.toMatchObject({ code: 'INVALID_TRANSITION' });
+    expect(calls('project.update')).toHaveLength(0);
   });
 
   it('apply: one transaction, project row locked, history moved (nothing deleted), cut-over; second call is a no-op', async () => {
@@ -246,17 +265,20 @@ describe('WordPress → EmDash migration (§26.3)', () => {
     site.handler = () => map;
     await expect(applyMigration('p1', { user: { id: 'o' }, mapHash: 'stale' })).rejects.toMatchObject({ code: 'CONFLICT_REV' });
     const out = await applyMigration('p1', { user: { id: 'o' }, mapHash: mapHash(map.items) });
-    expect(out).toMatchObject({ pagesMigrated: 1, reviewsMoved: 1, redirected: 1, dropped: 1, unmatched: 1, nodesRewritten: 2 });
+    expect(out).toMatchObject({ pagesMigrated: 1, reviewsMoved: 1, reviewsParked: 1, parked: 3, redirected: 1, dropped: 1, unmatched: 1, nodesRewritten: 2 });
     expect(calls('$transaction')).toHaveLength(1);
     expect(calls('$queryRaw')).toHaveLength(1);
     expect(db.calls.some((c) => /\.(delete|deleteMany)$/.test(c.key))).toBe(false);
     const pageUpdates = calls('wpPage.update').map((c) => [c.args.where.id, c.args.data]);
     expect(pageUpdates.find(([id]) => id === 'pg118')[1]).toMatchObject({ cmsEntryId: map.items[0].entry_id, cmsCollection: 'pages', url: 'https://oasispoolspas.com/spa-services/hot-tub-repair/', cmsMigration: { status: 'migrated', oldWpPostId: 118 } });
-    expect(pageUpdates.find(([id]) => id === 'pg204')[1].cmsMigration).toMatchObject({ status: 'redirected', redirectType: 301 });
-    expect(pageUpdates.find(([id]) => id === 'pg900')[1].cmsMigration).toMatchObject({ status: 'unmatched' });
-    expect(calls('wpContentReview.update')[0].args.data).toEqual({ cmsEntryId: map.items[0].entry_id, wpPostId: 118 });
+    // review HIGH-1: every non-migrated WordPress page is parked at -id with its status (no EmDash number lands on it)
+    expect(pageUpdates.find(([id]) => id === 'pg204')[1]).toMatchObject({ wpPostId: -204, cmsMigration: { status: 'redirected', redirectType: 301, parked: true } });
+    expect(pageUpdates.find(([id]) => id === 'pg311')[1]).toMatchObject({ wpPostId: -311, cmsMigration: { status: 'dropped', parked: true } });
+    expect(pageUpdates.find(([id]) => id === 'pg900')[1]).toMatchObject({ wpPostId: -900, cmsMigration: { status: 'unmatched', parked: true } });
+    // review MEDIUM-HIGH-2: the WordPress review is parked at -reviewNo and keeps its (migrated) page
+    expect(calls('wpContentReview.update')[0].args.data).toEqual({ wpPipelineId: -7, cmsEntryId: map.items[0].entry_id, wpPostId: 118 });
     const cut = calls('project.update').at(-1).args.data;
-    expect(cut).toMatchObject({ cmsType: 'EMDASH', wpUrl: 'https://oasispoolspas.com', wpApiKey: null, cmsMigration: { state: 'applied', oldWpUrl: 'https://old.oasispoolspas.com', oldWpKeyHint: '9c1f' } });
+    expect(cut).toMatchObject({ cmsType: 'EMDASH', wpUrl: 'https://oasispoolspas.com', wpApiKey: null, cmsMigration: { state: 'applied', oldWpUrl: 'https://old.oasispoolspas.com', oldWpKeyHint: '9c1f', counterFloor: { entryNo: 900, reviewNo: 7 } } });
     // idempotent: once applied, the stored result comes back without any write
     state = { ...state, cmsType: 'EMDASH', cmsMigration: cut.cmsMigration };
     db.calls = [];
@@ -275,5 +297,79 @@ describe('WordPress → EmDash migration (§26.3)', () => {
     expect(calls('wpPage.update')).toHaveLength(0);
     db.overrides['project.findUnique'] = async () => ({ ...state, wpUrl: 'https://different.example' });
     await expect(applyMigration('p1', { user: { id: 'o' }, mapHash: mapHash(map.items) })).rejects.toMatchObject({ code: 'IDENTITY_UNCONFIRMED' });
+  });
+  const previewed = () => ({ ...WPP, cmsMigration: { ...WPP.cmsMigration, state: 'previewed', preview: { mapHash: mapHash(map.items) } } });
+
+  it('review MEDIUM-3: reviews of parked pages follow their page; tombstones are parked; floor covers the window', async () => {
+    const state = previewed();
+    db.overrides['project.findUnique'] = async () => state;
+    db.overrides['cmsCredential.findUnique'] = async () => ({ keyId: 1 });
+    db.overrides['wpPage.findMany'] = async () => wpPages;
+    db.overrides['wpContentReview.findMany'] = async () => [
+      { id: 'r9', wpPipelineId: 9, wpPostId: 204, parentWpPostId: 900, status: 'published', isPublished: true },
+      { id: 'r30', wpPipelineId: 30, wpPostId: 311, parentWpPostId: 118, status: 'cancelled', isPublished: true },
+    ];
+    db.overrides['wpContentReviewTombstone.findMany'] = async () => [{ id: 't1', wpPipelineId: 41 }];
+    db.overrides['wpContentReviewTombstone.aggregate'] = async () => ({ _max: { wpPipelineId: 41 } });
+    site.handler = () => map;
+    await applyMigration('p1', { user: { id: 'o' }, mapHash: mapHash(map.items) });
+    const rv = Object.fromEntries(calls('wpContentReview.update').map((c) => [c.args.where.id, c.args.data]));
+    expect(rv.r9).toEqual({ wpPipelineId: -9, wpPostId: -204, parentWpPostId: -900 });
+    expect(rv.r30).toEqual({ wpPipelineId: -30, wpPostId: -311, parentWpPostId: 118 });
+    expect(calls('wpContentReviewTombstone.update')[0].args).toEqual({ where: { id: 't1' }, data: { wpPipelineId: -41 } });
+    expect(calls('project.update').at(-1).args.data.cmsMigration.counterFloor).toEqual({ entryNo: 900, reviewNo: 41 });
+  });
+
+  it('review LOW-8: state, preview hash and site URL are re-checked under the lock; an empty move needs confirmation', async () => {
+    db.overrides['cmsCredential.findUnique'] = async () => ({ keyId: 1 });
+    db.overrides['wpPage.findMany'] = async () => wpPages;
+    site.handler = () => map;
+    let n = 0;
+    db.overrides['project.findUnique'] = async () => (n++ === 0 ? previewed() : { ...previewed(), cmsMigration: { ...previewed().cmsMigration, preview: { mapHash: 'other' } } });
+    await expect(applyMigration('p1', { user: { id: 'o' }, mapHash: mapHash(map.items) })).rejects.toMatchObject({ code: 'CONFLICT_REV' });
+    n = 0;
+    db.overrides['project.findUnique'] = async () => (n++ === 0 ? previewed() : { ...previewed(), cmsMigration: { ...previewed().cmsMigration, siteUrl: 'https://elsewhere.example' } });
+    await expect(applyMigration('p1', { user: { id: 'o' }, mapHash: mapHash(map.items) })).rejects.toMatchObject({ code: 'CONFLICT_REV' });
+    expect(calls('wpPage.update')).toHaveLength(0);
+    // a map that migrates nothing
+    const empty = { ...map, items: map.items.filter((i) => i.status !== 'migrated') };
+    const st = { ...WPP, cmsMigration: { ...WPP.cmsMigration, state: 'previewed', preview: { mapHash: mapHash(empty.items) } } };
+    db.overrides['project.findUnique'] = async () => st;
+    site.handler = () => empty;
+    await expect(applyMigration('p1', { user: { id: 'o' }, mapHash: mapHash(empty.items) })).rejects.toMatchObject({ code: 'MIGRATION_EMPTY' });
+    expect(calls('project.update')).toHaveLength(0);
+    expect(await applyMigration('p1', { user: { id: 'o' }, mapHash: mapHash(empty.items), confirmEmpty: true })).toMatchObject({ pagesMigrated: 0, parked: 4 });
+  });
+
+  it('review HIGH-1 / MEDIUM-HIGH-2: after cut-over EmDash never writes a WordPress row; the stored floor is sent', async () => {
+    const applied = { id: 'p1', cmsType: 'EMDASH', wpUrl: 'https://oasispoolspas.com', cmsSiteId: 'site_9f3c2a7b41d0', cmsMigration: { state: 'applied', counterFloor: { entryNo: 900, reviewNo: 41 } } };
+    const wpRow = { id: 'pgX', title: 'Old', contentHash: 'h', content: '', cmsEntryId: null, cmsMigration: { status: 'unmatched', parked: true } };
+    expect(isForeignWpPage(wpRow)).toBe(true);
+    expect(isForeignWpPage({ ...wpRow, cmsEntryId: '01E' })).toBe(false);
+    expect(isForeignWpPage({ ...wpRow, cmsMigration: null })).toBe(false); // native EmDash project rows are untouched by this rule
+    db.overrides['wpPage.findUnique'] = async () => wpRow;
+    const ev = ex('events.request').events.find((e) => e.type === 'content.saved') || { type: 'content.saved', entry: { entryId: '01E', entryNo: 5, collection: 'pages', slug: 'x', status: 'published', title: 'T' } };
+    expect(await applyEmdashContentEvent(applied, ev)).toBe('ignored');
+    expect(calls('wpPage.update')).toHaveLength(0);
+    expect(calls('wpPageSnapshot.create')).toHaveLength(0);
+    expect(calls('wpPage.create')).toHaveLength(0);
+    // review mirror: an existing row without cmsReviewId on a migrated project is foreign
+    db.overrides['project.findUnique'] = async () => applied;
+    db.overrides['wpContentReview.findUnique'] = async () => ({ id: 'rW', status: 'published', isPublished: true, cmsReviewId: null });
+    const review = ex('pipeline-list.response').items?.[0] || ex('pipeline-list.response').reviews?.[0];
+    expect(await mirrorEmdashReview('p1', review)).toBeNull();
+    expect(calls('wpContentReview.updateMany').length + calls('wpContentReview.upsert').length).toBe(0);
+    // control: the EmDash row itself (cmsReviewId set) is still mirrored
+    db.overrides['wpContentReview.findUnique'] = async () => ({ id: 'rE', status: 'pending_pm_review', isPublished: false, cmsReviewId: review.reviewId });
+    await mirrorEmdashReview('p1', review);
+    expect(calls('wpContentReview.updateMany').length + calls('wpContentReview.upsert').length).toBe(1);
+    db.overrides['wpContentReview.findUnique'] = async () => ({ id: 'rW', status: 'published', isPublished: true, cmsReviewId: null });
+    // review event: skipped, never merged
+    const out = await applyReviewEvent({ project: applied, event: { source: 'EMDASH', wpPipelineId: 3, eventType: 'pipeline_submitted', wpPostId: 5, status: 'pending_pm_review', cms: {} } });
+    expect(out).toEqual({ skipped: 'foreign_row' });
+    // counter floor: the stored floor wins over the (now negative) WordPress numbers
+    db.overrides['wpContentReview.aggregate'] = async () => ({ _max: { wpPipelineId: 2 } });
+    db.overrides['wpPage.aggregate'] = async () => ({ _max: { wpPostId: 118 } });
+    expect(await prismaCmsStore.getCounterFloor('p1')).toEqual({ reviewNo: 41, entryNo: 900 });
   });
 });

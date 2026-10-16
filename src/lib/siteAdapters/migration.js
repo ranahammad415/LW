@@ -32,12 +32,15 @@ export function planWpHistoryMove({ wpPages = [], wpReviews = [] } = {}, mapItem
 }
 
 /**
- * Renumbering for the move (OS rule, not in the contract): migrated rows take `wpPostId = entry_no` (the site's
- * surrogate, as EmDash events use it). Any other row whose wpPostId equals one of those numbers is parked at
- * `-wpPostId` (kept, marked, never deleted). Returns { moves: [{ from, to }], parks: [{ from, to }], conflicts }.
- * `conflicts` lists impossible cases (two migrated rows → one entry_no, or a parked number already taken).
+ * Renumbering for the move (OS rule, not in the contract; review HIGH-1 / MEDIUM-HIGH-2):
+ * - migrated rows take `wpPostId = entry_no` (the site's surrogate, as EmDash events use it);
+ * - EVERY other WordPress page row with a positive number is parked at `-wpPostId` (kept, marked, never deleted), so
+ *   no EmDash entry number — migrated or native, before or after cut-over — can ever land on a WordPress row;
+ * - every WordPress review row (no cmsReviewId) with a positive number is parked at `-wpPipelineId` for the same reason.
+ * Returns { moves, parks, reviewParks, postIdMap, conflicts }. `postIdMap` maps an old WP post id to its new number
+ * (entry_no or -id), for review.wpPostId / parentWpPostId. `conflicts` lists impossible cases.
  */
-export function buildRekeyPlan(plan, wpPages) {
+export function buildRekeyPlan(plan, wpPages, wpReviews = []) {
   const targets = new Map(); // entry_no → wpPostId
   const conflicts = [];
   for (const p of plan.pages) {
@@ -51,19 +54,33 @@ export function buildRekeyPlan(plan, wpPages) {
     }
     targets.set(p.cmsEntryNo, p.wpPostId);
   }
-  const migrated = new Set(plan.pages.map((p) => p.wpPostId));
+  const migrated = new Set(plan.pages.filter((p) => targets.get(p.cmsEntryNo) === p.wpPostId).map((p) => p.wpPostId));
   const existing = new Set(wpPages.map((p) => p.wpPostId));
   const parks = [];
   for (const p of wpPages) {
-    if (migrated.has(p.wpPostId) || p.wpPostId <= 0) continue;
-    if (targets.has(p.wpPostId)) {
-      const to = -p.wpPostId;
-      if (existing.has(to)) conflicts.push({ wpPostId: p.wpPostId, reason: `parking number ${to} is taken` });
-      else parks.push({ from: p.wpPostId, to });
+    if (migrated.has(p.wpPostId) || p.wpPostId <= 0 || p.cmsEntryId) continue;
+    const to = -p.wpPostId;
+    if (existing.has(to)) conflicts.push({ wpPostId: p.wpPostId, reason: `parking number ${to} is taken` });
+    else parks.push({ from: p.wpPostId, to });
+  }
+  for (const p of wpPages) {
+    if (p.cmsEntryId && p.wpPostId > 0 && targets.has(p.wpPostId) && targets.get(p.wpPostId) !== p.wpPostId) {
+      conflicts.push({ wpPostId: p.wpPostId, reason: `entry_no ${p.wpPostId} is held by an EmDash row` });
     }
   }
-  const moves = plan.pages.filter((p) => targets.get(p.cmsEntryNo) === p.wpPostId && p.wpPostId !== p.cmsEntryNo).map((p) => ({ from: p.wpPostId, to: p.cmsEntryNo }));
-  return { moves, parks, conflicts };
+  const moves = plan.pages.filter((p) => migrated.has(p.wpPostId) && p.wpPostId !== p.cmsEntryNo).map((p) => ({ from: p.wpPostId, to: p.cmsEntryNo }));
+  const existingReviews = new Set(wpReviews.map((r) => r.wpPipelineId));
+  const reviewParks = [];
+  for (const r of wpReviews) {
+    if (r.wpPipelineId <= 0 || r.cmsReviewId) continue;
+    const to = -r.wpPipelineId;
+    if (existingReviews.has(to)) conflicts.push({ wpPipelineId: r.wpPipelineId, reason: `review parking number ${to} is taken` });
+    else reviewParks.push({ from: r.wpPipelineId, to });
+  }
+  const postIdMap = new Map();
+  for (const p of plan.pages) if (migrated.has(p.wpPostId)) postIdMap.set(p.wpPostId, p.cmsEntryNo);
+  for (const pk of parks) postIdMap.set(pk.from, pk.to);
+  return { moves, parks, reviewParks, postIdMap, conflicts };
 }
 
 /** Normalised items of one migration-map page (defensive: bad items are skipped). */

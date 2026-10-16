@@ -28,6 +28,7 @@ import {
   mirrorEmdashReview,
   backfillEmdashHistory,
   closeForeignReview,
+  isForeignWpPage,
   prismaCmsStore,
 } from './cmsStore.js';
 import { isCmsKeyCryptoConfigured } from './cmsKeyCrypto.js';
@@ -172,9 +173,11 @@ export async function syncEmdashInventory(projectId, { interactive = false, dead
 
   const existing = await prisma.wpPage.findMany({
     where: { projectId },
-    select: { id: true, wpPostId: true, contentHash: true, content: true, status: true, cmsOutlineHash: true },
+    select: { id: true, wpPostId: true, contentHash: true, content: true, status: true, cmsOutlineHash: true, cmsEntryId: true, cmsMigration: true },
   });
-  const byNo = new Map(existing.map((p) => [Number(p.wpPostId), p]));
+  // Review HIGH-1: WordPress rows kept by a migration are never updated, re-created over or marked deleted here.
+  const byNo = new Map(existing.filter((p) => !isForeignWpPage(p)).map((p) => [Number(p.wpPostId), p]));
+  const foreignNos = new Set(existing.filter((p) => isForeignWpPage(p)).map((p) => Number(p.wpPostId)));
   const now = new Date();
   let created = 0;
   let updated = 0;
@@ -183,7 +186,7 @@ export async function syncEmdashInventory(projectId, { interactive = false, dead
   const outlineQueue = [];
   for (const entry of items) {
     const { wpPostId, data, outlinePending, outlineHash, outlineVariant } = entryToPageData(entry, project.wpUrl);
-    if (!wpPostId) continue;
+    if (!wpPostId || foreignNos.has(wpPostId)) continue;
     seen.add(wpPostId);
     const prev = byNo.get(wpPostId);
     // v1.0.6 size guard: outline omitted from inventory; fetch it only when its hash changed.

@@ -170,11 +170,19 @@ export const prismaCmsStore = {
    * never reuses a reviewNo/entryNo the OS already maps. 0 when there are none.
    */
   async getCounterFloor(projectId) {
-    const [r, p] = await Promise.all([
+    const [r, p, proj] = await Promise.all([
       prisma.wpContentReview.aggregate({ where: { projectId }, _max: { wpPipelineId: true } }),
       prisma.wpPage.aggregate({ where: { projectId }, _max: { wpPostId: true } }),
+      prisma.project.findUnique({ where: { id: projectId }, select: { cmsMigration: true } }),
     ]);
-    return { reviewNo: r?._max?.wpPipelineId || 0, entryNo: p?._max?.wpPostId || 0 };
+    // Review MEDIUM-HIGH-2: a migrated project parks its WordPress numbers at negative values; the floor stored at
+    // apply (every WordPress number, including those issued during the migration window) keeps the site above them.
+    const stored = proj?.cmsMigration?.state === 'applied' ? proj.cmsMigration.counterFloor || {} : {};
+    const num = (v) => (Number.isInteger(v) && v > 0 ? v : 0);
+    return {
+      reviewNo: Math.max(num(r?._max?.wpPipelineId), num(stored.reviewNo)),
+      entryNo: Math.max(num(p?._max?.wpPostId), num(stored.entryNo)),
+    };
   },
 
   async findProjectById(id) {
@@ -581,6 +589,11 @@ export function scheduleSitemapSync(projectId) {
     .catch(() => {});
 }
 
+/** A WpPage row kept from WordPress by a migration (marked, no EmDash entry id): EmDash never writes it (review HIGH-1). */
+export function isForeignWpPage(row) {
+  return !!row && !row.cmsEntryId && !!row.cmsMigration;
+}
+
 /** content.* event → WpPage (+ WpPageSnapshot when the content hash changed). No AI summary (cost). */
 export async function applyEmdashContentEvent(project, ev) {
   const { wpPostId, data } = entryToPageData(ev.entry, project.wpUrl);
@@ -588,8 +601,10 @@ export async function applyEmdashContentEvent(project, ev) {
   const now = new Date();
   const existing = await prisma.wpPage.findUnique({
     where: { projectId_wpPostId: { projectId: project.id, wpPostId } },
-    select: { id: true, title: true, contentHash: true, content: true },
+    select: { id: true, title: true, contentHash: true, content: true, cmsEntryId: true, cmsMigration: true },
   });
+  // Review HIGH-1: a WordPress row kept by a migration (cmsMigration set, no entry id) is never written by EmDash.
+  if (isForeignWpPage(existing)) return 'ignored';
   // v1.2 §22.2: a save caused by an OS push carries osRequest { route, idempotencyKey }: confirm our push row
   // (no notification: content.* events never notify; reviewAfter notifies once through pipeline_submitted).
   if (ev.osRequest?.idempotencyKey) {
@@ -734,6 +749,11 @@ export async function closeForeignReview(projectId, wpPipelineId) {
   return true;
 }
 
+async function isMigratedProject(projectId) {
+  const p = await prisma.project.findUnique({ where: { id: projectId }, select: { cmsMigration: true } });
+  return p?.cmsMigration?.state === 'applied';
+}
+
 export async function mirrorEmdashReview(projectId, review, { log } = {}) {
   const m = reviewToMirrorData(review);
   if (!m.wpPipelineId) return null;
@@ -741,8 +761,10 @@ export async function mirrorEmdashReview(projectId, review, { log } = {}) {
   if (await isPipelineTombstoned(projectId, m.wpPipelineId)) return null;
   const existing = await prisma.wpContentReview.findUnique({
     where: { projectId_wpPipelineId: { projectId, wpPipelineId: m.wpPipelineId } },
-    select: { id: true, status: true, isPublished: true, publishedAt: true, assignedWorkerId: true, cmsSeq: true, cmsMirrorSeq: true },
+    select: { id: true, status: true, isPublished: true, publishedAt: true, assignedWorkerId: true, cmsSeq: true, cmsMirrorSeq: true, cmsReviewId: true },
   });
+  // Review MEDIUM-HIGH-2: never merge an EmDash review into WordPress history on a migrated project.
+  if (existing && !existing.cmsReviewId && (await isMigratedProject(projectId))) return null;
   // A response/pull older than what the event stream (cmsSeq) or an earlier mirror (cmsMirrorSeq)
   // already applied must not rewind the mirror (review C7).
   const hasSeq = Number.isInteger(m.seq);

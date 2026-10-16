@@ -146,6 +146,7 @@ export async function projectCmsRoutes(app) {
         user: request.user,
         mapHash: request.body?.mapHash,
         confirmIdentity: request.body?.confirmIdentity === true,
+        confirmEmpty: request.body?.confirmEmpty === true,
         log: request.log,
       });
       if (!result.alreadyApplied) {

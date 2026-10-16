@@ -92,7 +92,7 @@ export function identityCheck(project, migratedFrom) {
 async function osRows(db, projectId) {
   const [wpPages, wpReviews] = await Promise.all([
     db.wpPage.findMany({ where: { projectId }, select: { id: true, wpPostId: true, url: true, title: true, cmsEntryId: true } }),
-    db.wpContentReview.findMany({ where: { projectId }, select: { id: true, wpPipelineId: true, wpPostId: true, parentWpPostId: true, status: true, isPublished: true, postTitle: true } }),
+    db.wpContentReview.findMany({ where: { projectId }, select: { id: true, wpPipelineId: true, wpPostId: true, parentWpPostId: true, status: true, isPublished: true, postTitle: true, cmsReviewId: true } }),
   ]);
   return { wpPages, wpReviews };
 }
@@ -109,6 +109,7 @@ function summarize(plan, rekey, map, project, rows) {
     unmatched: plan.unmatched.length,
     renumbered: rekey.moves.length,
     parked: rekey.parks.length,
+    reviewsParked: rekey.reviewParks.length,
     blockers: plan.blockers.map((id) => ({ wpPipelineId: id, title: titleOf.get(id) || null })),
     conflicts: rekey.conflicts,
     unmatchedPostIds: plan.unmatched.slice(0, 200),
@@ -125,13 +126,24 @@ export async function previewMigration(projectId, { user, fetchPage, log } = {})
   const map = await fetchWholeMap(conn, fetchPage ? { fetchPage } : undefined);
   const rows = await osRows(prisma, project.id);
   const plan = planWpHistoryMove({ wpPages: rows.wpPages, wpReviews: rows.wpReviews }, map.items);
-  const rekey = buildRekeyPlan(plan, rows.wpPages);
+  const rekey = buildRekeyPlan(plan, rows.wpPages, rows.wpReviews);
   const summary = summarize(plan, rekey, map, project, rows);
   const hash = mapHash(map.items);
-  await prisma.project.update({
-    where: { id: project.id },
-    data: { cmsMigration: { ...(project.cmsMigration || {}), state: 'previewed', migratedFrom: map.migratedFrom, preview: { mapHash: hash, summary, at: new Date().toISOString(), byId: user?.id || null } } },
-  });
+  // Review LOW-7: a preview never overwrites an applied (or reset) migration — checked under the project row lock.
+  await prisma.$transaction(
+    async (tx) => {
+      await tx.$queryRaw`SELECT id FROM project WHERE id = ${project.id} FOR UPDATE`;
+      const fresh = await tx.project.findUnique({ where: { id: project.id }, select: { cmsType: true, cmsMigration: true } });
+      if (fresh?.cmsType !== 'WORDPRESS' || !MIGRATION_ACTIVE_STATES.includes(fresh?.cmsMigration?.state) || fresh.cmsMigration.siteUrl !== project.cmsMigration.siteUrl) {
+        throw bad('The migration was applied or re-paired meanwhile. Reload.', 'INVALID_TRANSITION', 409);
+      }
+      await tx.project.update({
+        where: { id: project.id },
+        data: { cmsMigration: { ...fresh.cmsMigration, state: 'previewed', migratedFrom: map.migratedFrom, preview: { mapHash: hash, summary, siteUrl: fresh.cmsMigration.siteUrl, at: new Date().toISOString(), byId: user?.id || null } } },
+      });
+    },
+    { timeout: 30_000, maxWait: 10_000 }
+  );
   log?.info?.({ projectId: project.id, pages: summary.pagesMigrated, blockers: summary.blockers.length }, 'WP → EmDash migration previewed');
   return { mapHash: hash, summary, canApply: plan.ok && rekey.conflicts.length === 0 && map.complete };
 }
@@ -140,7 +152,7 @@ export async function previewMigration(projectId, { user, fetchPage, log } = {})
  * Apply the previewed move in one transaction and cut over. `opts`: { mapHash (from the preview), confirmIdentity }.
  * Returns the stored result; a second call after success returns the same result without writing.
  */
-export async function applyMigration(projectId, { user, mapHash: expectedHash, confirmIdentity = false, fetchPage, log } = {}) {
+export async function applyMigration(projectId, { user, mapHash: expectedHash, confirmIdentity = false, confirmEmpty = false, fetchPage, log } = {}) {
   const project = await loadMigrationProject(projectId);
   if (migrationState(project) === 'applied') return { ...(project.cmsMigration.result || {}), alreadyApplied: true };
   if (project.cmsType !== 'WORDPRESS' || migrationState(project) !== 'previewed') throw bad('Run the preview first.', 'INVALID_TRANSITION', 409);
@@ -153,7 +165,8 @@ export async function applyMigration(projectId, { user, mapHash: expectedHash, c
   if ((!identity.siteUrlMatches || identity.keyHintMatches === false) && !confirmIdentity) {
     throw bad('The site’s former address or key hint does not match this project. Confirm the match to continue.', 'IDENTITY_UNCONFIRMED', 409, { identity });
   }
-  const newOrigin = String(project.cmsMigration.siteUrl).replace(/\/$/, '');
+  const siteUrlAtStart = project.cmsMigration.siteUrl;
+  const newOrigin = String(siteUrlAtStart).replace(/\/$/, '');
   const byPost = new Map(map.items.map((m) => [m.wp_post_id, m]));
 
   const result = await prisma.$transaction(
@@ -163,13 +176,30 @@ export async function applyMigration(projectId, { user, mapHash: expectedHash, c
       const fresh = await tx.project.findUnique({ where: { id: project.id }, select: { cmsType: true, cmsMigration: true } });
       if (fresh?.cmsMigration?.state === 'applied') return { ...(fresh.cmsMigration.result || {}), alreadyApplied: true };
       if (fresh?.cmsType !== 'WORDPRESS') throw bad('The project is no longer a WordPress project.', 'INVALID_TRANSITION', 409);
+      // Review LOW-8: re-check under the lock what the preview promised.
+      if (fresh.cmsMigration?.state !== 'previewed' || fresh.cmsMigration?.preview?.mapHash !== expectedHash) {
+        throw bad('The preview changed meanwhile. Preview again.', 'CONFLICT_REV', 409);
+      }
+      if (fresh.cmsMigration?.siteUrl !== siteUrlAtStart) throw bad('The paired site changed meanwhile. Preview again.', 'CONFLICT_REV', 409);
 
       const rows = await osRows(tx, project.id);
       const plan = planWpHistoryMove({ wpPages: rows.wpPages, wpReviews: rows.wpReviews }, map.items);
       if (!plan.ok) throw bad('Open WordPress reviews must be completed or cancelled first.', 'MIGRATION_BLOCKED', 409, { blockers: plan.blockers });
-      const rekey = buildRekeyPlan(plan, rows.wpPages);
+      if (plan.pages.length === 0 && !confirmEmpty) {
+        throw bad('The map moves no page onto the EmDash site. Confirm to cut over anyway.', 'MIGRATION_EMPTY', 409);
+      }
+      const rekey = buildRekeyPlan(plan, rows.wpPages, rows.wpReviews);
       if (rekey.conflicts.length) throw bad('The map cannot be applied safely (number conflicts).', 'MIGRATION_CONFLICT', 409, { conflicts: rekey.conflicts });
       const pageByPost = new Map(rows.wpPages.map((p) => [p.wpPostId, p]));
+      // Review MEDIUM-HIGH-2: the counter floor covers every number WordPress issued, including during the window;
+      // it is sent in the next handshake responses (the site raises its counters, compare-and-set).
+      const maxOf = (list) => list.reduce((a, b) => (Number.isInteger(b) && b > a ? b : a), 0);
+      const counterFloor = {
+        entryNo: Math.max(maxOf(rows.wpPages.map((p) => p.wpPostId)), maxOf(plan.pages.map((p) => p.cmsEntryNo))),
+        reviewNo: maxOf(rows.wpReviews.map((r) => r.wpPipelineId)),
+      };
+      const tombMax = await tx.wpContentReviewTombstone.aggregate({ where: { projectId: project.id }, _max: { wpPipelineId: true } });
+      counterFloor.reviewNo = Math.max(counterFloor.reviewNo, tombMax?._max?.wpPipelineId || 0);
 
       // 1) migrated rows that change number go to unique temporary numbers
       const temp = new Map();
@@ -180,12 +210,13 @@ export async function applyMigration(projectId, { user, mapHash: expectedHash, c
         temp.set(mv.from, t);
         await tx.wpPage.update({ where: { id: pageByPost.get(mv.from).id }, data: { wpPostId: t } });
       }
-      // 2) rows in the way are parked at -wpPostId (kept, recorded)
+      // 2) EVERY other WordPress page is parked at -wpPostId (kept, recorded): no EmDash entry number can land on it
       for (const pk of rekey.parks) {
         const m = byPost.get(pk.from);
+        const status = !m || m.status === 'migrated' ? 'unmatched' : m.status;
         await tx.wpPage.update({
           where: { id: pageByPost.get(pk.from).id },
-          data: { wpPostId: pk.to, cmsMigration: { status: m?.status || 'unmatched', oldWpPostId: pk.from, oldUrl: m?.old_url || pageByPost.get(pk.from).url || null, parked: true, ...(m?.redirect_type ? { redirectType: m.redirect_type } : {}) } },
+          data: { wpPostId: pk.to, cmsMigration: { status, oldWpPostId: pk.from, oldUrl: m?.old_url || pageByPost.get(pk.from).url || null, parked: true, ...(m?.redirect_type ? { redirectType: m.redirect_type } : {}) } },
         });
       }
       // 3) migrated rows: final number = entry_no, EmDash ids and the new URL; snapshots stay attached (same row id)
@@ -201,30 +232,33 @@ export async function applyMigration(projectId, { user, mapHash: expectedHash, c
           },
         });
       }
-      // 4) redirected / dropped / unmatched rows that were not parked: keep, record the status
-      const parked = new Set(rekey.parks.map((x) => x.from));
-      const record = async (wpPostId, data) => {
-        if (parked.has(wpPostId)) return;
-        await tx.wpPage.update({ where: { id: pageByPost.get(wpPostId).id }, data: { cmsMigration: data } });
-      };
-      for (const r of plan.redirected) await record(r.wpPostId, { status: 'redirected', oldWpPostId: r.wpPostId, oldUrl: r.oldUrl || null, redirectType: r.redirectType });
-      for (const d of plan.dropped) await record(d.wpPostId, { status: 'dropped', oldWpPostId: d.wpPostId, oldUrl: d.oldUrl || null });
-      for (const u of plan.unmatched) await record(u, { status: 'unmatched', oldWpPostId: u, oldUrl: pageByPost.get(u)?.url || null });
-      // 5) reviews of migrated posts: entry id + entry number (history, events, comments untouched; isPublished untouched)
-      const entryNoOf = new Map(plan.pages.map((p) => [p.wpPostId, p.cmsEntryNo]));
+      // 4) WordPress reviews (review MEDIUM-HIGH-2 / MEDIUM-3): parked at -wpPipelineId so no EmDash review number
+      //    can land on them; wpPostId / parentWpPostId follow their page (entry_no or the parked -id), so history stays
+      //    with the right page; reviews of migrated posts also get the entry id (events, comments, isPublished untouched).
+      const reviewTo = new Map(rekey.reviewParks.map((x) => [x.from, x.to]));
+      let reviewsMoved = 0;
       for (const rv of rows.wpReviews) {
+        if (rv.cmsReviewId) continue;
+        const data = {};
+        if (reviewTo.has(rv.wpPipelineId)) data.wpPipelineId = reviewTo.get(rv.wpPipelineId);
+        if (rekey.postIdMap.has(rv.wpPostId)) data.wpPostId = rekey.postIdMap.get(rv.wpPostId);
+        if (rv.parentWpPostId != null && rekey.postIdMap.has(rv.parentWpPostId)) data.parentWpPostId = rekey.postIdMap.get(rv.parentWpPostId);
         const m = byPost.get(rv.wpPostId);
-        const parentNo = rv.parentWpPostId != null ? entryNoOf.get(rv.parentWpPostId) : undefined;
-        if (m?.status !== 'migrated' && parentNo === undefined) continue;
-        await tx.wpContentReview.update({
-          where: { id: rv.id },
-          data: {
-            ...(m?.status === 'migrated' ? { cmsEntryId: m.entry_id, wpPostId: m.entry_no } : {}),
-            ...(parentNo !== undefined ? { parentWpPostId: parentNo } : {}),
-          },
-        });
+        if (m?.status === 'migrated' && m.entry_id && rekey.postIdMap.get(rv.wpPostId) === m.entry_no) {
+          data.cmsEntryId = m.entry_id;
+          reviewsMoved += 1;
+        }
+        if (Object.keys(data).length) await tx.wpContentReview.update({ where: { id: rv.id }, data });
       }
-      // 6) content-map URLs: old_url → new address (migrated items only)
+      // Owner-deleted WordPress review numbers are parked too: they never block (or hide) a new EmDash review number.
+      const tombs = await tx.wpContentReviewTombstone.findMany({ where: { projectId: project.id }, select: { id: true, wpPipelineId: true } });
+      const tombNos = new Set(tombs.map((t) => t.wpPipelineId));
+      for (const t of tombs) {
+        if (t.wpPipelineId <= 0) continue;
+        if (tombNos.has(-t.wpPipelineId)) await tx.wpContentReviewTombstone.delete({ where: { id: t.id } });
+        else await tx.wpContentReviewTombstone.update({ where: { id: t.id }, data: { wpPipelineId: -t.wpPipelineId } });
+      }
+      // 5) content-map URLs: old_url → new address (migrated items only)
       let nodesRewritten = 0;
       for (const p of plan.pages) {
         if (!p.oldUrl || !p.newPath) continue;
@@ -232,10 +266,11 @@ export async function applyMigration(projectId, { user, mapHash: expectedHash, c
         const r = await tx.contentMapNode.updateMany({ where: { map: { projectId: project.id }, url: { in: variants } }, data: { url: `${newOrigin}${p.newPath}`.slice(0, 500) } });
         nodesRewritten += r.count || 0;
       }
-      // 7) cut-over: EmDash from now on; the WordPress key is revoked (cleared) so WP webhooks stop resolving
+      // 6) cut-over: EmDash from now on; the WordPress key is revoked (cleared) so WP webhooks stop resolving
       const out = {
         pagesMigrated: plan.pages.length,
-        reviewsMoved: plan.reviews.length,
+        reviewsMoved,
+        reviewsParked: rekey.reviewParks.length,
         renumbered: rekey.moves.length,
         parked: rekey.parks.length,
         redirected: plan.redirected.length,
@@ -257,6 +292,7 @@ export async function applyMigration(projectId, { user, mapHash: expectedHash, c
             oldWpUrl: project.wpUrl || null,
             oldWpKeyHint: project.wpApiKey ? String(project.wpApiKey).slice(-4) : null,
             identityConfirmed: !!confirmIdentity,
+            counterFloor,
             result: out,
           },
         },
