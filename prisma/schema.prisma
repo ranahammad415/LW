@@ -536,6 +536,8 @@ model Project {
   cmsReviewSuggestions CmsReviewSuggestion[]
   cmsDrafts            CmsDraft[]
   cmsMediaRefs         CmsMediaRef[]
+  cmsSeoProfiles       CmsSeoProfile[]
+  cmsSeoProposals      CmsSeoProposal[]
 
   @@map("project")
 }
@@ -1370,6 +1372,68 @@ model CmsMediaRef {
   @@map("cmsmediaref")
 }
 
+/// EmDash v1.4.0 (§25): mirror of the site's SEO profile summaries (emdash-seo). Read-only in the OS: the site owns
+/// target/path/status/contract lock/checks/proposal decisions; OS-owned fields changed on the site become
+/// ContentMapDrift(PROFILE_CHANGED) rows, never silent overwrites (D14).
+model CmsSeoProfile {
+  id             String    @id @default(uuid())
+  projectId      String
+  pageId         String    @db.VarChar(32)
+  entryId        String?   @db.VarChar(64)
+  target         String?   @db.VarChar(200)
+  path           String?   @db.VarChar(500)
+  status         String?   @db.VarChar(32)
+  primaryKeyword String?   @db.VarChar(200)
+  /// { version, locked, locked_on, locked_by }
+  contract       Json?
+  /// { block, warn, info, ran_at, variant }
+  checks         Json?
+  facts          Json?
+  openProposals  Int       @default(0)
+  nextReviewOn   String?   @db.VarChar(10)
+  profileHash    String?   @db.VarChar(64)
+  /// The site's updated_at: orders seo.* events (like content.*).
+  siteUpdatedAt  DateTime?
+  /// Last seo.check_failed { variant, trigger, summary, failed ≤ 50 }
+  lastCheck      Json?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @default(now()) @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, pageId])
+  @@index([projectId, entryId])
+  @@map("cmsseoprofile")
+}
+
+/// EmDash v1.4.0: SEO profile change proposals (created from the OS or the site); decided only in the EmDash admin (D13).
+model CmsSeoProposal {
+  id            String    @id @default(uuid())
+  projectId     String
+  proposalId    String    @db.VarChar(64)
+  pageId        String    @db.VarChar(32)
+  /// open | approved | rejected | withdrawn
+  state         String    @db.VarChar(16)
+  patch         Json
+  reason        String    @db.Text
+  /// os | mcp | admin
+  source        String    @db.VarChar(16)
+  createdByName String?   @db.VarChar(200)
+  createdByUserId String? @db.VarChar(64)
+  decidedByName String?   @db.VarChar(200)
+  decidedAt     DateTime?
+  decisionNote  String?   @db.Text
+  siteCreatedAt DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @default(now()) @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, proposalId])
+  @@index([projectId, pageId])
+  @@map("cmsseoproposal")
+}
+
 /// Owner-deleted pipeline ids. Sync and webhooks must not recreate these rows.
 model WpContentReviewTombstone {
   id           String   @id @default(uuid())
@@ -1935,6 +1999,8 @@ model ContentMapNode {
   assigneeId         String?
   /// Target keywords: [{ keyword, keywordTrackId? }]
   keywords           Json?
+  /// EmDash v1.4.0 §25.5: the site's SEO profile page_id (e.g. P12) once matched (entry id or path).
+  cmsPageId          String?   @db.VarChar(32)
   /// Cached enrichment snapshot (word count, links, SEO lengths, traffic).
   metrics            Json?
   metricsAt          DateTime?

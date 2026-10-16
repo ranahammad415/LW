@@ -1,0 +1,208 @@
+/**
+ * Contract v1.4.0 §25: profile mirror, proposals from the OS (no decisions, D13), drift rows for OS-owned fields
+ * (no silent overwrite, D14), the five seo.* events, and the "503 after a site restart never flags re-pair" rule.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const db = vi.hoisted(() => ({ calls: [], overrides: {} }));
+const site = vi.hoisted(() => ({ handler: null, bodies: [], routes: [] }));
+
+vi.mock('../../../src/lib/prisma.js', () => {
+  const model = (name) =>
+    new Proxy({}, {
+      get(_, method) {
+        const key = `${name}.${String(method)}`;
+        return async (args) => {
+          db.calls.push({ key, args });
+          if (db.overrides[key]) return db.overrides[key](args);
+          if (method === 'findMany') return [];
+          if (method === 'count') return 0;
+          if (method === 'updateMany') return { count: 1 };
+          if (method === 'create' || method === 'update' || method === 'upsert') return { id: 'row-1', ...(args?.data || args?.create || {}) };
+          return null;
+        };
+      },
+    });
+  return { prisma: new Proxy({}, { get: (_, n) => model(String(n)) }) };
+});
+vi.mock('../../../src/lib/notificationService.js', () => ({ notify: vi.fn(async () => {}), notifyTest: vi.fn(async () => []) }));
+vi.mock('../../../src/lib/contentMapSync.js', () => ({ mirrorPipelineToMaps: vi.fn(async () => {}), reconcileProjectMapsSafe: vi.fn() }));
+vi.mock('../../../src/lib/realtimeBus.js', () => ({ publish: vi.fn() }));
+vi.mock('../../../src/lib/ai.js', () => ({ isAiConfigured: () => false, generateChat: vi.fn() }));
+vi.mock('../../../src/lib/cmsStore.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  loadEmdashConnection: async () => ({ conn: { siteId: 'site_9f3c2a7b41d0', siteUrl: 'https://s.example' } }),
+}));
+vi.mock('../../../src/lib/siteAdapters/emdash.js', async (importOriginal) => {
+  const orig = await importOriginal();
+  const call = (route) => async (_c, body) => {
+    site.routes.push(route);
+    site.bodies.push(body);
+    return site.handler(route, body);
+  };
+  return {
+    ...orig,
+    emdashRoutes: {
+      ...orig.emdashRoutes,
+      profilesList: call('profiles-list'),
+      profileGet: call('profile-get'),
+      keywordRegistry: call('keyword-registry'),
+      briefGet: call('brief-get'),
+      proposalCreate: call('proposal-create'),
+    },
+  };
+});
+
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
+import { applySeoEvent, createProposal, listProfiles, profileErrorMessage } from '../../../src/lib/cmsSeoProfiles.js';
+import { validateProposal, fieldOwner, osOwnedChanges, profileSummaryToRow, PROFILE_FIELD_OWNERSHIP } from '../../../src/lib/siteAdapters/profiles.js';
+import { validateEvent, processEventBatch } from '../../../src/routes/webhooks/emdash.js';
+import { handleSiteRejection } from '../../../src/lib/emdashSync.js';
+import { CmsBridgeError, MUTATION_ROUTES } from '../../../src/lib/siteAdapters/emdash.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const ex = (n) => JSON.parse(readFileSync(path.join(here, '../../fixtures/cms-contract/examples', `${n}.json`), 'utf8'));
+const calls = (key) => db.calls.filter((c) => c.key === key);
+const seo = () => ex('events.request--seo').events;
+const PROJECT = { id: 'p1', clientId: 'c1', leadPmId: 'pm-1', cmsType: 'EMDASH', cmsCapabilities: { seoProfiles: true }, cmsRepairNeededAt: null };
+
+beforeEach(() => {
+  db.calls = [];
+  db.overrides = { 'project.findUnique': async () => PROJECT };
+  site.bodies = [];
+  site.routes = [];
+  site.handler = null;
+});
+
+describe('pure helpers', () => {
+  it('field ownership: most specific wins', () => {
+    expect(fieldOwner('targeting.secondary_keywords')).toBe('os');
+    expect(fieldOwner('contract.version')).toBe('site');
+    expect(fieldOwner('contract.meta')).toBe('os-until-locked');
+    expect(fieldOwner('lifecycle.status')).toBe('site');
+    expect(fieldOwner('unknown.thing')).toBe('site');
+    expect(PROFILE_FIELD_OWNERSHIP.brief).toBe('os');
+    expect(osOwnedChanges([{ field: 'targeting.secondary_keywords', owner: 'os' }, { field: 'lifecycle.status', owner: 'site' }])).toEqual([{ field: 'targeting.secondary_keywords', owner: 'os' }]);
+  });
+
+  it('proposal validation: 1–20 add/remove/replace ops on contract/targeting/aeo/facts; reason 20–2000', () => {
+    const ok = { pageId: 'P12', patch: [{ op: 'replace', path: '/contract/meta', value: 'x' }], reason: 'Client wants same-week visits in the meta' };
+    expect(validateProposal(ok).ok).toBe(true);
+    expect(validateProposal({ ...ok, reason: 'short' }).errors[0].path).toBe('$.reason');
+    expect(validateProposal({ ...ok, patch: [{ op: 'replace', path: '/lifecycle/status', value: 'x' }] }).errors[0].path).toBe('$.patch[0].path');
+    expect(validateProposal({ ...ok, patch: [{ op: 'move', path: '/contract/meta', from: '/x' }] }).errors[0].path).toBe('$.patch[0].op');
+    expect(validateProposal({ ...ok, patch: [] }).ok).toBe(false);
+    expect(validateProposal({ ...ok, patch: Array(21).fill(ok.patch[0]) }).ok).toBe(false);
+    expect(validateProposal({ ...ok, pageId: '../x' }).ok).toBe(false);
+    expect(['proposal-create', 'profile-upsert', 'brief-upsert'].every((r) => MUTATION_ROUTES.has(r))).toBe(true);
+  });
+});
+
+describe('seo.* events (§25.4)', () => {
+  it('validateEvent requires the object of each type; no seq needed', () => {
+    for (const ev of seo()) expect(validateEvent(ev), ev.type).toBeNull();
+    expect(validateEvent({ ...seo()[0], profile: undefined })).toMatch(/profile.page_id/);
+    expect(validateEvent({ ...seo()[2], proposal: {} })).toMatch(/proposal_id/);
+    expect(validateEvent({ ...seo()[4], check: null })).toMatch(/check.page_id/);
+  });
+
+  it('profile_changed with an OS-owned field: mirror + a PROFILE_CHANGED drift row on the matching node (no overwrite)', async () => {
+    db.overrides['wpPage.findMany'] = async () => [{ id: 'wp1' }];
+    db.overrides['contentMapNode.findMany'] = async () => [{ id: 'n1', mapId: 'm1', wpPageId: 'wp1' }];
+    const ev = seo()[1];
+    expect(await applySeoEvent('p1', ev)).toBe('applied');
+    expect(calls('cmsSeoProfile.create')[0].args.data).toMatchObject({ projectId: 'p1', pageId: 'P12', primaryKeyword: 'hot tub repair', profileHash: ev.profile.profile_hash });
+    const drift = calls('contentMapDrift.create')[0].args.data;
+    expect(drift).toMatchObject({ mapId: 'm1', nodeId: 'n1', driftType: 'PROFILE_CHANGED', payload: { pageId: 'P12', fields: ['targeting.secondary_keywords'], changedBy: 'Site editor' } });
+    expect(calls('contentMapNode.updateMany')[0].args.data).toEqual({ cmsPageId: 'P12' });
+    // The OS never writes the node's planning fields from the site here.
+    expect(calls('contentMapNode.update')).toHaveLength(0);
+  });
+
+  it('a second change merges into the pending drift; older events are stale', async () => {
+    db.overrides['wpPage.findMany'] = async () => [{ id: 'wp1' }];
+    db.overrides['contentMapNode.findMany'] = async () => [{ id: 'n1', mapId: 'm1', wpPageId: 'wp1' }];
+    db.overrides['contentMapDrift.findFirst'] = async () => ({ id: 'd1', payload: { pageId: 'P12', fields: ['aeo.answers'] } });
+    await applySeoEvent('p1', seo()[1]);
+    expect(calls('contentMapDrift.create')).toHaveLength(0);
+    expect(calls('contentMapDrift.update')[0].args.data.payload.fields).toEqual(['aeo.answers', 'targeting.secondary_keywords']);
+    db.calls = [];
+    db.overrides['cmsSeoProfile.findUnique'] = async () => ({ id: 'pr1', siteUpdatedAt: new Date('2026-12-01T00:00:00Z') });
+    expect(await applySeoEvent('p1', seo()[1])).toBe('stale');
+    expect(calls('contentMapDrift.create')).toHaveLength(0);
+  });
+
+  it('site-owned changes and contract locks only update the mirror', async () => {
+    const ev = { ...seo()[1], changed: [{ field: 'lifecycle.status', owner: 'site' }] };
+    await applySeoEvent('p1', ev);
+    expect(calls('contentMapDrift.create')).toHaveLength(0);
+    await applySeoEvent('p1', seo()[0]);
+    expect(calls('cmsSeoProfile.create').at(-1).args.data.contract).toMatchObject({ locked: true, version: 3, locked_by: 'Site editor' });
+  });
+
+  it('proposals: opened then decided (forward only); check_failed stored on the profile', async () => {
+    expect(await applySeoEvent('p1', seo()[2])).toBe('applied');
+    expect(calls('cmsSeoProposal.create')[0].args.data).toMatchObject({ proposalId: '01JAH0PROP00000000000000001', state: 'open', source: 'os', createdByName: 'Jane PM' });
+    db.overrides['cmsSeoProposal.findUnique'] = async () => ({ id: 'x', state: 'approved' });
+    expect(await applySeoEvent('p1', seo()[2])).toBe('stale');
+    db.overrides['cmsSeoProposal.findUnique'] = async () => ({ id: 'x', state: 'open' });
+    expect(await applySeoEvent('p1', seo()[3])).toBe('applied');
+    expect(calls('cmsSeoProposal.update').at(-1).args.data).toMatchObject({ state: 'approved', decidedByName: 'Site editor', decisionNote: 'OK, contract v4' });
+    expect(await applySeoEvent('p1', seo()[4])).toBe('applied');
+    expect(calls('cmsSeoProfile.upsert')[0].args.update.lastCheck).toMatchObject({ variant: 'draft', trigger: 'save', summary: { block: 1, warn: 2 } });
+    expect(await applySeoEvent('p1', { type: 'seo.redirect_proposed', actor: {} })).toBe('stored');
+  });
+
+  it('processEventBatch routes seo.* to the store and accepts the batch', async () => {
+    const outcomes = [];
+    const store = {
+      claimReceipt: async () => 'new',
+      finalizeReceipt: async (_p, _id, o) => outcomes.push(o),
+      releaseReceipt: async () => {},
+      applySeoEvent: async (_p, ev) => (ev.type === 'seo.check_failed' ? 'applied' : 'stale'),
+    };
+    const r = await processEventBatch({ store, project: { id: 'p1', cmsSiteId: 'site_9f3c2a7b41d0' }, events: seo() });
+    expect(r.rejected).toEqual([]);
+    expect(r.accepted).toHaveLength(5);
+    expect(outcomes).toEqual(['stale', 'stale', 'stale', 'stale', 'applied']);
+  });
+});
+
+describe('reads and proposals from the OS', () => {
+  it('profiles-list refreshes the mirror', async () => {
+    site.handler = () => ex('profiles-list.response');
+    const res = await listProfiles('p1');
+    expect(res.items[0]).toMatchObject(profileSummaryToRow(ex('profiles-list.response').items[0]));
+    expect(calls('cmsSeoProfile.create').length + calls('cmsSeoProfile.update').length).toBeGreaterThan(0);
+  });
+
+  it('proposal-create: human OWNER / lead PM only, validated before the call; never a decision', async () => {
+    site.handler = () => ex('proposal-create.response');
+    const patch = [{ op: 'replace', path: '/contract/meta', value: 'Same-week visits' }];
+    const reason = 'Client wants same-week visits in the meta description';
+    await expect(createProposal({ projectId: 'p1', pageId: 'P12', patch, reason, user: { id: 'tm', role: 'TEAM_MEMBER' } })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(createProposal({ projectId: 'p1', pageId: 'P12', patch, reason, user: { id: 'other', role: 'PM' } })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(createProposal({ projectId: 'p1', pageId: 'P12', patch, reason: 'short', user: { id: 'pm-1', role: 'PM' } })).rejects.toMatchObject({ code: 'VALIDATION' });
+    expect(site.bodies).toHaveLength(0);
+    const row = await createProposal({ projectId: 'p1', pageId: 'P12', patch, reason, user: { id: 'pm-1', role: 'PM', name: 'Jane PM' } });
+    expect(site.routes).toEqual(['proposal-create']);
+    expect(site.bodies[0]).toEqual({ page_id: 'P12', patch, reason, actor: { kind: 'human', osUserId: 'pm-1', name: 'Jane PM', role: 'PM' } });
+    expect(row.state).toBe('open');
+  });
+
+  it('a site without seoProfiles answers NOT_IMPLEMENTED without any call', async () => {
+    db.overrides['project.findUnique'] = async () => ({ ...PROJECT, cmsCapabilities: {} });
+    await expect(listProfiles('p1')).rejects.toMatchObject({ code: 'NOT_IMPLEMENTED' });
+    expect(site.routes).toHaveLength(0);
+  });
+
+  it('a retryable 503 after a site restart gets a "try again shortly" message and never flags re-pair', async () => {
+    const warm = new CmsBridgeError({ status: 503, code: 'UPSTREAM_UNAVAILABLE', message: 'emdash-seo warming up', retryable: true });
+    expect(profileErrorMessage(warm)).toMatch(/not ready yet/);
+    expect(await handleSiteRejection('p1', warm)).toBe(false);
+    expect(await handleSiteRejection('p1', new CmsBridgeError({ status: 503, code: 'INTERNAL', retryable: true }))).toBe(false);
+    expect(calls('project.updateMany').filter((c) => c.args?.data?.cmsRepairNeededAt)).toHaveLength(0);
+  });
+});

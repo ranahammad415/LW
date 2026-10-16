@@ -533,6 +533,12 @@ export const prismaCmsStore = {
     return applyEmdashReviewExtras(project.id, ev, outcome);
   },
 
+  /** v1.4.0 §25.4: seo.* events (profile mirror, proposals, drift rows for OS-owned fields). */
+  async applySeoEvent(project, ev) {
+    const { applySeoEvent } = await import('./cmsSeoProfiles.js');
+    return applySeoEvent(project.id, ev);
+  },
+
   async suggestionQuote(projectId, cmsSuggestionId) {
     const row = await prisma.cmsReviewSuggestion.findUnique({
       where: { projectId_cmsSuggestionId: { projectId, cmsSuggestionId: String(cmsSuggestionId).slice(0, 64) } },

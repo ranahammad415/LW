@@ -1484,6 +1484,9 @@ async function applyDriftResolution({ drift, action, mapId, body, user }) {
   if (action === 'ignore') return { status: 'IGNORED' };
 
   if (action === 'adopt') {
+    // EmDash v1.4.0 (D14): the PM has seen the site's change to OS-owned profile fields. The OS keeps its plan
+    // as is (no silent overwrite either way); re-pushing the profile is a separate, explicit action.
+    if (drift.driftType === 'PROFILE_CHANGED') return { status: 'ADOPTED', nodeId: drift.nodeId || null };
     // A change on an already-mapped node: accept the site as the truth.
     if (drift.nodeId && drift.driftType !== 'LIKELY_MATCH') {
       const data = {};

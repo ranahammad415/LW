@@ -93,6 +93,16 @@ export function validateEvent(ev) {
     if (ev.suggestions !== undefined && (!Array.isArray(ev.suggestions) || ev.suggestions.length > 200)) {
       return 'suggestions must be an array of at most 200 items';
     }
+  } else if (ev.type.startsWith('seo.')) {
+    // v1.4.0 §25.4: no per-review seq; ordered by profile.updated_at. Reserved seo.* types are stored only.
+    if (ev.type === 'seo.profile_changed' || ev.type === 'seo.contract_locked') {
+      if (!ev.profile || typeof ev.profile !== 'object' || typeof ev.profile.page_id !== 'string') return 'profile.page_id is required';
+      if (ev.type === 'seo.profile_changed' && ev.changed !== undefined && !Array.isArray(ev.changed)) return 'changed must be an array';
+    }
+    if ((ev.type === 'seo.proposal_opened' || ev.type === 'seo.proposal_decided') && (!ev.proposal || typeof ev.proposal.proposal_id !== 'string')) {
+      return 'proposal.proposal_id is required';
+    }
+    if (ev.type === 'seo.check_failed' && (!ev.check || typeof ev.check.page_id !== 'string')) return 'check.page_id is required';
   } else if (ev.type.startsWith('content.')) {
     if (ev.seq !== undefined) return 'seq must be absent on content.* events';
     const e = ev.entry;
@@ -288,7 +298,8 @@ export async function emdashWebhookRoutes(app, opts = {}) {
       projectName: String(project.name || '').slice(0, 200),
       serverTime: Math.floor(now / 1000),
       // The OS implements client review from the OS (v1.1.0); profiles come in stage 3.
-      os: { version: OS_VERSION, capabilities: { clientReviewFromOs: true, seoProfiles: false } },
+      // What the OS does: client review from the OS (v1.1.0), SEO profile views + proposals (v1.4.0).
+      os: { version: OS_VERSION, capabilities: { clientReviewFromOs: true, seoProfiles: true } },
       pms: await store.listPms(project),
       // v1.2.1 §23(2): roster for byline mapping on the site (the OS mirrors site-info.bylines read-only).
       ...(store.listTeam ? { team: await store.listTeam(project) } : {}),
@@ -352,7 +363,7 @@ export async function emdashWebhookRoutes(app, opts = {}) {
       projectName: String(project.name || '').slice(0, 200),
       serverTime: Math.floor(now / 1000),
       // The OS implements client review from the OS (v1.1.0); profiles come in stage 3.
-      os: { version: OS_VERSION, capabilities: { clientReviewFromOs: true, seoProfiles: false } },
+      os: { version: OS_VERSION, capabilities: { clientReviewFromOs: true, seoProfiles: true } },
       pms: await store.listPms(project),
       // v1.2.1 §23(2): roster for byline mapping on the site (the OS mirrors site-info.bylines read-only).
       ...(store.listTeam ? { team: await store.listTeam(project) } : {}),
@@ -592,6 +603,8 @@ export async function processEventBatch({ store, project, events, log }) {
         }
         // v1.1.0: suggestions and the client-decision actor (ordered per suggestion; never on tombstoned rows).
         if (outcome !== 'tombstoned') await store.applyReviewExtras?.(project, ev, outcome);
+      } else if (ev.type.startsWith('seo.')) {
+        outcome = (await store.applySeoEvent?.(project, ev)) || 'stored';
       } else if (ev.type.startsWith('content.')) {
         const e = ev.entry;
         const stored = updated.has(e.entryId) ? updated.get(e.entryId) : await store.getEntryUpdatedAt(project.id, e.entryId, e.entryNo);

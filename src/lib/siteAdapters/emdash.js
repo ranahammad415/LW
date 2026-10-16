@@ -41,6 +41,10 @@ export const MUTATION_ROUTES = new Set([
   // v1.3.0 §24
   'pipeline-unschedule',
   'preview-link',
+  // v1.4.0 §25
+  'proposal-create',
+  'profile-upsert',
+  'brief-upsert',
 ]);
 
 export class CmsBridgeError extends Error {
@@ -301,6 +305,12 @@ export const emdashRoutes = {
   pipelineUnschedule: (conn, body, opts) => siteRequest(conn, 'pipeline-unschedule', compact(body), opts),
   /** v1.3.0 §24.3: short-lived staff preview URL; never stored or logged by the OS, never shown to clients. */
   previewLink: (conn, body, opts) => siteRequest(conn, 'preview-link', compact(body), opts),
+  /** v1.4.0 §25 (capability seoProfiles): reads; proposals are the only OS write used (D13: no decisions). */
+  profilesList: (conn, q = {}, opts) => siteRequest(conn, 'profiles-list', compact({ limit: 100, ...q }), opts),
+  profileGet: (conn, ref, opts) => siteRequest(conn, 'profile-get', compact(ref), opts),
+  keywordRegistry: (conn, q = {}, opts) => siteRequest(conn, 'keyword-registry', compact({ limit: 100, ...q }), opts),
+  briefGet: (conn, ref, opts) => siteRequest(conn, 'brief-get', compact(ref), opts),
+  proposalCreate: (conn, body, opts) => siteRequest(conn, 'proposal-create', compact(body), opts),
 };
 
 function siteCaps(project) {
