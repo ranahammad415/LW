@@ -655,13 +655,19 @@ export async function reconcileMap(mapId, { userId = null, notify = true } = {})
   // "Sync site" created a second node. Link by the draft's cmsEntryId first.
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
   const draftNodeByEntry = new Map();
+  // e2e O7: the OS's own pushes are not site drift (latest node-linked OS draft of each entry, pushed OK).
+  const ownDraftByEntry = new Map();
   if (inventory.items.some((i) => i.page.cmsEntryId)) {
     const drafts = await prisma.cmsDraft.findMany({
       where: { projectId: map.projectId, cmsEntryId: { not: null }, contentMapNodeId: { not: null } },
-      select: { cmsEntryId: true, contentMapNodeId: true },
+      select: { cmsEntryId: true, contentMapNodeId: true, title: true, cmsPath: true, lastPushStatus: true },
       orderBy: { updatedAt: 'desc' },
     });
-    for (const d of drafts) if (!draftNodeByEntry.has(d.cmsEntryId)) draftNodeByEntry.set(d.cmsEntryId, d.contentMapNodeId);
+    for (const d of drafts) {
+      if (draftNodeByEntry.has(d.cmsEntryId)) continue;
+      draftNodeByEntry.set(d.cmsEntryId, d.contentMapNodeId);
+      if (d.lastPushStatus === 'ok') ownDraftByEntry.set(d.cmsEntryId, d);
+    }
   }
 
   for (const item of inventory.items) {
@@ -722,7 +728,22 @@ export async function reconcileMap(mapId, { userId = null, notify = true } = {})
           payload: { from: 'LIVE', to: item.lifecycle, wpStatus: item.page.status, title: item.page.title },
         });
       }
-      if (linkedPath && linkedPath !== item.path) {
+      // e2e O7: a title / URL that is exactly what this node's own pushed draft wrote is not drift: the node follows
+      // it silently instead of raising content_map_site_drift for the OS's own work.
+      const own = item.page.cmsEntryId ? ownDraftByEntry.get(item.page.cmsEntryId) : null;
+      const ownForThisNode = !!own && own.contentMapNodeId === linked.id;
+      const ownUrl = ownForThisNode && !!own.cmsPath && linkedPath !== item.path && normalizePath(own.cmsPath) === item.path;
+      const ownTitle = ownForThisNode && !!item.page.title && linked.name !== item.page.title && own.title === item.page.title;
+      if (ownUrl || ownTitle) {
+        await prisma.contentMapNode.update({
+          where: { id: linked.id },
+          data: {
+            ...(ownUrl ? { url: String(item.page.url || '').slice(0, 500), slug: item.path.slice(0, 500) } : {}),
+            ...(ownTitle ? { name: String(item.page.title).slice(0, 500) } : {}),
+          },
+        });
+      }
+      if (linkedPath && linkedPath !== item.path && !ownUrl) {
         stats.urlChanged++;
         await queueDrift(mapId, {
           nodeId: linked.id,
@@ -731,7 +752,7 @@ export async function reconcileMap(mapId, { userId = null, notify = true } = {})
           payload: { from: linkedPath, to: item.path, title: item.page.title },
         });
       }
-      if (linked.name !== item.page.title && item.page.title) {
+      if (linked.name !== item.page.title && item.page.title && !ownTitle) {
         stats.titleChanged++;
         await queueDrift(mapId, {
           nodeId: linked.id,

@@ -76,3 +76,41 @@ describe('e2e O20: the pushing node is linked to the entry it created', () => {
     expect(calls('cmsDraft.findMany')).toHaveLength(0);
   });
 });
+
+describe('e2e O7: the OS’s own pushes are not site drift', () => {
+  const linkedNode = { id: 'n1', name: 'Heater repair', url: 'https://oasispoolspas.com/spa-services/heater-repair/', slug: '/spa-services/heater-repair/', lifecycle: 'IN_PIPELINE', wpPageId: 'wp-new', source: 'PLANNED' };
+
+  it('a title and URL written by this node’s pushed draft: the node follows, no drift, no notification', async () => {
+    setup({
+      nodes: [linkedNode],
+      pages: [PAGE],
+      drafts: [{ cmsEntryId: 'E132', contentMapNodeId: 'n1', title: PAGE.title, cmsPath: '/spa-services/hot-tub-heater-repair/', lastPushStatus: 'ok' }],
+    });
+    await reconcileMap('m1', { notify: true });
+    expect(calls('contentMapNode.update').at(-1).args.data).toMatchObject({ name: PAGE.title, url: PAGE.url, slug: '/spa-services/hot-tub-heater-repair/' });
+    expect(calls('contentMapDrift.create')).toHaveLength(0);
+    expect(notified.filter((n) => n.slug === 'content_map_site_drift')).toHaveLength(0);
+  });
+
+  it('a change somebody made on the site (not what we pushed) is still drift', async () => {
+    setup({
+      nodes: [linkedNode],
+      pages: [{ ...PAGE, title: 'Edited in the site admin' }],
+      drafts: [{ cmsEntryId: 'E132', contentMapNodeId: 'n1', title: PAGE.title, cmsPath: '/spa-services/heater-repair/', lastPushStatus: 'ok' }],
+    });
+    await reconcileMap('m1', { notify: true });
+    const types = calls('contentMapDrift.create').map((c) => c.args.data.driftType);
+    expect(types).toEqual(expect.arrayContaining(['TITLE_CHANGED', 'URL_CHANGED']));
+    expect(notified.filter((n) => n.slug === 'content_map_site_drift')).toHaveLength(1);
+  });
+
+  it('a draft that failed to push, or another node’s draft, does not hide drift', async () => {
+    setup({
+      nodes: [linkedNode],
+      pages: [PAGE],
+      drafts: [{ cmsEntryId: 'E132', contentMapNodeId: 'n1', title: PAGE.title, cmsPath: '/spa-services/hot-tub-heater-repair/', lastPushStatus: 'failed' }],
+    });
+    await reconcileMap('m1', { notify: false });
+    expect(calls('contentMapDrift.create').map((c) => c.args.data.driftType)).toContain('TITLE_CHANGED');
+  });
+});
