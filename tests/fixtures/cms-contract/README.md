@@ -1,7 +1,7 @@
 # EmDash bridge contract fixtures (read-only copy)
 
 Copied verbatim from the framework repo `oasis-astro`, package `packages/os-bridge-contract`,
-at oasis-astro HEAD `2c59003` (the contract package last changed in `bac6426`; contract v1 with errata through v1.5.0: v1.2.1 `5d28192`, v1.3.0 `5b6a2a2`, v1.4.0 `6b19bc7`, v1.5.0 `c777f4c`; v1.1.0 came in 9c62490, v1.0.7 in 18b2b83, the v1.0.6 `live` object in 82476f8, the outline in f2c7b6f). Request vectors 9–13 are signed `pipeline-client-review`, `media-import`, `pipeline-publish`, `proposal-create` and `migration-map`:
+at oasis-astro `0d6cf61` (contract v1.5.1: `entry-get includeLayout`, vector 15; earlier copy at HEAD `2c59003`; contract v1 with errata through v1.5.0: v1.2.1 `5d28192`, v1.3.0 `5b6a2a2`, v1.4.0 `6b19bc7`, v1.5.0 `c777f4c`; v1.1.0 came in 9c62490, v1.0.7 in 18b2b83, the v1.0.6 `live` object in 82476f8, the outline in f2c7b6f). Request vectors 9–13 are signed `pipeline-client-review`, `media-import`, `pipeline-publish`, `proposal-create` and `migration-map`:
 
 | Folder | Source |
 | --- | --- |

@@ -53,7 +53,8 @@
     "nativeDraftRevisions": true,
     "autoLogin": false,
     "leads": false,
-    "timeline": true
+    "timeline": true,
+    "layoutRead": true
   },
   "health": {
     "schedulerLastRunAgoMin": 3,
@@ -68,7 +69,7 @@
     "lastEventAt": "2026-10-15T12:00:00Z",
     "lastCursor": 57
   },
-  "contractRevision": "1.5.0",
+  "contractRevision": "1.5.1",
   "previewConfigured": true,
   "migratedFrom": {
     "cms": "wordpress",

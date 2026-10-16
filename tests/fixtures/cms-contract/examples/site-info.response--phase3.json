@@ -70,7 +70,8 @@
     "draftPushFromOs": true,
     "seoGateOnPush": true,
     "reports": true,
-    "migrationMap": true
+    "migrationMap": true,
+    "layoutRead": true
   },
   "health": {
     "schedulerLastRunAgoMin": 3,
@@ -412,7 +413,7 @@
       "scheduled": 1
     }
   },
-  "contractRevision": "1.5.0",
+  "contractRevision": "1.5.1",
   "previewConfigured": true,
   "navigation": [
     "/",

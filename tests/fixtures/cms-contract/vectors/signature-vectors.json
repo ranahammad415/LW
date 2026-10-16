@@ -232,6 +232,24 @@
       "canonical": "v1\nPOST\n/_emdash/api/plugins/agency-os-bridge/migration-map\n1792065612\nbbbbbbbb-cccc-4ddd-8eee-ffffffffffff\nb541b85b1dc92cf796af6b9449e88a84ebbb2e32ba958b89ef2aca9848c75f36"
     },
     {
+      "name": "os-to-site entry-get includeLayout (v1.5.1)",
+      "direction": "os->site",
+      "secret": "inbound key 1",
+      "headers": {
+        "x-aos-contract": "1",
+        "x-aos-site": "site_9f3c2a7b41d0",
+        "x-aos-key-id": "1",
+        "x-aos-timestamp": "1792065613",
+        "x-aos-nonce": "cccccccc-dddd-4eee-8fff-000000000000",
+        "x-aos-signature": "v1=5657509aa2d018088e1f8db907ecd08e0267b4b1aa8ed32a73f16e72f090c194"
+      },
+      "method": "POST",
+      "path": "/_emdash/api/plugins/agency-os-bridge/entry-get",
+      "body": "{\"entryId\":\"01JAB4M9ZQ7X3K2V8N5T6R1W0C\",\"variant\":\"draft\",\"includeLayout\":true}",
+      "bodySha256": "df5400d59e6fc64ed624e4e3fd49e97aa260844e5b95c19dd8b4326667c1c8c5",
+      "canonical": "v1\nPOST\n/_emdash/api/plugins/agency-os-bridge/entry-get\n1792065613\ncccccccc-dddd-4eee-8fff-000000000000\ndf5400d59e6fc64ed624e4e3fd49e97aa260844e5b95c19dd8b4326667c1c8c5"
+    },
+    {
       "name": "disconnect handshake (v1.0.4) signed with the current outbound key",
       "direction": "site->os",
       "secret": "outbound key 1",

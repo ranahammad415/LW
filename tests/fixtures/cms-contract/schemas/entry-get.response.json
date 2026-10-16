@@ -133,6 +133,9 @@
           "outlineOmitted"
         ]
       }
+    },
+    "editable": {
+      "$ref": "common.json#/$defs/editableContent"
     }
   },
   "required": [

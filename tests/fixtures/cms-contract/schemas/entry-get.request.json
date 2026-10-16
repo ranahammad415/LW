@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/entry-get.request.json",
   "title": "entry-get",
-  "description": "v1.1.0: includeFields returns the text values of every block field (for the OS client-review view and suggestions).",
+  "description": "v1.1.0: includeFields returns the text values of every block field (for the OS client-review view and suggestions). v1.5.1: includeLayout (capability layoutRead) adds `editable`.",
   "type": "object",
   "properties": {
     "entryId": {
@@ -16,6 +16,10 @@
     },
     "includeFields": {
       "type": "boolean"
+    },
+    "includeLayout": {
+      "type": "boolean",
+      "description": "v1.5.1, capability layoutRead: return `editable`, the requested variant's content exactly in the shape draft-upsert accepts, plus the rev to send as baseRev"
     }
   },
   "required": [

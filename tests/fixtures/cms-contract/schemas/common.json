@@ -1556,6 +1556,10 @@
           "type": "boolean",
           "description": "v1.5.0: the site was migrated from WordPress and serves migration-map"
         },
+        "layoutRead": {
+          "type": "boolean",
+          "description": "v1.5.1: entry-get includeLayout returns the editable content (layout / portableText / body.markdown) exactly as draft-upsert accepts it"
+        },
         "draftPushFromOs": {
           "type": "boolean",
           "description": "v1.2.0: draft-upsert applies exact slug/parent/bylines/taxonomies through the site-only service token, returns seoCheck, enforces CONTRACT_LOCKED"
@@ -2850,6 +2854,262 @@
         "_type"
       ],
       "description": "One approved block (fields per the site's block schema). Raw HTML blocks are rejected with UNKNOWN_BLOCK."
+    },
+    "editableContent": {
+      "type": "object",
+      "properties": {
+        "variant": {
+          "enum": [
+            "draft",
+            "live"
+          ]
+        },
+        "rev": {
+          "$ref": "common.json#/$defs/id",
+          "description": "The entry's current rev: send it as draft-upsert baseRev (same value as entry.rev). For variant live with a pending draft, a push on it REPLACES the pending draft"
+        },
+        "revisionId": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/id",
+              "description": "The revision the content was read from (draftRevisionId / liveRevisionId, or v<version> for a never-published entry). Informational"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "format": {
+          "enum": [
+            "layout",
+            "portableText",
+            "markdown"
+          ],
+          "description": "Which draft-upsert content key the site uses for this collection (layout = approved blocks, portableText = rich text, markdown = body.markdown where the site stores Markdown)"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "The variant's title, as draft-upsert.title"
+        },
+        "excerpt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 1000,
+              "description": "The variant's excerpt where the collection has one, as draft-upsert.excerpt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "layout": {
+          "type": "array",
+          "items": {
+            "$ref": "common.json#/$defs/block"
+          },
+          "maxItems": 24,
+          "description": "Approved blocks exactly as stored (_type, _key, _version, every field value incl. image/media references); send back unchanged fields unchanged"
+        },
+        "portableText": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "description": "Portable Text exactly as stored (never HTML)"
+        },
+        "body": {
+          "type": "object",
+          "properties": {
+            "markdown": {
+              "type": "string",
+              "maxLength": 200000
+            }
+          },
+          "required": [
+            "markdown"
+          ]
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "UTF-8 bytes of the JSON of the content value (layout / portableText / markdown string)"
+        },
+        "omitted": {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "enum": [
+                "too_large",
+                "too_many_blocks"
+              ]
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "The limit that was exceeded (bytes or blocks)"
+            },
+            "actual": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "reason",
+            "limit"
+          ],
+          "description": "Set INSTEAD of the content when a draft-upsert carrying it would exceed the draft-upsert limits (LAYOUT_READ_LIMITS); edit this entry in the EmDash admin"
+        },
+        "valid": {
+          "type": "boolean",
+          "description": "false when the stored content no longer passes the site's current block schemas (draft-upsert would answer 422 SCHEMA_INVALID / UNKNOWN_BLOCK until the errors are fixed)"
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "maxLength": 500
+              },
+              "message": {
+                "type": "string",
+                "maxLength": 500
+              }
+            },
+            "required": [
+              "path",
+              "message"
+            ]
+          },
+          "maxItems": 50,
+          "description": "Present when valid is false: the same paths draft-upsert would report ($.layout[i]...)"
+        }
+      },
+      "required": [
+        "variant",
+        "rev",
+        "format",
+        "title",
+        "bytes"
+      ],
+      "description": "v1.5.1 (entry-get includeLayout, capability layoutRead): the requested variant's content in exactly the shape draft-upsert accepts. Exactly one of layout / portableText / body, or omitted. Never HTML.",
+      "oneOf": [
+        {
+          "required": [
+            "layout"
+          ],
+          "properties": {
+            "format": {
+              "const": "layout"
+            }
+          },
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "portableText"
+                ]
+              },
+              {
+                "required": [
+                  "body"
+                ]
+              },
+              {
+                "required": [
+                  "omitted"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "required": [
+            "portableText"
+          ],
+          "properties": {
+            "format": {
+              "const": "portableText"
+            }
+          },
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "layout"
+                ]
+              },
+              {
+                "required": [
+                  "body"
+                ]
+              },
+              {
+                "required": [
+                  "omitted"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "required": [
+            "body"
+          ],
+          "properties": {
+            "format": {
+              "const": "markdown"
+            }
+          },
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "layout"
+                ]
+              },
+              {
+                "required": [
+                  "portableText"
+                ]
+              },
+              {
+                "required": [
+                  "omitted"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "required": [
+            "omitted"
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "layout"
+                ]
+              },
+              {
+                "required": [
+                  "portableText"
+                ]
+              },
+              {
+                "required": [
+                  "body"
+                ]
+              }
+            ]
+          }
+        }
+      ]
     },
     "event": {
       "type": "object",

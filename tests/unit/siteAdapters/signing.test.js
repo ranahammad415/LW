@@ -55,8 +55,8 @@ function memoryNonceCache() {
 describe('contract §3.5 signature vectors', () => {
   it('has the 8 request and 3 response vectors listed in contract.md (v1.0.3 adds counterFloor)', () => {
     // v1.0.4 disconnect, v1.1.0 pipeline-client-review, v1.2.0 media-import, v1.3.0 pipeline-publish,
-    // v1.4.0 proposal-create, v1.5.0 migration-map
-    expect(vectors.requests).toHaveLength(14);
+    // v1.4.0 proposal-create, v1.5.0 migration-map, v1.5.1 entry-get includeLayout (vector 15)
+    expect(vectors.requests).toHaveLength(15);
     expect(vectors.responses).toHaveLength(3);
     expect(vectors.responses.some((r) => r.body.includes('"counterFloor"'))).toBe(true);
   });
