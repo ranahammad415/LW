@@ -532,3 +532,14 @@ describe('e2e O3: a review request never costs the user their changes', () => {
     expect(site.bodies).toHaveLength(1);
   });
 });
+
+describe('e2e O20: a push links its node to the entry page when the page row exists', () => {
+  it('sets the node wpPageId (only when the node has none)', async () => {
+    db.overrides['cmsDraft.findUnique'] = async () => ({ id: 'd5', projectId: 'p1', contentMapNodeId: 'n1', taskId: null, collection: 'pages', title: 'T', slug: 's', parent: null, contentKind: 'layout', layout: [], cmsEntryId: null, cmsRev: null, lastPushStatus: 'never' });
+    db.overrides['wpPage.findFirst'] = async (args) => (args.where.cmsEntryId === 'E9' ? { id: 'wp-9' } : null);
+    site.upsert = async () => ({ ok: true, entryId: 'E9', rev: 'v1', created: true, path: '/s/' });
+    await pushDraft({ draftId: 'd5', user: JANE });
+    const link = calls('contentMapNode.updateMany').find((c) => c.args.data.wpPageId);
+    expect(link.args).toEqual({ where: { id: 'n1', wpPageId: null }, data: { wpPageId: 'wp-9' } });
+  });
+});

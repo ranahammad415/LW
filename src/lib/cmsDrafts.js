@@ -455,6 +455,12 @@ async function pushClaimedDraft({ draft, project, user, opts, log }) {
       .updateMany({ where: { id: draft.contentMapNodeId, lifecycle: 'PLANNED' }, data: { lifecycle: 'IN_PIPELINE' } })
       .catch(() => {});
   }
+  // e2e O20: the node this draft was pushed from IS the entry's node. Link it now when the page row already exists;
+  // otherwise the next reconcile links it by cmsEntryId (contentMapSync), never a second node.
+  if (draft.contentMapNodeId && res.entryId) {
+    const page = await prisma.wpPage.findFirst({ where: { projectId: project.id, cmsEntryId: String(res.entryId) }, select: { id: true } }).catch(() => null);
+    if (page) await prisma.contentMapNode.updateMany({ where: { id: draft.contentMapNodeId, wpPageId: null }, data: { wpPageId: page.id } }).catch(() => {});
+  }
   log?.info?.({ projectId: project.id, draftId: draft.id, created: !!res.created, actor: body.actor.kind, replay: !!res.idempotentReplay }, 'EmDash draft pushed');
   return { draft: updated, result: { ok: true, created: !!res.created, warnings, seoCheck: res.seoCheck ?? null, review: !!res.review } };
 }

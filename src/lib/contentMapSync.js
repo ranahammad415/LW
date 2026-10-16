@@ -650,8 +650,47 @@ export async function reconcileMap(mapId, { userId = null, notify = true } = {})
   const stats = { published: 0, newContent: 0, removed: 0, urlChanged: 0, titleChanged: 0, statusChanged: 0, likelyMatch: 0 };
   const publishedNodes = [];
 
+  // EmDash (e2e O20): an entry the OS created from a node's draft belongs to THAT node. The pushed node is no longer
+  // PLANNED (IN_PIPELINE) and its planned path may differ from the site's, so path / title matching missed it and
+  // "Sync site" created a second node. Link by the draft's cmsEntryId first.
+  const nodeById = new Map(nodes.map((n) => [n.id, n]));
+  const draftNodeByEntry = new Map();
+  if (inventory.items.some((i) => i.page.cmsEntryId)) {
+    const drafts = await prisma.cmsDraft.findMany({
+      where: { projectId: map.projectId, cmsEntryId: { not: null }, contentMapNodeId: { not: null } },
+      select: { cmsEntryId: true, contentMapNodeId: true },
+      orderBy: { updatedAt: 'desc' },
+    });
+    for (const d of drafts) if (!draftNodeByEntry.has(d.cmsEntryId)) draftNodeByEntry.set(d.cmsEntryId, d.contentMapNodeId);
+  }
+
   for (const item of inventory.items) {
-    const linked = nodesByWpPageId.get(item.page.id);
+    let linked = nodesByWpPageId.get(item.page.id);
+    if (!linked && item.page.cmsEntryId && draftNodeByEntry.has(item.page.cmsEntryId)) {
+      const own = nodeById.get(draftNodeByEntry.get(item.page.cmsEntryId));
+      if (own && !own.wpPageId) {
+        const wasLive = own.lifecycle === 'LIVE';
+        const updated = await prisma.contentMapNode.update({
+          where: { id: own.id },
+          data: {
+            wpPageId: item.page.id,
+            url: String(item.page.url || '').slice(0, 500),
+            lifecycle: item.lifecycle === 'LIVE' ? 'LIVE' : own.lifecycle === 'PLANNED' ? item.lifecycle : own.lifecycle,
+            isLive: item.lifecycle === 'LIVE',
+            ...(item.lifecycle === 'LIVE' && !wasLive ? { publishedAt: item.page.modifiedAt || new Date() } : {}),
+            metrics: item.enrichment,
+            metricsAt: new Date(),
+          },
+        });
+        own.wpPageId = item.page.id;
+        nodesByWpPageId.set(item.page.id, updated);
+        if (item.lifecycle === 'LIVE' && !wasLive) {
+          stats.published++;
+          publishedNodes.push({ node: own, item });
+        }
+        continue;
+      }
+    }
 
     if (linked) {
       const wasLive = linked.lifecycle === 'LIVE';
