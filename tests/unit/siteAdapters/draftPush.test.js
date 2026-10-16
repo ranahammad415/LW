@@ -294,6 +294,14 @@ describe('media (direct upload only; ≤ 1 MiB; no re-encoding; sha256 dedupe)',
     await expect(fetchImageFromUrl('https://x.example/a.png', { maxBytes: 10, fetchImpl: redirect })).rejects.toThrow(/redirects/);
     const big = async () => new Response(Buffer.alloc(20), { status: 200 });
     await expect(fetchImageFromUrl('https://x.example/a.png', { maxBytes: 10, fetchImpl: big })).rejects.toMatchObject({ code: 'MEDIA_TOO_LARGE' });
+    // review MEDIUM-5: the transport cap follows the site's maxBytes; a transport refusal is MEDIA_TOO_LARGE too
+    const caps = [];
+    const capped = async (_u, init) => {
+      caps.push(init.maxBytes);
+      throw Object.assign(new Error('Response too large'), { code: 'RESPONSE_TOO_LARGE' });
+    };
+    await expect(fetchImageFromUrl('https://x.example/a.png', { maxBytes: 2_000_000, fetchImpl: capped })).rejects.toMatchObject({ code: 'MEDIA_TOO_LARGE' });
+    expect(caps).toEqual([2_000_001]);
     const ok = async () => new Response(pngBytes(), { status: 200 });
     expect((await fetchImageFromUrl('https://x.example/img/a%20b.png', { maxBytes: 1000, fetchImpl: ok })).filename).toBe('a b.png');
   });

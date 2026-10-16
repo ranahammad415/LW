@@ -14,7 +14,7 @@ import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { prisma } from './prisma.js';
 import { probeImage } from './imageProbe.js';
-import { guardedFetch } from './siteAdapters/netGuard.js';
+import { guardedFetch, allowInsecureDev } from './siteAdapters/netGuard.js';
 import { leadToRow, leadAnalyticsMeta, LEAD_PHOTO_MAX_BYTES, LEAD_ERASE_REASONS } from './siteAdapters/leads.js';
 import { CmsBridgeError, emdashRoutes, INTERACTIVE_RETRY_DELAYS_MS } from './siteAdapters/emdash.js';
 import { loadEmdashConnection } from './cmsStore.js';
@@ -86,20 +86,73 @@ export async function applyLeadEvent(project, ev) {
   }
 }
 
-/** Copy pending photos of one lead (or of all leads with `leadRowId` null), within the 7-day window. */
-export async function copyLeadPhotos(leadRowId = null, { fetchImpl = guardedFetch, now = new Date(), limit = 25 } = {}) {
+/** A copy claim (stored in `error`) older than this is abandoned (the process died mid-copy) and can be taken over. */
+export const LEAD_PHOTO_CLAIM_STALE_MS = 5 * 60_000;
+const CLAIM_PREFIX = 'COPYING@';
+/** Errors after which the link is dropped: retrying cannot succeed (review MEDIUM-LOW-6). */
+const PERMANENT_PHOTO_ERRORS = new Set(['NOT_IMAGE', 'TOO_LARGE', 'HTTP_404', 'HTTP_410', 'REDIRECT', 'URL_NOT_ALLOWED']);
+
+/**
+ * Lead photo links always come from the paired site's own public origin (contract §26.1; plugin answer):
+ * `<publicPathPrefix>/_emdash/api/plugins/<bridge>/…?<signed qs>`, no redirects, no CDN. The host must equal the host
+ * of the project's stored site URL (validated at pairing; never a host from the handshake or the event), https only
+ * (http only in the opt-in insecure dev mode), and the path must contain `/_emdash/api/plugins/`.
+ */
+export function leadPhotoUrlAllowed(sourceUrl, siteUrl, env = process.env) {
+  let u;
+  let site;
+  try {
+    u = new URL(String(sourceUrl));
+    site = new URL(String(siteUrl));
+  } catch {
+    return false;
+  }
+  if (u.username || u.password) return false;
+  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && allowInsecureDev(env))) return false;
+  if (u.hostname.toLowerCase() !== site.hostname.toLowerCase() || u.port !== site.port) return false;
+  return u.pathname.includes('/_emdash/api/plugins/');
+}
+
+function claimIsLive(error, now) {
+  if (typeof error !== 'string' || !error.startsWith(CLAIM_PREFIX)) return false;
+  const at = Number(error.slice(CLAIM_PREFIX.length));
+  return Number.isFinite(at) && now.getTime() - at < LEAD_PHOTO_CLAIM_STALE_MS;
+}
+
+/**
+ * Copy pending photos of one lead (or of all leads with `leadRowId` null), within the 7-day window, oldest first.
+ * Each row is claimed with a compare-and-set before the fetch (two instances never copy the same photo), and the
+ * result is written only while the row is still uncopied: when the lead was erased meanwhile (row gone), the file just
+ * written is deleted again, so an erase during a copy never leaves PII on disk.
+ */
+export async function copyLeadPhotos(leadRowId = null, { fetchImpl = guardedFetch, now = new Date(), limit = 25, env = process.env } = {}) {
   const rows = await prisma.cmsLeadPhoto.findMany({
     where: { ...(leadRowId ? { leadRowId } : {}), copiedAt: null, sourceUrl: { not: null } },
+    include: { lead: { select: { erasedAt: true, project: { select: { wpUrl: true } } } } },
+    orderBy: { createdAt: 'asc' },
     take: limit,
   });
   let copied = 0;
   for (const ph of rows) {
+    if (claimIsLive(ph.error, now) || ph.lead?.erasedAt) continue;
     if (ph.sourceExpiresAt && ph.sourceExpiresAt <= now) {
-      await prisma.cmsLeadPhoto.update({ where: { id: ph.id }, data: { sourceUrl: null, error: 'EXPIRED' } });
+      await prisma.cmsLeadPhoto.updateMany({ where: { id: ph.id, copiedAt: null }, data: { sourceUrl: null, error: 'EXPIRED' } });
       continue;
     }
+    const claimValue = `${CLAIM_PREFIX}${now.getTime()}`;
+    const claim = await prisma.cmsLeadPhoto.updateMany({ where: { id: ph.id, copiedAt: null, error: ph.error ?? null }, data: { error: claimValue } });
+    if (claim.count !== 1) continue;
+    let file = null;
     try {
-      const res = await fetchImpl(ph.sourceUrl, { signal: AbortSignal.timeout(20_000), headers: { 'User-Agent': 'Localwaves-AgencyOS/1.0 (+https://localwaves; leads)' } });
+      if (!leadPhotoUrlAllowed(ph.sourceUrl, ph.lead?.project?.wpUrl, env)) throw Object.assign(new Error('url'), { code: 'URL_NOT_ALLOWED' });
+      let res;
+      try {
+        // Review MEDIUM-5: the transport cap is the photo limit (+1 byte so an oversize photo is detected).
+        res = await fetchImpl(ph.sourceUrl, { signal: AbortSignal.timeout(20_000), maxBytes: LEAD_PHOTO_MAX_BYTES + 1, headers: { 'User-Agent': 'Localwaves-AgencyOS/1.0 (+https://localwaves; leads)' } });
+      } catch (err) {
+        if (err?.code === 'RESPONSE_TOO_LARGE') throw Object.assign(new Error('size'), { code: 'TOO_LARGE' });
+        throw Object.assign(new Error('fetch'), { code: 'FETCH_FAILED' });
+      }
       if (!res.ok) throw Object.assign(new Error('fetch'), { code: res.status >= 300 && res.status < 400 ? 'REDIRECT' : `HTTP_${res.status}` });
       const buf = Buffer.from(await res.arrayBuffer());
       if (buf.length > LEAD_PHOTO_MAX_BYTES) throw Object.assign(new Error('size'), { code: 'TOO_LARGE' });
@@ -107,17 +160,53 @@ export async function copyLeadPhotos(leadRowId = null, { fetchImpl = guardedFetc
       if (!probe) throw Object.assign(new Error('type'), { code: 'NOT_IMAGE' });
       const name = `${crypto.randomBytes(16).toString('hex')}.${probe.contentType.split('/')[1]}`;
       await fsp.mkdir(leadsDir(), { recursive: true });
-      await fsp.writeFile(path.join(leadsDir(), name), buf, { mode: 0o600 });
-      await prisma.cmsLeadPhoto.update({
-        where: { id: ph.id },
+      file = path.join(leadsDir(), name);
+      await fsp.writeFile(file, buf, { mode: 0o600 });
+      const done = await prisma.cmsLeadPhoto.updateMany({
+        where: { id: ph.id, copiedAt: null, error: claimValue },
         data: { storageName: name, contentType: probe.contentType, bytes: buf.length, copiedAt: new Date(), sourceUrl: null, error: null },
       });
+      if (done.count !== 1) {
+        // Erased (row deleted) or taken over meanwhile: never keep an unreferenced copy.
+        await fsp.unlink(file).catch(() => {});
+        continue;
+      }
       copied += 1;
     } catch (err) {
-      await prisma.cmsLeadPhoto.update({ where: { id: ph.id }, data: { error: String(err?.code || 'FAILED').slice(0, 64) } }).catch(() => {});
+      const code = String(err?.code || 'FAILED').slice(0, 64);
+      await prisma.cmsLeadPhoto
+        .updateMany({ where: { id: ph.id, copiedAt: null, error: claimValue }, data: { error: code, ...(PERMANENT_PHOTO_ERRORS.has(code) ? { sourceUrl: null } : {}) } })
+        .catch(() => {});
     }
   }
   return copied;
+}
+
+/**
+ * Delete photo files no CmsLeadPhoto row references (e.g. rows removed with their project by the database cascade,
+ * or a crash between write and record). Only files older than an hour (a copy in progress is never touched); bounded.
+ */
+export async function sweepOrphanLeadPhotos({ now = new Date(), limit = 500 } = {}) {
+  let names;
+  try {
+    names = (await fsp.readdir(leadsDir())).filter((n) => /^[0-9a-f]{32}\.[a-z0-9]+$/.test(n));
+  } catch {
+    return 0;
+  }
+  const old = [];
+  for (const n of names) {
+    if (old.length >= limit) break;
+    const st = await fsp.stat(path.join(leadsDir(), n)).catch(() => null);
+    if (st && now.getTime() - st.mtimeMs > 3600_000) old.push(n);
+  }
+  if (!old.length) return 0;
+  const kept = new Set((await prisma.cmsLeadPhoto.findMany({ where: { storageName: { in: old } }, select: { storageName: true } })).map((r) => r.storageName));
+  let removed = 0;
+  for (const n of old) {
+    if (kept.has(n)) continue;
+    await fsp.unlink(path.join(leadsDir(), n)).then(() => (removed += 1)).catch(() => {});
+  }
+  return removed;
 }
 
 async function deletePhotoFiles(photos) {
@@ -171,8 +260,9 @@ export async function leadHousekeeping({ now = new Date(), log } = {}) {
     for (const l of old) if (await eraseLocalLead(p.id, l.leadId, 'retention')) erased += 1;
   }
   const copied = await copyLeadPhotos(null, { now }).catch(() => 0);
-  if (erased || copied) log?.info?.({ erased, copied }, 'EmDash lead housekeeping');
-  return { erased, copied };
+  const orphansRemoved = await sweepOrphanLeadPhotos({ now }).catch(() => 0);
+  if (erased || copied || orphansRemoved) log?.info?.({ erased, copied, orphansRemoved }, 'EmDash lead housekeeping');
+  return { erased, copied, orphansRemoved };
 }
 
 /** Absolute path of a copied photo (validated name) for the authenticated download route. */

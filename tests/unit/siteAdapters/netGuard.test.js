@@ -97,3 +97,25 @@ describe('signing hardening', () => {
     });
   });
 });
+
+describe('response size cap (review MEDIUM-5)', () => {
+  it('guardedFetch caps at 8 MiB by default and at init.maxBytes when given (RESPONSE_TOO_LARGE)', async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.EMDASH_BRIDGE_ALLOW_INSECURE_DEV = 'true'; // local http test server
+    const nine = Buffer.alloc(9 * 1024 * 1024, 1);
+    const server = http.createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'application/octet-stream' });
+      res.end(nine);
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const { port } = server.address();
+    try {
+      await expect(guardedFetch(`http://localhost:${port}/x`)).rejects.toMatchObject({ code: 'RESPONSE_TOO_LARGE' });
+      const res = await guardedFetch(`http://localhost:${port}/x`, { maxBytes: 10 * 1024 * 1024 + 1 });
+      expect(Buffer.from(await res.arrayBuffer()).length).toBe(nine.length);
+      await expect(guardedFetch(`http://localhost:${port}/x`, { maxBytes: 1024 })).rejects.toMatchObject({ code: 'RESPONSE_TOO_LARGE' });
+    } finally {
+      server.close();
+    }
+  });
+});

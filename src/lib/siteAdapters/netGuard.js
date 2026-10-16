@@ -128,9 +128,13 @@ export function guardedLookup(hostname, options, callback) {
 
 /**
  * Minimal fetch-compatible POST (method/headers/body/signal) with the guarded lookup and no
- * redirect following. Resolves to a WHATWG Response.
+ * redirect following. Resolves to a WHATWG Response. `init.maxBytes` caps the response body (default 8 MiB); a larger
+ * body rejects with an Error whose code is RESPONSE_TOO_LARGE.
  */
+export const GUARDED_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
+
 export function guardedFetch(url, init = {}) {
+  const maxBytes = Number.isInteger(init.maxBytes) && init.maxBytes > 0 ? init.maxBytes : GUARDED_FETCH_DEFAULT_MAX_BYTES;
   return new Promise((resolve, reject) => {
     let u;
     try {
@@ -155,8 +159,8 @@ export function guardedFetch(url, init = {}) {
         let size = 0;
         res.on('data', (c) => {
           size += c.length;
-          if (size > 8 * 1024 * 1024) {
-            req.destroy(new Error('Response too large'));
+          if (size > maxBytes) {
+            req.destroy(Object.assign(new Error('Response too large'), { code: 'RESPONSE_TOO_LARGE' }));
             return;
           }
           chunks.push(c);

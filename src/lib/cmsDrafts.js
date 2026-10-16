@@ -485,11 +485,20 @@ export async function fetchImageFromUrl(url, { maxBytes, fetchImpl = guardedFetc
   }
   if (u.protocol !== 'https:') throw bad('Image URLs must use https.');
   if (u.username || u.password) throw bad('Image URLs must not contain credentials.');
-  const res = await fetchImpl(u.toString(), { signal: AbortSignal.timeout(15_000), headers: { 'User-Agent': 'Localwaves-AgencyOS/1.0 (+https://localwaves; media)' } });
+  const cap = Number.isInteger(maxBytes) && maxBytes > 0 ? maxBytes : MEDIA_LIMITS.maxBytes;
+  const tooLarge = () => bad(`The image is larger than ${Math.round(cap / 1024)} KiB. Use a web-ready file (WebP or JPEG).`, 'MEDIA_TOO_LARGE');
+  let res;
+  try {
+    // Review MEDIUM-5: the transport cap follows the site's media.maxBytes (+1 byte so an oversize file is detected).
+    res = await fetchImpl(u.toString(), { signal: AbortSignal.timeout(15_000), maxBytes: cap + 1, headers: { 'User-Agent': 'Localwaves-AgencyOS/1.0 (+https://localwaves; media)' } });
+  } catch (err) {
+    if (err?.code === 'RESPONSE_TOO_LARGE') throw tooLarge();
+    throw err;
+  }
   if (res.status >= 300 && res.status < 400) throw bad('The image URL redirects; use the final URL.');
   if (!res.ok) throw bad(`The image URL answered HTTP ${res.status}.`);
   const buf = Buffer.from(await res.arrayBuffer());
-  if (buf.length > maxBytes) throw bad(`The image is larger than ${Math.round(maxBytes / 1024)} KiB. Use a web-ready file (WebP or JPEG).`, 'MEDIA_TOO_LARGE');
+  if (buf.length > cap) throw tooLarge();
   const name = decodeURIComponent(u.pathname.split('/').pop() || 'image');
   return { buffer: buf, filename: name.slice(0, 200) };
 }

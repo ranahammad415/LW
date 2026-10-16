@@ -65,7 +65,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { planWpHistoryMove, buildRekeyPlan, sanitizeMigratedFrom } from '../../../src/lib/siteAdapters/migration.js';
 import { validateLeadEvent, leadToRow } from '../../../src/lib/siteAdapters/leads.js';
-import { applyLeadEvent, copyLeadPhotos, eraseLocalLead, eraseLead } from '../../../src/lib/cmsLeads.js';
+import { applyLeadEvent, copyLeadPhotos, eraseLocalLead, eraseLead, leadPhotoUrlAllowed, sweepOrphanLeadPhotos } from '../../../src/lib/cmsLeads.js';
 import { pullSiteReports, sanitizeReport } from '../../../src/lib/cmsReports.js';
 import { previewMigration, applyMigration, mapHash, identityCheck, isMigrationActive } from '../../../src/lib/cmsMigration.js';
 import { applyEmdashContentEvent, mirrorEmdashReview, prismaCmsStore, isForeignWpPage } from '../../../src/lib/cmsStore.js';
@@ -132,21 +132,104 @@ describe('leads (§26.1)', () => {
     expect(calls('cmsLead.create')[0].args.data.fields).toBeUndefined();
   });
 
+  const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0, 0, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x02, 0x58, 0x03, 0x20, 0x03]);
+  const PHOTO = (q) => `https://s.example/_emdash/api/plugins/agency-os-bridge/lead-photo?${q}`;
+  const LEAD = { erasedAt: null, project: { wpUrl: 'https://s.example' } };
+  const writes = (key) => calls(key).map((c) => [c.args.where.id, c.args.data]);
+
   it('photos: copied into private storage (never kept as URLs), expired links dropped, non-images refused', async () => {
-    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0, 0, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x02, 0x58, 0x03, 0x20, 0x03]);
+    const before = readdirSync(process.env.CMS_LEADS_DIR).length;
     const future = new Date(Date.now() + 86_400_000);
     db.overrides['cmsLeadPhoto.findMany'] = async () => [
-      { id: 'ph1', sourceUrl: 'https://s.example/photo?sig=a', sourceExpiresAt: future },
-      { id: 'ph2', sourceUrl: 'https://s.example/photo?sig=b', sourceExpiresAt: new Date(Date.now() - 1000) },
-      { id: 'ph3', sourceUrl: 'https://s.example/photo?sig=c', sourceExpiresAt: future },
+      { id: 'ph1', sourceUrl: PHOTO('sig=a'), sourceExpiresAt: future, error: null, lead: LEAD },
+      { id: 'ph2', sourceUrl: PHOTO('sig=b'), sourceExpiresAt: new Date(Date.now() - 1000), error: null, lead: LEAD },
+      { id: 'ph3', sourceUrl: PHOTO('sig=c'), sourceExpiresAt: future, error: null, lead: LEAD },
     ];
-    const fetchImpl = async (url) => new Response(url.endsWith('=c') ? Buffer.from('<svg/>') : jpeg, { status: 200 });
+    const fetchImpl = async (url) => new Response(url.endsWith('=c') ? Buffer.from('<svg/>') : JPEG, { status: 200 });
     expect(await copyLeadPhotos(null, { fetchImpl })).toBe(1);
-    const updates = calls('cmsLeadPhoto.update').map((c) => [c.args.where.id, c.args.data]);
-    expect(updates[0][1]).toMatchObject({ sourceUrl: null, contentType: 'image/jpeg' });
-    expect(updates[1][1]).toEqual({ sourceUrl: null, error: 'EXPIRED' });
-    expect(updates[2][1]).toEqual({ error: 'NOT_IMAGE' });
-    expect(readdirSync(process.env.CMS_LEADS_DIR)).toHaveLength(1);
+    expect(calls('cmsLeadPhoto.findMany')[0].args).toMatchObject({ orderBy: { createdAt: 'asc' } });
+    const w = writes('cmsLeadPhoto.updateMany');
+    // ph1: claim (CAS on the observed error value) → copied only while still claimed and uncopied
+    expect(calls('cmsLeadPhoto.updateMany')[0].args.where).toEqual({ id: 'ph1', copiedAt: null, error: null });
+    expect(w[0][1].error).toMatch(/^COPYING@\d+$/);
+    expect(calls('cmsLeadPhoto.updateMany')[1].args.where).toEqual({ id: 'ph1', copiedAt: null, error: w[0][1].error });
+    expect(w[1][1]).toMatchObject({ sourceUrl: null, contentType: 'image/jpeg', error: null });
+    expect(w[2]).toEqual(['ph2', { sourceUrl: null, error: 'EXPIRED' }]);
+    // ph3: claimed, then a permanent error drops the link
+    expect(w[4]).toEqual(['ph3', { error: 'NOT_IMAGE', sourceUrl: null }]);
+    expect(readdirSync(process.env.CMS_LEADS_DIR).length - before).toBe(1);
+  });
+
+  it('review MEDIUM-LOW-6: claimed rows are skipped; an erase during the copy leaves no file; transient errors keep the link', async () => {
+    const before = readdirSync(process.env.CMS_LEADS_DIR).length;
+    const future = new Date(Date.now() + 86_400_000);
+    db.overrides['cmsLeadPhoto.findMany'] = async () => [
+      { id: 'live', sourceUrl: PHOTO('sig=a'), sourceExpiresAt: future, error: `COPYING@${Date.now() - 1000}`, lead: LEAD },
+      { id: 'erased', sourceUrl: PHOTO('sig=b'), sourceExpiresAt: future, error: null, lead: { ...LEAD, erasedAt: new Date() } },
+      { id: 'race', sourceUrl: PHOTO('sig=c'), sourceExpiresAt: future, error: `COPYING@${Date.now() - 600_000}`, lead: LEAD },
+      { id: 'down', sourceUrl: PHOTO('sig=d'), sourceExpiresAt: future, error: null, lead: LEAD },
+      { id: 'gone', sourceUrl: PHOTO('sig=e'), sourceExpiresAt: future, error: null, lead: LEAD },
+    ];
+    let n = 0;
+    // 'race': the stale claim is taken over, then the lead is erased while fetching (the final CAS finds no row)
+    db.overrides['cmsLeadPhoto.updateMany'] = async (args) => ({ count: args.where.id === 'race' && args.data.storageName ? 0 : 1 });
+    const fetchImpl = async (url) => {
+      n += 1;
+      if (url.endsWith('=d')) return new Response('busy', { status: 503 });
+      if (url.endsWith('=e')) return new Response('gone', { status: 404 });
+      return new Response(JPEG, { status: 200 });
+    };
+    expect(await copyLeadPhotos(null, { fetchImpl })).toBe(0);
+    expect(n).toBe(3); // 'live' (claimed elsewhere) and 'erased' never fetched
+    const w = writes('cmsLeadPhoto.updateMany');
+    expect(w.find(([id, d]) => id === 'race' && d.storageName)).toBeTruthy();
+    expect(readdirSync(process.env.CMS_LEADS_DIR).length).toBe(before); // the written copy was deleted again
+    expect(w.find(([id, d]) => id === 'down' && d.error === 'HTTP_503')[1]).not.toHaveProperty('sourceUrl');
+    expect(w.find(([id, d]) => id === 'gone' && d.error === 'HTTP_404')[1]).toMatchObject({ sourceUrl: null });
+  });
+
+  it('review LOW-10 / MEDIUM-5: only the paired site host, https, the plugin path; the transport cap is 10 MiB', async () => {
+    expect(leadPhotoUrlAllowed(PHOTO('sig=a'), 'https://s.example')).toBe(true);
+    expect(leadPhotoUrlAllowed('https://s.example/blog/_emdash/api/plugins/x/lead-photo?sig=a', 'https://S.example/blog')).toBe(true); // path prefix allowed
+    expect(leadPhotoUrlAllowed('https://evil.example/_emdash/api/plugins/x/lead-photo', 'https://s.example')).toBe(false);
+    expect(leadPhotoUrlAllowed('https://cdn.s.example/_emdash/api/plugins/x/lead-photo', 'https://s.example')).toBe(false);
+    expect(leadPhotoUrlAllowed('https://s.example/uploads/photo.jpg', 'https://s.example')).toBe(false);
+    expect(leadPhotoUrlAllowed('http://s.example/_emdash/api/plugins/x/lead-photo', 'https://s.example', {})).toBe(false);
+    expect(leadPhotoUrlAllowed('https://u:p@s.example/_emdash/api/plugins/x/lead-photo', 'https://s.example')).toBe(false);
+    expect(leadPhotoUrlAllowed('https://s.example:8443/_emdash/api/plugins/x/lead-photo', 'https://s.example')).toBe(false);
+    const future = new Date(Date.now() + 86_400_000);
+    db.overrides['cmsLeadPhoto.findMany'] = async () => [
+      { id: 'evil', sourceUrl: 'https://evil.example/_emdash/api/plugins/x/lead-photo?sig=a', sourceExpiresAt: future, error: null, lead: LEAD },
+      { id: 'big', sourceUrl: PHOTO('sig=b'), sourceExpiresAt: future, error: null, lead: LEAD },
+    ];
+    const seen = [];
+    const fetchImpl = async (url, init) => {
+      seen.push([url, init.maxBytes]);
+      throw Object.assign(new Error('Response too large'), { code: 'RESPONSE_TOO_LARGE' });
+    };
+    await copyLeadPhotos(null, { fetchImpl });
+    expect(seen).toEqual([[PHOTO('sig=b'), 10 * 1024 * 1024 + 1]]);
+    const w = writes('cmsLeadPhoto.updateMany');
+    expect(w.find(([id, d]) => id === 'evil' && d.error === 'URL_NOT_ALLOWED')[1]).toMatchObject({ sourceUrl: null });
+    expect(w.find(([id, d]) => id === 'big' && d.error === 'TOO_LARGE')[1]).toMatchObject({ sourceUrl: null });
+  });
+
+  it('review MEDIUM-LOW-6: unreferenced photo files (e.g. a deleted project) are swept; recent files are left alone', async () => {
+    const dir = process.env.CMS_LEADS_DIR;
+    const { writeFileSync, utimesSync } = await import('node:fs');
+    const old = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpeg';
+    const kept = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.jpeg';
+    const fresh = 'cccccccccccccccccccccccccccccccc.jpeg';
+    for (const n of [old, kept, fresh]) writeFileSync(path.join(dir, n), 'x');
+    const t = (Date.now() - 2 * 3600_000) / 1000;
+    utimesSync(path.join(dir, old), t, t);
+    utimesSync(path.join(dir, kept), t, t);
+    db.overrides['cmsLeadPhoto.findMany'] = async (args) => (args.where.storageName ? [{ storageName: kept }] : []);
+    expect(await sweepOrphanLeadPhotos()).toBe(1);
+    const left = readdirSync(dir);
+    expect(left).not.toContain(old);
+    expect(left).toContain(kept);
+    expect(left).toContain(fresh);
   });
 
   it('OS lead-erase: site first (OWNER actor + reason), then our copy', async () => {
