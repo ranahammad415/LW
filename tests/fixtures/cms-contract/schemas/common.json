@@ -1164,7 +1164,8 @@
         "liveRevisionId": {
           "anyOf": [
             {
-              "$ref": "common.json#/$defs/id"
+              "$ref": "common.json#/$defs/id",
+              "description": "The entry's current live revision (null while the entry is not live). v1.5.2: refreshed by publish, so the pipeline-publish review carries the new live revision"
             },
             {
               "type": "null"
@@ -2011,6 +2012,40 @@
         },
         "page_id": {
           "$ref": "common.json#/$defs/pageId"
+        },
+        "entry_id": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/id",
+              "description": "v1.5.2 (always set on seo.* events): the profile's CMS entry"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "target": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200,
+              "description": "v1.5.2 (always set on seo.* events): collection:slug"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/path",
+              "description": "v1.5.2 (always set on seo.* events): public path (trailing slash) when the entry exists, else null"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "state": {
           "enum": [
@@ -3225,6 +3260,37 @@
             "page_id": {
               "$ref": "common.json#/$defs/pageId"
             },
+            "entry_id": {
+              "anyOf": [
+                {
+                  "$ref": "common.json#/$defs/id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "target": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "path": {
+              "anyOf": [
+                {
+                  "$ref": "common.json#/$defs/path"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "variant": {
               "enum": [
                 "draft",
@@ -3363,7 +3429,17 @@
           "then": {
             "required": [
               "profile"
-            ]
+            ],
+            "properties": {
+              "profile": {
+                "required": [
+                  "page_id",
+                  "entry_id",
+                  "target",
+                  "path"
+                ]
+              }
+            }
           }
         },
         {
@@ -3383,7 +3459,17 @@
           "then": {
             "required": [
               "proposal"
-            ]
+            ],
+            "properties": {
+              "proposal": {
+                "required": [
+                  "page_id",
+                  "entry_id",
+                  "target",
+                  "path"
+                ]
+              }
+            }
           }
         },
         {
@@ -3400,7 +3486,17 @@
           "then": {
             "required": [
               "check"
-            ]
+            ],
+            "properties": {
+              "check": {
+                "required": [
+                  "page_id",
+                  "entry_id",
+                  "target",
+                  "path"
+                ]
+              }
+            }
           }
         },
         {

@@ -121,6 +121,9 @@
       "proposal": {
         "proposal_id": "01JAH0PROP00000000000000001",
         "page_id": "P12",
+        "entry_id": "01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+        "target": "pages:hot-tub-repair",
+        "path": "/spa-services/hot-tub-repair/",
         "state": "open",
         "patch": [
           {
@@ -160,6 +163,9 @@
       "proposal": {
         "proposal_id": "01JAH0PROP00000000000000001",
         "page_id": "P12",
+        "entry_id": "01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+        "target": "pages:hot-tub-repair",
+        "path": "/spa-services/hot-tub-repair/",
         "state": "approved",
         "patch": [
           {
@@ -202,6 +208,9 @@
       },
       "check": {
         "page_id": "P12",
+        "entry_id": "01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+        "target": "pages:hot-tub-repair",
+        "path": "/spa-services/hot-tub-repair/",
         "variant": "draft",
         "trigger": "save",
         "summary": {

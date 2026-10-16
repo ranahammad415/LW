@@ -1,0 +1,33 @@
+{
+  "actor": {
+    "kind": "human",
+    "osUserId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90",
+    "name": "Jane PM",
+    "role": "PM"
+  },
+  "profile": {
+    "target": "pages:hot-tub-covers",
+    "collection": "pages",
+    "path": "/spa-services/hot-tub-covers/",
+    "page_type": "service",
+    "cluster": "hot-tub",
+    "working_title": "Hot Tub Covers",
+    "targeting": {
+      "primary_keyword": "hot tub covers",
+      "intent": "commercial",
+      "secondary_keywords": [
+        {
+          "term": "spa covers"
+        }
+      ]
+    },
+    "contract": {
+      "title": "Hot Tub Covers | Oasis Pool and Spa",
+      "h1": "Hot Tub Covers",
+      "meta": "Custom hot tub covers, measured and fitted."
+    },
+    "lifecycle": {
+      "publish_by": "2026-11-30"
+    }
+  }
+}

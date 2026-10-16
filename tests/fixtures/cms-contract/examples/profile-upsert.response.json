@@ -1,5 +1,7 @@
 {
   "ok": true,
+  "page_id": "P12",
+  "resolved_by": "page_id",
   "profile": {
     "page_id": "P12",
     "target": "pages:hot-tub-repair",

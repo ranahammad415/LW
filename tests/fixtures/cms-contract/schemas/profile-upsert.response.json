@@ -12,6 +12,19 @@
       "type": "boolean",
       "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
     },
+    "page_id": {
+      "$ref": "common.json#/$defs/pageId",
+      "description": "v1.5.2: the profile's page id (site-issued when the request had none); the OS stores it on its node"
+    },
+    "resolved_by": {
+      "enum": [
+        "page_id",
+        "entry_id",
+        "target",
+        "created"
+      ],
+      "description": "v1.5.2: how the profile was found (created = new profile under a site-issued id)"
+    },
     "profile": {
       "$ref": "common.json#/$defs/profile"
     },

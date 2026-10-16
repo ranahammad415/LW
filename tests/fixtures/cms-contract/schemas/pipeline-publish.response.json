@@ -13,7 +13,21 @@
       "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
     },
     "review": {
-      "$ref": "common.json#/$defs/review"
+      "allOf": [
+        {
+          "$ref": "common.json#/$defs/review"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "liveRevisionId": {
+          "$ref": "common.json#/$defs/id",
+          "description": "v1.5.2: the new live revision (= liveRevisionId)"
+        }
+      },
+      "required": [
+        "liveRevisionId"
+      ]
     },
     "entry": {
       "$ref": "common.json#/$defs/entry"

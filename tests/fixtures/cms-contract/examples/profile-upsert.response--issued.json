@@ -1,0 +1,122 @@
+{
+  "ok": true,
+  "page_id": "P27",
+  "resolved_by": "created",
+  "profile": {
+    "page_id": "P27",
+    "target": "pages:hot-tub-covers",
+    "entry_id": null,
+    "collection": "pages",
+    "path": "/spa-services/hot-tub-covers/",
+    "status": "planned",
+    "primary_keyword": "hot tub covers",
+    "contract": {
+      "version": 1,
+      "locked": false,
+      "locked_on": null,
+      "locked_by": null,
+      "fingerprint": null
+    },
+    "checks": null,
+    "facts": {
+      "requested": 0,
+      "placeholder": 0,
+      "confirmed": 0
+    },
+    "open_proposals": 0,
+    "next_review_on": "2027-05-15",
+    "updated_at": "2026-10-20T14:05:00Z",
+    "profile_hash": "051f92deca6692b8e35240368f526cf7ba3d0b66a39a78a75d97a789a4c7e84a",
+    "page_type": "service",
+    "cluster": "hot-tub",
+    "locality": null,
+    "parent_page_id": null,
+    "working_title": "Hot Tub Covers",
+    "targeting": {
+      "primary_keyword": "hot tub covers",
+      "owner_key": "hot tub covers|",
+      "intent": "commercial",
+      "secondary_keywords": [
+        {
+          "term": "spa covers"
+        }
+      ],
+      "avoid_terms": [],
+      "target_words": {
+        "min": 300,
+        "max": 800
+      }
+    },
+    "contract_body": {
+      "title": "Hot Tub Covers | Oasis Pool and Spa",
+      "h1": "Hot Tub Covers",
+      "meta": "Custom hot tub covers, measured and fitted.",
+      "answer_first_lead": true,
+      "required_blocks": [
+        {
+          "block_type": "page_hero",
+          "position": "first"
+        },
+        {
+          "block_type": "faq",
+          "min_items": 5
+        },
+        {
+          "block_type": "related_links",
+          "position": "last"
+        }
+      ],
+      "locked_faq_questions": [],
+      "required_links_out": [],
+      "schema_types": [
+        "WebPage",
+        "Service",
+        "BreadcrumbList",
+        "FAQPage"
+      ],
+      "allowed_prices": "call-for-quote"
+    },
+    "aeo": {
+      "answer_targets": [],
+      "entities": [],
+      "must_keep_phrases": [],
+      "proof_required": []
+    },
+    "facts_used": [],
+    "links": {
+      "in": [],
+      "out": []
+    },
+    "lifecycle": {
+      "status": "in-review",
+      "publish_by": "2026-11-15",
+      "next_review_on": "2027-05-15"
+    },
+    "research": {
+      "serp_features": []
+    },
+    "brief": null,
+    "last_check": null,
+    "proposals": [],
+    "changes": [],
+    "redirects": {
+      "active": 0,
+      "last_changed_at": null
+    },
+    "site_health": {
+      "last_crawl_at": "2026-11-01T03:00:00Z",
+      "must_fix": 0,
+      "should_fix": 2
+    }
+  },
+  "created": true,
+  "applied": {
+    "targeting": true,
+    "aeo": false,
+    "lifecycle": true,
+    "research": false,
+    "brief": false,
+    "contract": true
+  },
+  "warnings": []
+}

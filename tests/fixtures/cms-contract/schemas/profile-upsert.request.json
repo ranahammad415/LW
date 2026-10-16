@@ -46,7 +46,19 @@
       "type": "object",
       "properties": {
         "page_id": {
-          "$ref": "common.json#/$defs/pageId"
+          "$ref": "common.json#/$defs/pageId",
+          "description": "v1.5.2: optional on create. Omitted -> the site resolves entry_id, then target (or path), to an existing profile, else creates one with the next site-issued id (P27 after P26) and returns it as page_id. An unknown OS-sent page_id creates the profile under that id (unchanged)"
+        },
+        "entry_id": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/id",
+              "description": "v1.5.2: used to resolve an existing profile when page_id is omitted"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "target": {
           "anyOf": [
@@ -137,9 +149,7 @@
           "type": "object"
         }
       },
-      "required": [
-        "page_id"
-      ]
+      "required": []
     },
     "brief": {
       "type": "object",
