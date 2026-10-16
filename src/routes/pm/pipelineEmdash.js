@@ -253,8 +253,12 @@ export async function emdashStaffPreview({ request, reply, projectId, wpPipeline
   try {
     const row = await loadReview(projectId, wpPipelineId);
     const caps = await projectCaps(projectId);
-    if (caps.previewLinks !== true || !row.cmsEntryId) {
-      return sendEmdashError(reply, new CmsBridgeError({ status: 409, code: 'NOT_IMPLEMENTED', message: 'This site does not offer staff previews.' }), request.log);
+    // e2e O12: a capability the site does not grant answers 403, like publish / schedule (PUBLISH_NOT_ALLOWED).
+    if (caps.previewLinks !== true) {
+      return sendEmdashError(reply, new CmsBridgeError({ status: 403, code: 'NOT_IMPLEMENTED', message: 'This site does not offer staff previews.' }), request.log);
+    }
+    if (!row.cmsEntryId) {
+      return sendEmdashError(reply, new CmsBridgeError({ status: 409, code: 'NOT_IMPLEMENTED', message: 'This review has no site entry to preview.' }), request.log);
     }
     const ttl = Math.min(STAFF_PREVIEW_MAX_TTL_SEC, Math.max(60, Number(request.body?.ttlSeconds) || STAFF_PREVIEW_MAX_TTL_SEC));
     const { conn } = await loadEmdashConnection(projectId);

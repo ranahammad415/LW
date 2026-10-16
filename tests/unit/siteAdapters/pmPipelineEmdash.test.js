@@ -331,7 +331,11 @@ describe('v1.3.0 publish / schedule from the OS (§24)', () => {
 
   it('staff preview link: returned once, not stored; needs previewLinks', async () => {
     withCaps({ previewLinks: false });
-    expect((await app.inject({ method: 'POST', url: `/api/pm/pipeline/${PID}/42/preview-link` })).statusCode).toBe(409);
+    // e2e O12: capability off → 403 (as publish / schedule), not 409
+    const off = await app.inject({ method: 'POST', url: `/api/pm/pipeline/${PID}/42/preview-link` });
+    expect(off.statusCode).toBe(403);
+    expect(off.json().code).toBe('NOT_IMPLEMENTED');
+    expect(fetchMock).not.toHaveBeenCalled();
     withCaps({ previewLinks: true });
     fetchMock.mockImplementation(async () => new Response(JSON.stringify(ex('preview-link.response')), { status: 200 }));
     const r = await app.inject({ method: 'POST', url: `/api/pm/pipeline/${PID}/42/preview-link` });
