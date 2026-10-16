@@ -14,8 +14,8 @@ import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { prisma } from './prisma.js';
 import { probeImage } from './imageProbe.js';
-import { guardedFetch, allowInsecureDev } from './siteAdapters/netGuard.js';
-import { leadToRow, leadAnalyticsMeta, LEAD_PHOTO_MAX_BYTES, LEAD_ERASE_REASONS } from './siteAdapters/leads.js';
+import { guardedFetch } from './siteAdapters/netGuard.js';
+import { leadToRow, leadAnalyticsMeta, leadPhotoUrlAllowed, LEAD_PHOTO_MAX_BYTES, LEAD_ERASE_REASONS } from './siteAdapters/leads.js';
 import { CmsBridgeError, emdashRoutes, INTERACTIVE_RETRY_DELAYS_MS } from './siteAdapters/emdash.js';
 import { loadEmdashConnection } from './cmsStore.js';
 
@@ -67,13 +67,13 @@ async function bumpLeadMetrics(projectId, row) {
 export async function applyLeadEvent(project, ev) {
   try {
     if (ev.type === 'lead.created') {
-      const { row, photos } = leadToRow(ev.lead, project.cmsSiteId);
+      const { row, photos } = leadToRow(ev.lead, project.cmsSiteId, { siteUrl: project.wpUrl });
       const existing = await prisma.cmsLead.findUnique({ where: { projectId_leadId: { projectId: project.id, leadId: row.leadId } }, select: { id: true } });
       if (existing) return 'stale'; // known or erased (tombstone): never resurrect
       const created = await prisma.cmsLead.create({ data: { projectId: project.id, ...row } });
       for (const p of photos) await prisma.cmsLeadPhoto.create({ data: { leadRowId: created.id, ...p } });
       await bumpLeadMetrics(project.id, row).catch(() => {});
-      if (photos.length) copyLeadPhotos(created.id).catch(() => {});
+      if (photos.some((p) => p.sourceUrl)) copyLeadPhotos(created.id).catch(() => {});
       return 'applied';
     }
     if (ev.type === 'lead.erased') {
@@ -92,26 +92,8 @@ const CLAIM_PREFIX = 'COPYING@';
 /** Errors after which the link is dropped: retrying cannot succeed (review MEDIUM-LOW-6). */
 const PERMANENT_PHOTO_ERRORS = new Set(['NOT_IMAGE', 'TOO_LARGE', 'HTTP_404', 'HTTP_410', 'REDIRECT', 'URL_NOT_ALLOWED']);
 
-/**
- * Lead photo links always come from the paired site's own public origin (contract §26.1; plugin answer):
- * `<publicPathPrefix>/_emdash/api/plugins/<bridge>/…?<signed qs>`, no redirects, no CDN. The host must equal the host
- * of the project's stored site URL (validated at pairing; never a host from the handshake or the event), https only
- * (http only in the opt-in insecure dev mode), and the path must contain `/_emdash/api/plugins/`.
- */
-export function leadPhotoUrlAllowed(sourceUrl, siteUrl, env = process.env) {
-  let u;
-  let site;
-  try {
-    u = new URL(String(sourceUrl));
-    site = new URL(String(siteUrl));
-  } catch {
-    return false;
-  }
-  if (u.username || u.password) return false;
-  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && allowInsecureDev(env))) return false;
-  if (u.hostname.toLowerCase() !== site.hostname.toLowerCase() || u.port !== site.port) return false;
-  return u.pathname.includes('/_emdash/api/plugins/');
-}
+/** The photo link rule lives in siteAdapters/leads.js (one rule for storing and copying; e2e O16). */
+export { leadPhotoUrlAllowed };
 
 function claimIsLive(error, now) {
   if (typeof error !== 'string' || !error.startsWith(CLAIM_PREFIX)) return false;

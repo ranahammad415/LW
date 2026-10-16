@@ -3,6 +3,8 @@
  * PII (fields) only ever lives in the CmsLead row: never in logs, receipts, other events, URLs or error messages.
  */
 
+import { allowInsecureDev } from './netGuard.js';
+
 export const LEAD_EVENT_TYPES = Object.freeze(['lead.created', 'lead.erased']);
 export const LEAD_LIMITS = Object.freeze({ photos: 5, message: 2000, siteRetentionDaysDefault: 30, osRetentionMonthsDefault: 24, photoUrlTtlDays: 7 });
 export const LEAD_ERASE_REASONS = Object.freeze(['subject_request', 'retention', 'spam', 'other']);
@@ -16,6 +18,28 @@ const date = (v) => {
   const d = new Date(v);
   return Number.isNaN(d.getTime()) ? null : d;
 };
+
+/**
+ * Lead photo links always come from the paired site's own public origin (contract §26.1; plugin answer):
+ * `<publicPathPrefix>/_emdash/api/plugins/<bridge>/…?<signed qs>`, no redirects, no CDN. The host (and port) must equal
+ * the project's stored site URL (validated at pairing; never a host from the handshake or the event), https only
+ * (http only in the opt-in insecure dev mode, e.g. http://localhost:4321), and the path must contain
+ * `/_emdash/api/plugins/`. The ONE rule for photo links: used when the event is stored and again before each copy.
+ */
+export function leadPhotoUrlAllowed(sourceUrl, siteUrl, env = process.env) {
+  let u;
+  let site;
+  try {
+    u = new URL(String(sourceUrl));
+    site = new URL(String(siteUrl));
+  } catch {
+    return false;
+  }
+  if (u.username || u.password) return false;
+  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && allowInsecureDev(env))) return false;
+  if (u.hostname.toLowerCase() !== site.hostname.toLowerCase() || u.port !== site.port) return false;
+  return u.pathname.includes('/_emdash/api/plugins/');
+}
 
 /** Envelope check for lead events. Messages never contain lead data. */
 export function validateLeadEvent(ev) {
@@ -33,7 +57,7 @@ export function validateLeadEvent(ev) {
 }
 
 /** lead → CmsLead columns (+ photo rows). Plain text; unknown keys dropped; lengths capped. */
-export function leadToRow(lead, siteId = null) {
+export function leadToRow(lead, siteId = null, { siteUrl = null, env = process.env } = {}) {
   const f = lead.fields || {};
   const extra = {};
   if (f.extra && typeof f.extra === 'object' && !Array.isArray(f.extra)) {
@@ -67,9 +91,22 @@ export function leadToRow(lead, siteId = null) {
       siteCreatedAt: date(lead.createdAt),
       siteRetentionDays: Number.isInteger(lead.siteRetentionDays) ? lead.siteRetentionDays : LEAD_LIMITS.siteRetentionDaysDefault,
     },
+    // e2e O16: every photo with a media id gets a row. A link outside leadPhotoUrlAllowed is not stored (sourceUrl
+    // null) and the row records why (error URL_NOT_ALLOWED / URL_MISSING), so a skipped photo is visible.
     photos: (Array.isArray(lead.photos) ? lead.photos : []).slice(0, LEAD_LIMITS.photos)
-      .filter((p) => p && typeof p.mediaId === 'string' && typeof p.url === 'string' && p.url.startsWith('https://'))
-      .map((p) => ({ mediaId: p.mediaId.slice(0, 64), sourceUrl: p.url.slice(0, 2000), sourceExpiresAt: date(p.expiresAt), contentType: s(p.contentType, 64), bytes: Number.isInteger(p.bytes) ? p.bytes : null })),
+      .filter((p) => p && typeof p.mediaId === 'string' && p.mediaId.length)
+      .map((p) => {
+        const url = typeof p.url === 'string' && p.url.length <= 2000 ? p.url : null;
+        const allowed = !!url && leadPhotoUrlAllowed(url, siteUrl, env);
+        return {
+          mediaId: p.mediaId.slice(0, 64),
+          sourceUrl: allowed ? url : null,
+          sourceExpiresAt: date(p.expiresAt),
+          contentType: s(p.contentType, 64),
+          bytes: Number.isInteger(p.bytes) ? p.bytes : null,
+          ...(allowed ? {} : { error: url ? 'URL_NOT_ALLOWED' : 'URL_MISSING' }),
+        };
+      }),
   };
 }
 

@@ -77,7 +77,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const ex = (n) => JSON.parse(readFileSync(path.join(here, '../../fixtures/cms-contract/examples', `${n}.json`), 'utf8'));
 const calls = (key) => db.calls.filter((c) => c.key === key);
 const leadEvents = () => ex('events.request--lead').events;
-const PROJECT = { id: 'p1', cmsSiteId: 'site_9f3c2a7b41d0' };
+const PROJECT = { id: 'p1', cmsType: 'EMDASH', cmsSiteId: 'site_9f3c2a7b41d0', wpUrl: 'https://oasispoolspas.com' };
 
 beforeAll(() => {
   process.env.CMS_LEADS_DIR = mkdtempSync(path.join(os.tmpdir(), 'cms-leads-test-'));
@@ -112,6 +112,28 @@ describe('leads (§26.1)', () => {
     expect(analytics).toMatchObject({ eventType: 'form_submit', pagePath: '/spa-services/hot-tub-repair/' });
     for (const pii of ['Pat Example', 'pat@example.com', '555', 'Heater trips']) expect(JSON.stringify(analytics)).not.toContain(pii);
     expect(calls('siteLeadDailyMetric.create')[0].args.data).toMatchObject({ formSubmits: 1, leads: 1 });
+  });
+
+  it('e2e O16: one photo-link rule when storing; http://localhost works in the dev opt-in; a skipped photo records why', () => {
+    const lead = leadEvents()[0].lead;
+    const dev = { NODE_ENV: 'development', EMDASH_BRIDGE_ALLOW_INSECURE_DEV: 'true' };
+    const local = 'http://localhost:4321/_emdash/api/plugins/agency-os-bridge/lead-photo?id=m1&sig=x';
+    const withUrl = (url) => ({ ...lead, photos: [{ ...lead.photos[0], url }] });
+    expect(leadToRow(withUrl(local), 's', { siteUrl: 'http://localhost:4321', env: dev }).photos[0]).toMatchObject({ sourceUrl: local });
+    expect(leadToRow(withUrl(local), 's', { siteUrl: 'http://localhost:4321', env: {} }).photos[0]).toMatchObject({ sourceUrl: null, error: 'URL_NOT_ALLOWED' });
+    expect(leadToRow(withUrl(local), 's', { siteUrl: 'http://localhost:4321', env: { ...dev, NODE_ENV: 'production' } }).photos[0].error).toBe('URL_NOT_ALLOWED');
+    expect(leadToRow(withUrl('https://evil.example/_emdash/api/plugins/x/lead-photo'), 's', { siteUrl: 'https://oasispoolspas.com' }).photos[0]).toMatchObject({ sourceUrl: null, error: 'URL_NOT_ALLOWED' });
+    expect(leadToRow(withUrl(undefined), 's', { siteUrl: 'https://oasispoolspas.com' }).photos[0]).toMatchObject({ sourceUrl: null, error: 'URL_MISSING' });
+    expect(leadToRow(lead, 's', { siteUrl: 'https://oasispoolspas.com' }).photos[0]).toMatchObject({ sourceUrl: lead.photos[0].url });
+    expect(leadToRow(lead, 's', { siteUrl: 'https://oasispoolspas.com' }).photos[0]).not.toHaveProperty('error');
+  });
+
+  it('e2e O16: a disallowed photo link still gets a row with its reason and no stored URL; nothing is fetched', async () => {
+    const ev = leadEvents()[0];
+    const bad = { ...ev, lead: { ...ev.lead, photos: [{ ...ev.lead.photos[0], url: 'https://cdn.example/_emdash/api/plugins/x/lead-photo?sig=1' }] } };
+    expect(await applyLeadEvent(PROJECT, bad)).toBe('applied');
+    expect(calls('cmsLeadPhoto.create')[0].args.data).toMatchObject({ sourceUrl: null, error: 'URL_NOT_ALLOWED' });
+    expect(calls('cmsLeadPhoto.findMany')).toHaveLength(0); // no copy run started
   });
 
   it('a known or erased lead is never resurrected', async () => {
