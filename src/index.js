@@ -98,6 +98,7 @@ import { runGscSync } from './lib/gscSync.js';
 import { runNativeAnalyticsSync } from './lib/analytics/runNativeSync.js';
 import { initSentry } from './lib/sentry.js';
 import { redactedRequestSerializer } from './lib/logRedaction.js';
+import { redactResponseSecrets } from './lib/redactSecrets.js';
 import { runWeeklyClientDigest } from './lib/weeklyDigest.js';
 import { runScheduledTaskSync } from './lib/dataImport/scheduledSync.js';
 import { runInterviewSchedulerTick, isSchedulerEnabled, isLeader } from './lib/interviewScheduler.js';
@@ -135,6 +136,9 @@ mkdirSync(UPLOADS_DIR, { recursive: true });
 // Bypass fastify-type-provider-zod to avoid "reading 'run'" errors — validate in handlers with Zod directly.
 app.setValidatorCompiler(() => (data) => ({ value: data }));
 app.setSerializerCompiler(() => (data) => JSON.stringify(data));
+// Response schemas do not filter fields (plain JSON.stringify above): never let a plugin key or CMS credential
+// secret leave the API, whatever a route includes (e2e O21, see lib/redactSecrets.js).
+app.addHook('preSerialization', async (_request, _reply, payload) => redactResponseSecrets(payload));
 
 // Security headers (register before CORS so preflight responses still include CORS headers).
 await app.register(helmet, {
