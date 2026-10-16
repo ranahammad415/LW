@@ -206,3 +206,32 @@ describe('reads and proposals from the OS', () => {
     expect(calls('project.updateMany').filter((c) => c.args?.data?.cmsRepairNeededAt)).toHaveLength(0);
   });
 });
+
+describe('v1.5.2 §28.3: matching order and late linking', () => {
+  it('a node that already carries the page id wins over entry id / path', async () => {
+    const { nodesForProfile } = await import('../../../src/lib/cmsSeoProfiles.js');
+    db.overrides['contentMapNode.findMany'] = async (args) => (args.where.cmsPageId === 'P12' ? [{ id: 'byPage', mapId: 'm1', wpPageId: null }] : [{ id: 'other', mapId: 'm1' }]);
+    const nodes = await nodesForProfile('p1', { pageId: 'P12', entryId: 'E', path: '/x/' });
+    expect(nodes.map((n) => n.id)).toEqual(['byPage']);
+    expect(calls('wpPage.findMany')).toHaveLength(0);
+  });
+
+  it('target (collection:slug) is used before path', async () => {
+    const { nodesForProfile } = await import('../../../src/lib/cmsSeoProfiles.js');
+    db.overrides['contentMapNode.findMany'] = async (args) => (args.where.wpPageId ? [{ id: 'byTarget', mapId: 'm1', wpPageId: 'wp9' }] : []);
+    db.overrides['wpPage.findMany'] = async (args) => (args.where.cmsCollection === 'pages' && args.where.slug === 'hot-tub-repair' ? [{ id: 'wp9' }] : []);
+    const nodes = await nodesForProfile('p1', { pageId: 'P99', entryId: null, target: 'pages:hot-tub-repair', path: null });
+    expect(nodes.map((n) => n.id)).toEqual(['byTarget']);
+  });
+
+  it('a planned page (no entry, no path) drifts unlinked, then attaches when a node carries the page id', async () => {
+    const ev = { ...seo()[1], profile: { ...seo()[1].profile, page_id: 'P30', entry_id: null, target: null, path: null } };
+    db.overrides['contentMap.findMany'] = async () => [{ id: 'm1' }];
+    await applySeoEvent('p1', ev);
+    expect(calls('contentMapDrift.create')[0].args.data).toMatchObject({ mapId: 'm1', nodeId: null, payload: { pageId: 'P30' } });
+    const { attachUnlinkedProfileDrifts } = await import('../../../src/lib/cmsSeoProfiles.js');
+    db.overrides['contentMapDrift.findMany'] = async () => [{ id: 'd1', payload: { pageId: 'P30' } }, { id: 'd2', payload: { pageId: 'P31' } }];
+    expect(await attachUnlinkedProfileDrifts('P30', [{ id: 'n5', mapId: 'm1', wpPageId: null }])).toBe(1);
+    expect(calls('contentMapDrift.update').at(-1).args).toMatchObject({ where: { id: 'd1' }, data: { nodeId: 'n5' } });
+  });
+});

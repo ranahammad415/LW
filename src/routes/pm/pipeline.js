@@ -216,6 +216,7 @@ function formatReview(r) {
     readyToPublish: isEmdash && effectiveStatus === 'client_approved',
     scheduledAt: isEmdash && r.cmsScheduledAt ? new Date(r.cmsScheduledAt).toISOString() : null,
     publishOrigin: isEmdash ? r.cmsPublishOrigin || null : null,
+    liveRevisionId: isEmdash ? r.cmsLiveRevisionId || null : null,
     publishedByName: isEmdash ? r.cmsPublishedBy?.name || null : null,
     override: isEmdash && r.cmsOverride ? { byName: r.cmsOverride.byName || null, reason: r.cmsOverride.reason || null, at: r.cmsOverride.at || null, action: r.cmsOverride.action || null } : null,
     // EmDash v1.1.0 (§21): client decision channel, suggestion counts, "decided by <owner> for the client".

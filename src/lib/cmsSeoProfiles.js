@@ -62,18 +62,28 @@ async function upsertProfileRow(projectId, row, { force = false } = {}) {
   return 'applied';
 }
 
-/** Content-map nodes of the project that correspond to a profile: by entry id (WpPage), then by path. */
+/**
+ * Content-map nodes of the project that correspond to a profile (v1.5.2 §28.3 order): page_id already on a node →
+ * entry id (WpPage) → target (collection:slug) → path.
+ */
 export async function nodesForProfile(projectId, row) {
-  let nodes = [];
-  if (row.entryId) {
+  let nodes = await prisma.contentMapNode.findMany({ where: { map: { projectId }, cmsPageId: row.pageId }, select: { id: true, mapId: true, wpPageId: true }, take: 20 });
+  if (!nodes.length && row.entryId) {
     const pages = await prisma.wpPage.findMany({ where: { projectId, cmsEntryId: row.entryId }, select: { id: true } });
+    if (pages.length) {
+      nodes = await prisma.contentMapNode.findMany({ where: { map: { projectId }, wpPageId: { in: pages.map((p) => p.id) } }, select: { id: true, mapId: true, wpPageId: true } });
+    }
+  }
+  if (!nodes.length && row.target && /^[a-z0-9_-]+:[a-z0-9-]+$/i.test(row.target)) {
+    const [collection, slug] = row.target.split(':');
+    const pages = await prisma.wpPage.findMany({ where: { projectId, cmsCollection: collection, slug }, select: { id: true } });
     if (pages.length) {
       nodes = await prisma.contentMapNode.findMany({ where: { map: { projectId }, wpPageId: { in: pages.map((p) => p.id) } }, select: { id: true, mapId: true, wpPageId: true } });
     }
   }
   if (!nodes.length && row.path) {
     nodes = await prisma.contentMapNode.findMany({
-      where: { map: { projectId }, OR: [{ cmsPageId: row.pageId }, { url: { endsWith: row.path } }] },
+      where: { map: { projectId }, url: { endsWith: row.path } },
       select: { id: true, mapId: true, wpPageId: true },
       take: 20,
     });
@@ -81,11 +91,29 @@ export async function nodesForProfile(projectId, row) {
   return nodes;
 }
 
+/**
+ * v1.5.2: a planned page has no entry (path null), so its drift starts unlinked; once a node carries that page id the
+ * pending unlinked drifts of the same map are attached to it.
+ */
+export async function attachUnlinkedProfileDrifts(pageId, nodes) {
+  let attached = 0;
+  for (const n of nodes) {
+    const pending = await prisma.contentMapDrift.findMany({ where: { mapId: n.mapId, driftType: 'PROFILE_CHANGED', status: 'PENDING', nodeId: null }, select: { id: true, payload: true } });
+    for (const d of pending) {
+      if (d.payload?.pageId !== pageId) continue;
+      await prisma.contentMapDrift.update({ where: { id: d.id }, data: { nodeId: n.id, ...(n.wpPageId ? { wpPageId: n.wpPageId } : {}) } });
+      attached += 1;
+    }
+  }
+  return attached;
+}
+
 /** D14: one pending PROFILE_CHANGED drift per node/map; later changes merge their fields into it. */
 async function recordProfileDrift(projectId, row, changes, actorName) {
   const nodes = await nodesForProfile(projectId, row);
   if (nodes.length) {
     await prisma.contentMapNode.updateMany({ where: { id: { in: nodes.map((n) => n.id) } }, data: { cmsPageId: row.pageId } }).catch(() => {});
+    await attachUnlinkedProfileDrifts(row.pageId, nodes).catch(() => {});
   }
   const targets = nodes.length
     ? nodes.map((n) => ({ mapId: n.mapId, nodeId: n.id, wpPageId: n.wpPageId || null }))

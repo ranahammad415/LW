@@ -452,6 +452,8 @@ export function normalizeReviewEvent(review, { eventType, seq, message = null, o
       rev: Number.isInteger(r.rev) ? r.rev : null,
       clientDecisionSource: r.clientDecisionSource === 'os' || r.clientDecisionSource === 'review-link' ? r.clientDecisionSource : null,
       suggestionCounts: suggestionCounts(r.suggestionCounts),
+      // v1.5.2 §28.1: undefined = not sent (older site: leave the column alone); null = the entry is not live.
+      ...(Object.prototype.hasOwnProperty.call(r, 'liveRevisionId') ? { liveRevisionId: r.liveRevisionId == null ? null : str(r.liveRevisionId, 64) } : {}),
       // v1.1.0: who made a client decision (names only), for notification wording.
       clientActor: clientActor && typeof clientActor === 'object' ? clientActor : null,
       // v1.3.0 §24: scheduled state and publish audit (names only).
@@ -471,6 +473,7 @@ export function emdashPublishColumns(cms) {
   if (cms.publishOrigin) out.cmsPublishOrigin = cms.publishOrigin;
   if (cms.publishedBy) out.cmsPublishedBy = cms.publishedBy;
   if (cms.override) out.cmsOverride = cms.override;
+  if (cms.liveRevisionId !== undefined) out.cmsLiveRevisionId = cms.liveRevisionId;
   return out;
 }
 

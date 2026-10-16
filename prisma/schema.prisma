@@ -1221,6 +1221,8 @@ model WpContentReview {
   cmsClientDecisionSource String? @db.VarChar(16)
   /// v1.1.0: { open, accepted, rejected, applied, closed } client suggestions, all rounds (site-reported).
   cmsSuggestionCounts Json?
+  /// v1.5.2 §28.1: the entry's live revision as the Review reports it (set by publish; null while not live).
+  cmsLiveRevisionId  String?   @db.VarChar(64)
   /// v1.1.0: who made the last client decision { name, role, source, onBehalfOfClient } (no ids, no PII).
   cmsClientActor     Json?
   /// v1.3.0 §24: scheduled publish time (status `scheduled`), who/where published, OWNER override record.

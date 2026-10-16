@@ -63,3 +63,13 @@ describe('publish audit + scheduled state are mirrored', () => {
     expect(entryToPageData(ex('inventory.response').items[0], 'https://oasispoolspas.com').data.cmsScheduledAt).toBeNull();
   });
 });
+
+describe('v1.5.2 §28.1: the published review carries the new live revision', () => {
+  it('stored on publish; absent field (older site) leaves the column alone; null = not live', () => {
+    const pub = ex('pipeline-publish.response');
+    expect(reviewToMirrorData(pub.review).data.cmsLiveRevisionId).toBe(pub.liveRevisionId);
+    const { liveRevisionId: _drop, ...older } = pub.review;
+    expect(reviewToMirrorData(older).data).not.toHaveProperty('cmsLiveRevisionId');
+    expect(reviewToMirrorData({ ...pub.review, liveRevisionId: null }).data.cmsLiveRevisionId).toBeNull();
+  });
+});
