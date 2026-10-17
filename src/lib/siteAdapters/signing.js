@@ -17,7 +17,24 @@ import crypto from 'node:crypto';
 export const CONTRACT_NAME = 'agency-os-bridge';
 export const CONTRACT_VERSION = 1;
 /** Errata level implemented by this OS (informational; X-AOS-Contract stays 1). */
-export const CONTRACT_REVISION = '1.5.3';
+export const CONTRACT_REVISION = '1.5.4';
+
+/**
+ * True when the site's reported errata level (site-info / handshake `contractRevision`, e.g. "1.5.4") is at least
+ * `min`. Numeric per part (1.10 > 1.9); a missing or malformed revision is below everything.
+ */
+export function revisionAtLeast(revision, min) {
+  const parse = (v) => (typeof v === 'string' && /^\d+(\.\d+){0,3}$/.test(v) ? v.split('.').map(Number) : null);
+  const a = parse(revision);
+  const b = parse(min);
+  if (!a || !b) return false;
+  for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+    const x = a[i] || 0;
+    const y = b[i] || 0;
+    if (x !== y) return x > y;
+  }
+  return true;
+}
 export const SUPPORTED_CONTRACTS = Object.freeze([1]);
 export const PLUGIN_ID = 'agency-os-bridge';
 export const SITE_ROUTE_PREFIX = '/_emdash/api/plugins/agency-os-bridge/';

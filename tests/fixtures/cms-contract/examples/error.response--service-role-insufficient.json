@@ -1,0 +1,15 @@
+{
+  "ok": false,
+  "error": {
+    "code": "SERVICE_ROLE_INSUFFICIENT",
+    "message": "EmDash refused the service user (role author) editing this entry: the service user must be an Editor. Ask the site admin to raise its role.",
+    "retryable": false,
+    "details": {
+      "requiredRole": "editor",
+      "role": "author",
+      "operation": "update",
+      "collection": "pages",
+      "entryId": "01JAB4M9ZQ7X3K2V8N5T6R1W0C"
+    }
+  }
+}

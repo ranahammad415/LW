@@ -1477,6 +1477,9 @@
           "items": {
             "$ref": "#/$defs/fieldDef"
           }
+        },
+        "defaultValue": {
+          "description": "v1.5.4: the value the site stores when the field is omitted (e.g. page_hero.show_call_button true). The OS editor should start from it, and send false explicitly to turn a default-true boolean off"
         }
       },
       "required": [
@@ -3284,6 +3287,45 @@
           "maxItems": 100,
           "description": "v1.4.0 seo.profile_changed: changed fields and who owns them (owner os => OS drift row)"
         },
+        "cause": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "enum": [
+                "os",
+                "site-admin",
+                "agent",
+                "system",
+                "publish",
+                "scheduler"
+              ]
+            },
+            "osRequest": {
+              "type": "object",
+              "properties": {
+                "route": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "idempotencyKey": {
+                  "type": "string",
+                  "maxLength": 128
+                }
+              },
+              "required": [
+                "route"
+              ],
+              "description": "as content.saved osRequest: the signed OS call behind the change (draft-upsert, profile-upsert, …)"
+            },
+            "actor": {
+              "$ref": "common.json#/$defs/siteActor"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "description": "v1.5.4 (§30.10) seo.profile_changed / seo.contract_locked: why the profile changed, so the OS tells its own and publish/lifecycle changes from a person's site edit. Absent from sites below 1.5.4"
+        },
         "proposal": {
           "$ref": "common.json#/$defs/proposal"
         },
@@ -3667,6 +3709,7 @@
             "PARENT_NOT_FOUND",
             "CONTRACT_LOCKED",
             "SERVICE_TOKEN_UNAVAILABLE",
+            "SERVICE_ROLE_INSUFFICIENT",
             "BYLINE_NOT_ALLOWED",
             "ENTRY_LOCKED",
             "SUGGESTION_LIMIT",

@@ -1,0 +1,13 @@
+{
+  "ok": false,
+  "error": {
+    "code": "SLUG_TAKEN",
+    "message": "pages/hot-tub-heater-repair is used by an entry in the trash",
+    "retryable": false,
+    "details": {
+      "existingEntryId": "01JA77ENTRY000000000000011",
+      "existingEntryTrashed": true,
+      "suggestedSlug": "hot-tub-heater-repair-2"
+    }
+  }
+}

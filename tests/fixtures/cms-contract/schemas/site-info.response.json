@@ -177,6 +177,84 @@
     "media": {
       "$ref": "common.json#/$defs/mediaInfo"
     },
+    "serviceToken": {
+      "type": "object",
+      "properties": {
+        "usable": {
+          "type": "boolean",
+          "description": "the token authenticates (same input as capabilities.draftPushFromOs)"
+        },
+        "role": {
+          "enum": [
+            "subscriber",
+            "contributor",
+            "author",
+            "editor",
+            "admin",
+            "unknown"
+          ],
+          "description": "the service user's EmDash role as far as the site can tell (editor = Editor or higher when only probed)"
+        },
+        "requiredRole": {
+          "const": "editor"
+        },
+        "meetsRequiredRole": {
+          "anyOf": [
+            {
+              "type": "boolean",
+              "description": "false: some writes answer 403 SERVICE_ROLE_INSUFFICIENT (e.g. Edit in Agency OS on pages made in the site admin); null: not verified yet"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "checkedAt": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "problems": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "enum": [
+                  "NOT_CONFIGURED",
+                  "TOKEN_REFUSED",
+                  "SCOPE_MISSING",
+                  "ROLE_INSUFFICIENT",
+                  "ROLE_UNVERIFIED",
+                  "ROLE_ABOVE_REQUIRED",
+                  "SEO_TOOLS_UNREACHABLE"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "maxLength": 500
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          },
+          "maxItems": 10
+        }
+      },
+      "required": [
+        "usable",
+        "role",
+        "problems"
+      ],
+      "description": "v1.5.4 (§30.1): state of the site-only service token (never the token itself). Show problems to the OWNER/PM: they are fixed by the site admin"
+    },
     "migratedFrom": {
       "$ref": "common.json#/$defs/migratedFrom"
     },
