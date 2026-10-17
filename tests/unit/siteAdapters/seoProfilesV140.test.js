@@ -272,3 +272,55 @@ describe('v1.5.2 §28.3: matching order and late linking', () => {
     expect(calls('contentMapDrift.update').at(-1).args).toMatchObject({ where: { id: 'd1' }, data: { nodeId: 'n5' } });
   });
 });
+
+describe('v1.5.4 §30.10: seo.* cause decides drift (1.5.4+ sites)', () => {
+  const causeEvents = () => JSON.parse(readFileSync(path.join(here, '../../fixtures/cms-contract/examples', 'events.request--seo-cause.json'), 'utf8')).events;
+  const withNode = () => {
+    db.overrides['wpPage.findMany'] = async () => [{ id: 'wp1' }];
+    db.overrides['contentMapNode.findMany'] = async () => [{ id: 'n1', mapId: 'm1', wpPageId: 'wp1' }];
+  };
+  const drifts = () => calls('contentMapDrift.create').length + calls('contentMapDrift.update').length;
+  const osOwned = (ev) => ({ ...ev, changed: [{ field: 'lifecycle.next_review_on', owner: 'os' }, { field: 'targeting.secondary_keywords', owner: 'os' }] });
+
+  it('the contract example validates; site-admin → real drift (lifecycle included)', async () => {
+    for (const ev of causeEvents()) expect(validateEvent(ev)).toBeNull();
+    withNode();
+    const admin = osOwned(causeEvents().find((e) => e.cause?.source === 'site-admin'));
+    await applySeoEvent('p1', admin, { siteRevision: '1.5.4' });
+    expect(calls('contentMapDrift.create')[0].args.data.payload.fields).toEqual(['lifecycle.next_review_on', 'targeting.secondary_keywords']);
+    expect(calls('wpContentReview.count')).toHaveLength(0); // no heuristic needed
+  });
+
+  it('os with our osRequest → no drift; an unknown draft-upsert key → drift', async () => {
+    withNode();
+    const os = osOwned(causeEvents().find((e) => e.cause?.source === 'os'));
+    db.overrides['cmsDraftPush.count'] = async (a) => (a.where.idempotencyKey === os.cause.osRequest.idempotencyKey ? 1 : 0);
+    await applySeoEvent('p1', os, { siteRevision: '1.5.4' });
+    expect(drifts()).toBe(0);
+    db.overrides['cmsDraftPush.count'] = async () => 0;
+    await applySeoEvent('p1', os, { siteRevision: '1.5.4' });
+    expect(drifts()).toBe(1);
+  });
+
+  it('publish / scheduler / system / agent → lifecycle.* dropped, other OS-owned fields still drift', async () => {
+    withNode();
+    const pub = osOwned(causeEvents().find((e) => e.cause?.source === 'publish'));
+    for (const source of ['publish', 'scheduler', 'system', 'agent']) {
+      db.calls = [];
+      await applySeoEvent('p1', { ...pub, cause: { ...pub.cause, source } }, { siteRevision: '1.5.4' });
+      expect(calls('contentMapDrift.create')[0].args.data.payload.fields).toEqual(['targeting.secondary_keywords']);
+    }
+    db.calls = [];
+    await applySeoEvent('p1', { ...pub, changed: [{ field: 'lifecycle.next_review_on', owner: 'os' }] }, { siteRevision: '1.5.4' });
+    expect(drifts()).toBe(0);
+  });
+
+  it('older sites (or no cause): the O15 heuristic stays; a cause from a < 1.5.4 site is ignored', async () => {
+    withNode();
+    const admin = { ...causeEvents().find((e) => e.cause?.source === 'site-admin'), changed: [{ field: 'lifecycle.next_review_on', owner: 'os' }] };
+    db.overrides['wpContentReview.count'] = async () => 1; // published around the event
+    await applySeoEvent('p1', admin, { siteRevision: '1.5.3' });
+    expect(drifts()).toBe(0); // heuristic: publish nearby → no drift, the (ignored) cause would have said drift
+    expect(calls('wpContentReview.count')).toHaveLength(1);
+  });
+});

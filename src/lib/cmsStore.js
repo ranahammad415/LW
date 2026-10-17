@@ -567,7 +567,7 @@ export const prismaCmsStore = {
 
   async applySeoEvent(project, ev) {
     const { applySeoEvent } = await import('./cmsSeoProfiles.js');
-    return applySeoEvent(project.id, ev);
+    return applySeoEvent(project.id, ev, { siteRevision: project?.cmsHealth?.contractRevision ?? null });
   },
 
   async suggestionQuote(projectId, cmsSuggestionId) {

@@ -9,6 +9,7 @@
  *   re-pair (only 401 UNKNOWN_SITE / UNKNOWN_KEY does, in handleSiteRejection).
  */
 import { prisma } from './prisma.js';
+import { revisionAtLeast } from './siteAdapters/signing.js';
 import { loadEmdashConnection } from './cmsStore.js';
 import { CmsBridgeError, emdashRoutes, INTERACTIVE_RETRY_DELAYS_MS } from './siteAdapters/emdash.js';
 import {
@@ -147,6 +148,31 @@ async function recordProfileDrift(projectId, row, changes, actorName) {
   return created;
 }
 
+export const SEO_EVENT_CAUSES = Object.freeze(['os', 'site-admin', 'agent', 'system', 'publish', 'scheduler']);
+
+/** v1.5.4 §30.10 `cause {source, osRequest?, actor?}` from a 1.5.4+ site, or null (older site / malformed). */
+export function seoEventCause(ev, siteRevision) {
+  if (!revisionAtLeast(siteRevision, '1.5.4')) return null;
+  const c = ev?.cause;
+  if (!c || typeof c !== 'object' || !SEO_EVENT_CAUSES.includes(c.source)) return null;
+  const o = c.osRequest && typeof c.osRequest === 'object' ? c.osRequest : null;
+  return {
+    source: c.source,
+    osRequest: o && typeof o.idempotencyKey === 'string' ? { route: typeof o.route === 'string' ? o.route.slice(0, 64) : null, idempotencyKey: o.idempotencyKey.slice(0, 64) } : null,
+  };
+}
+
+/**
+ * The write behind cause.source "os" is ours: a draft-upsert we recorded under that idempotency key. Other OS routes
+ * (profile-upsert, brief-upsert) are only ever signed by Agency OS and are normally not echoed, so their osRequest counts.
+ */
+async function isOwnOsRequest(projectId, osRequest) {
+  if (!osRequest?.idempotencyKey) return false;
+  if (osRequest.route !== 'draft-upsert') return true;
+  const n = await prisma.cmsDraftPush.count({ where: { projectId, idempotencyKey: osRequest.idempotencyKey } });
+  return n > 0;
+}
+
 /** Window around a publish in which lifecycle.* changes count as its side effect (e2e O15). */
 export const LIFECYCLE_PUBLISH_WINDOW_MS = 30 * 60_000;
 
@@ -169,7 +195,7 @@ async function lifecycleChangeIsPublish(projectId, ev) {
 /**
  * Apply one seo.* event (§25.4). Returns 'applied' | 'stale' | 'stored'. Reserved seo.* types are stored only.
  */
-export async function applySeoEvent(projectId, ev) {
+export async function applySeoEvent(projectId, ev, { siteRevision = null } = {}) {
   const actorName = ev?.actor?.name ? String(ev.actor.name).slice(0, 200) : null;
   switch (ev?.type) {
     case 'seo.profile_changed':
@@ -180,9 +206,18 @@ export async function applySeoEvent(projectId, ev) {
       if (outcome === 'stale') return 'stale';
       if (ev.type === 'seo.profile_changed') {
         let changes = osOwnedChanges(ev.changed);
-        // e2e O15: a publish moves lifecycle.* (e.g. next_review_on) on the site. That is the publish, not an edit of the
-        // profile: lifecycle-only changes made automatically or right after a publish of the entry raise no drift.
-        if (changes.some((c) => c.field.startsWith('lifecycle.')) && (await lifecycleChangeIsPublish(projectId, ev))) {
+        const cause = seoEventCause(ev, siteRevision);
+        if (cause) {
+          // v1.5.4 §30.10: the site says why. Our own signed write → no drift; publish / scheduler / system / agent →
+          // their lifecycle.* bookkeeping is not an edit (the O15 rule, without guessing); site-admin → real drift.
+          if (cause.source === 'os') {
+            if (await isOwnOsRequest(projectId, cause.osRequest)) changes = [];
+          } else if (cause.source !== 'site-admin') {
+            changes = changes.filter((c) => !c.field.startsWith('lifecycle.'));
+          }
+        } else if (changes.some((c) => c.field.startsWith('lifecycle.')) && (await lifecycleChangeIsPublish(projectId, ev))) {
+          // Older sites (no cause), e2e O15: a publish moves lifecycle.* (e.g. next_review_on). That is the publish, not
+          // an edit of the profile: lifecycle-only changes made automatically or right after a publish raise no drift.
           changes = changes.filter((c) => !c.field.startsWith('lifecycle.'));
         }
         if (changes.length) await recordProfileDrift(projectId, row, changes, actorName);
