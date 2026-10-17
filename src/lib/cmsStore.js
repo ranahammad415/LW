@@ -146,7 +146,11 @@ function siteInfoProjectData(siteInfo, contract, now) {
       supportedContracts: Array.isArray(siteInfo?.supportedContracts) ? siteInfo.supportedContracts : null,
       contractRevision: typeof siteInfo?.contractRevision === 'string' ? siteInfo.contractRevision.slice(0, 16) : null,
       // v1.5.4 §30.1: service user role and problems (never the token), sites at 1.5.4 or later.
-      serviceToken: revisionAtLeast(siteInfo?.contractRevision, '1.5.4') ? sanitizeServiceToken(siteInfo?.serviceToken) : null,
+      // e2e O25: only when the body carries it. The site sends it in site-info (v1.5.5 adds the handshake body), so a
+      // heartbeat without it must not wipe the last known value: recordHeartbeat carries the stored one over.
+      ...(revisionAtLeast(siteInfo?.contractRevision, '1.5.4') && siteInfo && Object.prototype.hasOwnProperty.call(siteInfo, 'serviceToken')
+        ? { serviceToken: sanitizeServiceToken(siteInfo.serviceToken) }
+        : {}),
       // v1.0.4 §17(d): false = the site has no preview secret; review links will not open.
       previewConfigured: typeof siteInfo?.previewConfigured === 'boolean' ? siteInfo.previewConfigured : null,
       // v1.0.7 §20: template-linked paths (orphan logic) and the advertised sitemap URL (validated again on use).
@@ -296,7 +300,12 @@ export const prismaCmsStore = {
   },
 
   async recordHeartbeat({ projectId, siteInfo, contract, now = new Date() }) {
-    await prisma.project.update({ where: { id: projectId }, data: siteInfoProjectData(siteInfo, contract, now) });
+    const data = siteInfoProjectData(siteInfo, contract, now);
+    if (!('serviceToken' in data.cmsHealth)) {
+      const prev = await prisma.project.findUnique({ where: { id: projectId }, select: { cmsHealth: true } }).catch(() => null);
+      if (prev?.cmsHealth?.serviceToken) data.cmsHealth.serviceToken = prev.cmsHealth.serviceToken;
+    }
+    await prisma.project.update({ where: { id: projectId }, data });
   },
 
   /**

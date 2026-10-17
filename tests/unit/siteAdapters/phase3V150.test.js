@@ -511,7 +511,18 @@ describe('v1.5.4 §30.1: service user role (site-info.serviceToken)', () => {
     const st = calls('project.update').at(-1).args.data.cmsHealth.serviceToken;
     expect(st).toMatchObject({ usable: true, role: 'author', requiredRole: 'editor', meetsRequiredRole: false, problems: [{ code: 'ROLE_INSUFFICIENT' }] });
     await prismaCmsStore.recordHeartbeat({ projectId: 'p1', siteInfo: { ...info, contractRevision: '1.5.3' }, contract: 1 });
-    expect(calls('project.update').at(-1).args.data.cmsHealth.serviceToken).toBeNull();
+    expect(calls('project.update').at(-1).args.data.cmsHealth).not.toHaveProperty('serviceToken');
+  });
+
+  it('e2e O25: a heartbeat without serviceToken keeps the last known value; one that carries it overwrites', async () => {
+    const info = ex('site-info.response--service-role');
+    const { serviceToken: _st, ...heartbeat } = info;
+    const stored = { usable: true, role: 'author', requiredRole: 'editor', meetsRequiredRole: false, checkedAt: null, problems: [] };
+    db.overrides['project.findUnique'] = async () => ({ cmsHealth: { serviceToken: stored } });
+    await prismaCmsStore.recordHeartbeat({ projectId: 'p1', siteInfo: heartbeat, contract: 1 });
+    expect(calls('project.update').at(-1).args.data.cmsHealth.serviceToken).toEqual(stored);
+    await prismaCmsStore.recordHeartbeat({ projectId: 'p1', siteInfo: { ...heartbeat, serviceToken: { ...info.serviceToken, role: 'editor', meetsRequiredRole: true, problems: [] } }, contract: 1 });
+    expect(calls('project.update').at(-1).args.data.cmsHealth.serviceToken).toMatchObject({ role: 'editor', meetsRequiredRole: true });
     const { sanitizeServiceToken } = await import('../../../src/lib/siteAdapters/push.js');
     expect(sanitizeServiceToken({ usable: true, role: 'boss', token: 'secret', problems: [{ code: 'NOPE' }, { code: 'SCOPE_MISSING', message: 'm' }] })).toEqual({
       usable: true, role: 'unknown', requiredRole: 'editor', meetsRequiredRole: null, checkedAt: null, problems: [{ code: 'SCOPE_MISSING', message: 'm' }],
