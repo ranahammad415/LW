@@ -78,6 +78,7 @@ import {
   PUSH_CLAIM_STALE_MS,
   draftAccess,
   parentFromPath,
+  changedBy,
 } from '../../../src/lib/cmsDrafts.js';
 import { CmsBridgeError } from '../../../src/lib/siteAdapters/emdash.js';
 import { probeImage } from '../../../src/lib/imageProbe.js';
@@ -674,5 +675,21 @@ describe('v1.5.4 §30.4: SLUG_TAKEN names the holder (also in the trash)', () =>
     expect(out.result.error.details).toMatchObject({ existingEntryId: e.details.existingEntryId, existingEntryTrashed: true });
     expect(out.result.error.details).not.toHaveProperty('existingEditUrl');
     expect(out.result.error.message).toMatch(/in the site's trash\. Restore it/);
+  });
+});
+
+describe('v1.5.4 §30.3: CONFLICT_REV.updatedBy (last saver, names only)', () => {
+  it('keeps name / kind, marks OS pushes, drops site ids', async () => {
+    const e = ex('error.response--conflict-rev').error;
+    expect(changedBy(e.details.updatedBy)).toEqual({ name: 'Site editor', kind: 'human', viaOs: false });
+    expect(changedBy({ kind: 'human', name: 'Jane PM', osUserId: 'u1', source: 'api' })).toEqual({ name: 'Jane PM', kind: 'human', viaOs: true });
+    expect(changedBy(null)).toBeNull();
+    db.overrides['cmsDraft.findUnique'] = async () => ({ id: 'd11', projectId: 'p1', contentMapNodeId: null, taskId: null, collection: 'pages', title: 'T', slug: 's', parent: null, contentKind: 'layout', layout: [], cmsEntryId: 'E', cmsRev: 'v1', lastPushStatus: 'ok', cmsEditedAt: new Date() });
+    site.upsert = async () => {
+      throw new CmsBridgeError({ status: 409, code: 'CONFLICT_REV', message: e.message, details: e.details });
+    };
+    const out = await pushDraft({ draftId: 'd11', user: JANE });
+    expect(out.result.error.details.updatedBy).toEqual({ name: 'Site editor', kind: 'human', viaOs: false });
+    expect(JSON.stringify(out.result.error.details.updatedBy)).not.toContain('usr_7');
   });
 });

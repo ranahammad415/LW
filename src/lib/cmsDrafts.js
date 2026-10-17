@@ -341,11 +341,24 @@ export function pushErrorMessage(err) {
   }
 }
 
+/**
+ * v1.5.4 §30.3: CONFLICT_REV.updatedBy is the last saver (a person in the admin, or an OS push), null only when nobody
+ * can be named. Names only, never site ids or e-mails; `viaOs` = the save came from an Agency OS push.
+ */
+export function changedBy(u) {
+  if (!u || typeof u !== 'object') return null;
+  const name = typeof u.name === 'string' && u.name.trim() ? u.name.trim().slice(0, 200) : null;
+  const kind = ['human', 'agent', 'plugin', 'system'].includes(u.kind) ? u.kind : null;
+  const viaOs = !!u.osUserId || u.source === 'os';
+  if (!name && !kind) return null;
+  return { name, kind, viaOs };
+}
+
 function errorRecord(err) {
   const d = err?.details && typeof err.details === 'object' ? err.details : {};
   const details = {};
   if (err.code === 'CONFLICT_REV') {
-    Object.assign(details, { rev: d.rev ?? null, draftRevisionId: d.draftRevisionId ?? null, updatedAt: d.updatedAt ?? null, updatedBy: d.updatedBy ?? null });
+    Object.assign(details, { rev: d.rev ?? null, draftRevisionId: d.draftRevisionId ?? null, updatedAt: d.updatedAt ?? null, updatedBy: changedBy(d.updatedBy) });
     if (d.entry && typeof d.entry === 'object') details.entry = { title: d.entry.title ?? null, path: d.entry.path ?? null, updatedAt: d.entry.updatedAt ?? null, wordCount: d.entry.wordCount ?? null, rev: d.entry.rev ?? null };
   }
   if (err.code === 'ENTRY_LOCKED') Object.assign(details, { lockedUntil: d.lockedUntil ?? null, lockedBy: d.lockedBy ?? null });
