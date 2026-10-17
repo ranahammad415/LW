@@ -35,12 +35,14 @@ async function userCanAccessProject(user, projectId) {
 
   const project = await prisma.project.findUnique({
     where: { id: projectId },
-    select: { id: true, clientId: true, leadPmId: true, secondaryPmId: true },
+    // e2e O22: Project has no secondaryPmId (it lives on the client account); selecting it threw, so every PM
+    // subscription answered 500. Same PM rule as ensureProjectAccess: project lead, or client lead / secondary PM.
+    select: { id: true, clientId: true, leadPmId: true, client: { select: { leadPmId: true, secondaryPmId: true } } },
   });
   if (!project) return false;
 
   if (user.role === 'PM') {
-    return project.leadPmId === user.id || project.secondaryPmId === user.id;
+    return project.leadPmId === user.id || project.client?.leadPmId === user.id || project.client?.secondaryPmId === user.id;
   }
 
   if (user.role === 'CLIENT') {
@@ -54,6 +56,8 @@ async function userCanAccessProject(user, projectId) {
 
   return false;
 }
+
+export { userCanAccessProject };
 
 export async function realtimeRoutes(app) {
   app.get('/:projectId', async (request, reply) => {
