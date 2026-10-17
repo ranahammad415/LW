@@ -270,4 +270,9 @@ describe('v1.5.4: site revision gate', () => {
     expect(revisionAtLeast(null, '1.5.4')).toBe(false);
     expect(revisionAtLeast('1.5.x', '1.5.4')).toBe(false);
   });
+
+  it('v1.5.4 error code SERVICE_ROLE_INSUFFICIENT is a contract error (403, not retryable)', async () => {
+    const { ERROR_CODES } = await import('../../../src/lib/siteAdapters/signing.js');
+    expect(ERROR_CODES.SERVICE_ROLE_INSUFFICIENT).toEqual({ status: 403, retryable: false });
+  });
 });

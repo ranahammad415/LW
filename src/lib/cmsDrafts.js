@@ -309,7 +309,20 @@ export function pushErrorMessage(err) {
     case 'SLUG_CHANGE_FORBIDDEN':
       return 'The page is live: its URL can only be changed in the site admin (Change URL).';
     case 'SERVICE_TOKEN_UNAVAILABLE':
-      return 'The site cannot set the exact URL right now (its service token is missing). Ask the site admin, or push with best-effort URL.';
+      // v1.5.4 §30.1: reason "scope" = a scope is missing (token not refused); otherwise missing or refused (401).
+      if (d.reason === 'scope') {
+        return 'The site\'s service token is missing a permission. Ask the site admin to give it content:read, content:write, media:write and mcp:tools:emdash-seo. Nothing was written.';
+      }
+      return 'The site cannot set the exact URL right now (its service token is missing or refused). Ask the site admin, or push with best-effort URL.';
+    case 'SERVICE_ROLE_INSUFFICIENT': {
+      // v1.5.4 §30.1: not retryable, and best-effort fails the same way; the token stays usable for other pushes.
+      const cap = (s) => (s ? String(s).charAt(0).toUpperCase() + String(s).slice(1) : null);
+      const role = cap(d.role) || 'too low a role';
+      const need = cap(d.requiredRole) || 'Editor';
+      const what = d.operation === 'create' ? 'create pages here' : 'edit pages made by someone else';
+      const an = (w) => (/^[aeiou]/i.test(w) ? 'an' : 'a');
+      return `The site's service user is ${d.role ? `${an(role)} ${role}` : role}; EmDash needs ${an(need)} ${need} to ${what}. Ask the site admin to raise its role (admin → Users). Nothing was written.`;
+    }
     case 'BYLINE_NOT_ALLOWED':
       return 'That byline is not allowed: use your own mapped byline or the team byline.';
     case 'UNKNOWN_BLOCK':
@@ -333,6 +346,10 @@ function errorRecord(err) {
   }
   if (err.code === 'ENTRY_LOCKED') Object.assign(details, { lockedUntil: d.lockedUntil ?? null, lockedBy: d.lockedBy ?? null });
   if (err.code === 'SLUG_TAKEN') Object.assign(details, { suggestedSlug: d.suggestedSlug ?? null });
+  if (err.code === 'SERVICE_ROLE_INSUFFICIENT') {
+    Object.assign(details, { requiredRole: d.requiredRole ?? null, role: d.role ?? null, operation: d.operation ?? null, collection: d.collection ?? null, entryId: d.entryId ?? null });
+  }
+  if (err.code === 'SERVICE_TOKEN_UNAVAILABLE') Object.assign(details, { reason: d.reason ?? null });
   if (err.code === 'PARENT_NOT_FOUND') Object.assign(details, { allowed: Array.isArray(d.allowed) ? d.allowed : null });
   if (err.code === 'CONTRACT_LOCKED') Object.assign(details, { contractVersion: d.contractVersion ?? null, violations: Array.isArray(d.violations) ? d.violations.slice(0, 50) : [] });
   if (Array.isArray(d.errors)) details.errors = d.errors.slice(0, 100);

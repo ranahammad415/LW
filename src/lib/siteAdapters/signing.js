@@ -410,6 +410,8 @@ export const ERROR_CODES = Object.freeze({
   NOT_PAIRED: { status: 503, retryable: true },
   /** v1.2.0 §22.1: the site's service token is missing or rejected (site admin action). */
   SERVICE_TOKEN_UNAVAILABLE: { status: 503, retryable: false },
+  /** v1.5.4 §30.1: EmDash refused the service user's role for this write (token still usable; not retryable). */
+  SERVICE_ROLE_INSUFFICIENT: { status: 403, retryable: false },
   UPSTREAM_UNAVAILABLE: { status: 503, retryable: true },
 });
 

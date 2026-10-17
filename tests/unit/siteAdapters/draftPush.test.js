@@ -615,3 +615,37 @@ describe('e2e O19: a draft read from an invalid page', () => {
     expect(site.bodies.filter((b) => b.target)).toHaveLength(1);
   });
 });
+
+describe('v1.5.4 §30.1: service role / scope refusals', () => {
+  const UPD = { id: 'd9', projectId: 'p1', contentMapNodeId: null, taskId: null, collection: 'pages', title: 'T', slug: 's', parent: null, contentKind: 'layout', layout: [], cmsEntryId: '01JAB4M9ZQ7X3K2V8N5T6R1W0C', cmsRev: 'v1', lastPushStatus: 'ok', cmsEditedAt: new Date() };
+
+  it('SERVICE_ROLE_INSUFFICIENT: actionable message, details kept, one call (not retried, no best-effort fallback)', async () => {
+    db.overrides['cmsDraft.findUnique'] = async () => UPD;
+    const e = ex('error.response--service-role-insufficient').error;
+    site.upsert = async () => {
+      throw new CmsBridgeError({ status: 403, code: e.code, message: e.message, details: e.details, retryable: false });
+    };
+    const out = await pushDraft({ draftId: 'd9', user: JANE });
+    expect(site.bodies).toHaveLength(1);
+    expect(out.result.retryable).toBe(false);
+    expect(out.result.error).toMatchObject({ code: 'SERVICE_ROLE_INSUFFICIENT', details: { requiredRole: 'editor', role: 'author', operation: 'update', collection: 'pages' } });
+    expect(out.result.error.message).toBe("The site's service user is an Author; EmDash needs an Editor to edit pages made by someone else. Ask the site admin to raise its role (admin → Users). Nothing was written.");
+    // the OS marks nothing about the token: no project / capability write
+    expect(calls('project.update')).toHaveLength(0);
+    expect(calls('project.updateMany')).toHaveLength(0);
+  });
+
+  it('SERVICE_TOKEN_UNAVAILABLE: reason "scope" names the missing permission; otherwise the best-effort path stays', async () => {
+    db.overrides['cmsDraft.findUnique'] = async () => UPD;
+    site.upsert = async () => {
+      throw new CmsBridgeError({ status: 503, code: 'SERVICE_TOKEN_UNAVAILABLE', message: 'scope', details: { reason: 'scope' }, retryable: false });
+    };
+    const out = await pushDraft({ draftId: 'd9', user: JANE });
+    expect(out.result.error).toMatchObject({ code: 'SERVICE_TOKEN_UNAVAILABLE', details: { reason: 'scope' } });
+    expect(out.result.error.message).toMatch(/missing a permission/);
+    site.upsert = async () => {
+      throw new CmsBridgeError({ status: 503, code: 'SERVICE_TOKEN_UNAVAILABLE', message: 'refused', details: {}, retryable: false });
+    };
+    expect((await pushDraft({ draftId: 'd9', user: JANE })).result.error.message).toMatch(/best-effort URL/);
+  });
+});
