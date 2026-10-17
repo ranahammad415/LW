@@ -388,12 +388,19 @@ export async function pushDraft({ draftId, user, opts = {}, log }) {
 
   // Review LOW-9: one push at a time per draft (two clicks / two tabs on a new draft would create two entries).
   // The claim is a compare-and-set; a claim older than PUSH_CLAIM_STALE_MS is abandoned and can be taken over.
+  // e2e O18b: the CAS is on the exact status we read, so `previous` is the true status before the claim (a push that
+  // finished in between changed it and this claim fails). An abandoned 'pushing' claim can be taken over when stale.
+  const stale = new Date(Date.now() - PUSH_CLAIM_STALE_MS);
   const claim = await prisma.cmsDraft.updateMany({
-    where: { id: first.id, OR: [{ lastPushStatus: { not: 'pushing' } }, { updatedAt: { lt: new Date(Date.now() - PUSH_CLAIM_STALE_MS) } }] },
+    where:
+      first.lastPushStatus === 'pushing'
+        ? { id: first.id, lastPushStatus: 'pushing', updatedAt: { lt: stale } }
+        : { id: first.id, lastPushStatus: first.lastPushStatus },
     data: { lastPushStatus: 'pushing' },
   });
   if (claim.count !== 1) throw bad('This draft is being pushed right now. Wait for that push to finish.', 'PUSH_IN_PROGRESS', 409);
-  const previous = first.lastPushStatus === 'pushing' ? 'never' : first.lastPushStatus;
+  // A taken-over (abandoned) claim: its outcome is unknown, so never treat it as "never pushed".
+  const previous = first.lastPushStatus === 'pushing' ? 'failed' : first.lastPushStatus || 'never';
   try {
     // Re-read under the claim: a push that just finished may have created the entry (then this one updates it).
     const draft = (await prisma.cmsDraft.findUnique({ where: { id: first.id } })) || first;
@@ -465,7 +472,8 @@ async function pushClaimedDraft({ draft, project, user, opts, log, previous = 'n
     const probe = buildDraftUpsertBody(draft, { user, ctx, collectionInfo, slugPolicy, changeUrl: false, reviewAfter: null });
     const csha = contentSha(probe);
     const replacesPending = Array.isArray(draft.lastPushWarnings) && draft.lastPushWarnings.some((w) => w?.code === 'REPLACES_PENDING_DRAFT');
-    const readUnedited = draft.lastPushStatus === 'never' && !draft.cmsEditedAt && !replacesPending && !draft.lastPushError;
+    // e2e O18b: the claim already set lastPushStatus to 'pushing'; the status before the claim is `previous`.
+    const readUnedited = previous === 'never' && !draft.cmsEditedAt && !replacesPending && !draft.lastPushError;
     let sameAsLast = false;
     if (!readUnedited && !draft.cmsEditedAt) {
       const lastOk = await prisma.cmsDraftPush.findFirst({ where: { draftId: draft.id, route: 'draft-upsert', status: 'ok' }, orderBy: { createdAt: 'desc' }, select: { summary: true } });

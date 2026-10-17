@@ -201,7 +201,7 @@ describe('pushDraft', () => {
   });
 
   it('CONFLICT_REV is recorded with the current entry (no auto-merge, no retry); ENTRY_LOCKED shows who/until', async () => {
-    db.overrides['cmsDraft.findUnique'] = async () => ({ ...DRAFT, cmsEntryId: '01JAB4M9ZQ7X3K2V8N5T6R1W0C', cmsRev: 'v1' });
+    db.overrides['cmsDraft.findUnique'] = async () => ({ ...DRAFT, cmsEntryId: '01JAB4M9ZQ7X3K2V8N5T6R1W0C', cmsRev: 'v1', lastPushStatus: 'ok', cmsEditedAt: new Date() });
     const conflict = ex('error.response--conflict-rev').error;
     site.upsert = async () => {
       throw new CmsBridgeError({ status: 409, code: 'CONFLICT_REV', message: conflict.message, details: conflict.details });
@@ -417,8 +417,13 @@ describe('review fixes: bylines on updates, push claim, markdown HTML, unpushed 
     expect(site.bodies).toHaveLength(0);
     const claim = calls('cmsDraft.updateMany')[0].args;
     expect(claim.data).toEqual({ lastPushStatus: 'pushing' });
-    expect(claim.where.OR[0]).toEqual({ lastPushStatus: { not: 'pushing' } });
-    expect(Date.now() - claim.where.OR[1].updatedAt.lt.getTime()).toBeGreaterThanOrEqual(PUSH_CLAIM_STALE_MS - 1000);
+    expect(claim.where).toEqual({ id: 'd2', lastPushStatus: 'never' }); // CAS on the status we read (e2e O18b)
+    db.calls = [];
+    db.overrides['cmsDraft.findUnique'] = async () => ({ ...POST, lastPushStatus: 'pushing' });
+    await expect(pushDraft({ draftId: 'd2', user: JANE })).rejects.toMatchObject({ code: 'PUSH_IN_PROGRESS' });
+    const takeover = calls('cmsDraft.updateMany')[0].args.where;
+    expect(takeover.lastPushStatus).toBe('pushing');
+    expect(Date.now() - takeover.updatedAt.lt.getTime()).toBeGreaterThanOrEqual(PUSH_CLAIM_STALE_MS - 1000);
     // claimed, then a local validation failure: the claim is released to the previous status
     db.calls = [];
     db.overrides['cmsDraft.updateMany'] = async () => ({ count: 1 });
@@ -431,7 +436,7 @@ describe('review fixes: bylines on updates, push claim, markdown HTML, unpushed 
     // the draft is re-read under the claim: an entry created by the push that just finished is updated, not re-created
     db.calls = [];
     let n = 0;
-    db.overrides['cmsDraft.findUnique'] = async () => (n++ === 0 ? { ...POST } : { ...POST, cmsEntryId: 'E', cmsRev: 'v1' });
+    db.overrides['cmsDraft.findUnique'] = async () => (n++ === 0 ? { ...POST, lastPushStatus: 'ok', cmsEditedAt: new Date() } : { ...POST, cmsEntryId: 'E', cmsRev: 'v1', lastPushStatus: 'pushing', cmsEditedAt: new Date() });
     site.upsert = async () => ({ ok: true, entryId: 'E', rev: 'v2' });
     await pushDraft({ draftId: 'd2', user: JANE });
     expect(site.bodies.at(-1).target).toEqual({ entryId: 'E' });
@@ -691,5 +696,19 @@ describe('v1.5.4 §30.3: CONFLICT_REV.updatedBy (last saver, names only)', () =>
     const out = await pushDraft({ draftId: 'd11', user: JANE });
     expect(out.result.error.details.updatedBy).toEqual({ name: 'Site editor', kind: 'human', viaOs: false });
     expect(JSON.stringify(out.result.error.details.updatedBy)).not.toContain('usr_7');
+  });
+});
+
+describe('e2e O18b: the unchanged check uses the status from before the push claim', () => {
+  it('a page read from the site and pushed without edits is not sent, although the re-read shows "pushing"', async () => {
+    const READ = { id: 'd12', projectId: 'p1', contentMapNodeId: null, taskId: null, collection: 'pages', title: 'T', slug: 's', parent: null, contentKind: 'layout', layout: [], cmsEntryId: 'E12', cmsRev: 'v3', cmsEditedAt: null, lastPushError: null };
+    let reads = 0;
+    // like the database: the first read is before the claim, the re-read after it
+    db.overrides['cmsDraft.findUnique'] = async () => (reads++ === 0 ? { ...READ, lastPushStatus: 'never' } : { ...READ, lastPushStatus: 'pushing' });
+    site.upsert = async () => ({ ok: true, entryId: 'E12', rev: 'v4' });
+    const out = await pushDraft({ draftId: 'd12', user: JANE });
+    expect(site.bodies).toHaveLength(0);
+    expect(out.result).toMatchObject({ ok: true, unchanged: true });
+    expect(calls('cmsDraft.update').at(-1).args.data).toEqual({ lastPushStatus: 'never' });
   });
 });
