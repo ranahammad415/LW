@@ -117,6 +117,21 @@ export async function draftAccess(user, project, scope, target = {}) {
   return { read: projectAccess || write, write };
 }
 
+/**
+ * e2e O19: entry-get has no parent field. The parent section is the first path segment when it is one of the
+ * collection's parentOptions (e.g. /spa-services/hot-tub-repair/ → spa-services); otherwise none is set.
+ */
+export function parentFromPath(path, parentOptions) {
+  const segs = String(path || '').split('/').filter(Boolean);
+  if (segs.length < 2 || !Array.isArray(parentOptions)) return null;
+  return parentOptions.includes(segs[0]) && segs[0] !== 'None' ? segs[0].slice(0, 100) : null;
+}
+
+function siteParentOptions(siteInfo, collection) {
+  const c = Array.isArray(siteInfo?.collections) ? siteInfo.collections.find((x) => x?.name === collection) : null;
+  return Array.isArray(c?.parentOptions) ? c.parentOptions : null;
+}
+
 /** e2e O18: what the push writes, without the per-push parts (baseRev, actor, reviewAfter). */
 export function contentSha(body) {
   const { baseRev: _b, actor: _a, reviewAfter: _r, ...content } = body || {};
@@ -414,7 +429,7 @@ async function pushClaimedDraft({ draft, project, user, opts, log, previous = 'n
     const probe = buildDraftUpsertBody(draft, { user, ctx, collectionInfo, slugPolicy, changeUrl: false, reviewAfter: null });
     const csha = contentSha(probe);
     const replacesPending = Array.isArray(draft.lastPushWarnings) && draft.lastPushWarnings.some((w) => w?.code === 'REPLACES_PENDING_DRAFT');
-    const readUnedited = draft.lastPushStatus === 'never' && !draft.cmsEditedAt && !replacesPending;
+    const readUnedited = draft.lastPushStatus === 'never' && !draft.cmsEditedAt && !replacesPending && !draft.lastPushError;
     let sameAsLast = false;
     if (!readUnedited && !draft.cmsEditedAt) {
       const lastOk = await prisma.cmsDraftPush.findFirst({ where: { draftId: draft.id, route: 'draft-upsert', status: 'ok' }, orderBy: { createdAt: 'desc' }, select: { summary: true } });
@@ -526,6 +541,7 @@ export async function createDraftFromEntry({ projectId, wpPageId, variant = 'dra
 
   const { conn } = await loadEmdashConnection(project.id);
   const v = variant === 'live' ? 'live' : 'draft';
+  const siteInfoForParent = await loadSiteInfo(project.id).catch(() => null);
   const res = await emdashRoutes.entryGetLayout(conn, page.cmsEntryId, v, INTERACTIVE);
   const built = draftFromEntryGet(res, { actor: { kind: 'human', osUserId: String(user.id), name: String(user.name || ''), role: user.role } });
   if (!built.ok) throw bad(built.errors[0].code === 'PAYLOAD_TOO_LARGE' ? 'This page is too large to edit in Agency OS. Edit it in the site admin.' : built.errors[0].message, built.errors[0].code, 422);
@@ -536,8 +552,10 @@ export async function createDraftFromEntry({ projectId, wpPageId, variant = 'dra
   if (v === 'live' && entry.hasPendingDraft) {
     warnings.push({ code: 'REPLACES_PENDING_DRAFT', path: '$', message: 'This is the live version: pushing it replaces the pending draft on the site.' });
   }
+  const parent = parentFromPath(entry.path, siteParentOptions(siteInfoForParent, entry.collection));
   const data = {
     collection: String(entry.collection || 'pages').slice(0, 64),
+    ...(parent ? { parent } : {}),
     title: String(built.draft.title || entry.title || 'Untitled').slice(0, 500),
     slug: entry.slug ? String(entry.slug).slice(0, 200) : null,
     contentKind,
@@ -555,7 +573,8 @@ export async function createDraftFromEntry({ projectId, wpPageId, variant = 'dra
     lastPushWarnings: warnings.length ? warnings : null,
     // valid:false: the stored content fails the site's current schemas; draft-upsert would 422 until these are fixed.
     lastPushError: e.valid === false ? { code: 'SCHEMA_INVALID', message: 'The page on the site no longer matches the current blocks. Fix the highlighted fields before pushing.', details: { errors: (e.errors || []).slice(0, 50) } } : null,
-    lastPushStatus: e.valid === false ? 'failed' : 'never',
+    // e2e O19: nothing was pushed yet: the badge says "Not pushed"; the read errors are shown from lastPushError.
+    lastPushStatus: 'never',
     bylinesEdited: false,
     cmsEditedAt: null,
     updatedById: user.id,

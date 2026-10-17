@@ -77,6 +77,7 @@ import {
   draftEditMarkers,
   PUSH_CLAIM_STALE_MS,
   draftAccess,
+  parentFromPath,
 } from '../../../src/lib/cmsDrafts.js';
 import { CmsBridgeError } from '../../../src/lib/siteAdapters/emdash.js';
 import { probeImage } from '../../../src/lib/imageProbe.js';
@@ -583,5 +584,34 @@ describe('e2e O18: an unchanged update is not sent to the site', () => {
     db.overrides['cmsDraftPush.findFirst'] = async () => null;
     await pushDraft({ draftId: 'd7', user: JANE });
     expect(site.bodies).toHaveLength(4);
+  });
+});
+
+describe('e2e O19: a draft read from an invalid page', () => {
+  const caps = { ...PROJECT, cmsCapabilities: { ...PROJECT.cmsCapabilities, layoutRead: true } };
+
+  it('is "Not pushed" (never) with the read errors kept, and keeps its parent section from the path', async () => {
+    db.overrides['project.findUnique'] = async () => caps;
+    db.overrides['wpPage.findFirst'] = async () => ({ id: 'wp1', cmsEntryId: '01JAB4M9ZQ7X3K2V8N5T6R1W0C' });
+    db.overrides['contentMapNode.findFirst'] = async () => null;
+    db.overrides['cmsDraft.findFirst'] = async () => null;
+    const res = ex('entry-get.response--layout');
+    site.layout = () => ({ ...res, editable: { ...res.editable, valid: false, errors: [{ path: '$.layout[0].lead', message: 'unknown field' }] } });
+    await createDraftFromEntry({ projectId: 'p1', wpPageId: 'wp1', user: JANE });
+    const created = calls('cmsDraft.create').at(-1).args.data;
+    expect(created.lastPushStatus).toBe('never');
+    expect(created.lastPushError).toMatchObject({ code: 'SCHEMA_INVALID' });
+    expect(created.parent).toBe('spa-services'); // /spa-services/hot-tub-repair/ and spa-services is a parent option
+    expect(parentFromPath('/spa-services/hot-tub-repair/', ['None', 'spa-services'])).toBe('spa-services');
+    expect(parentFromPath('/hot-tub-repair/', ['spa-services'])).toBeNull();
+    expect(parentFromPath('/blog/x/', ['spa-services'])).toBeNull();
+    // an unedited invalid read is never "skipped as unchanged": the push goes and the site reports the problem
+    db.overrides['cmsDraft.findUnique'] = async () => ({ ...created, id: 'd8', projectId: 'p1', layout: [] });
+    site.upsert = async () => {
+      throw new CmsBridgeError({ status: 422, code: 'SCHEMA_INVALID', message: 'invalid' });
+    };
+    const out = await pushDraft({ draftId: 'd8', user: JANE });
+    expect(out.result.unchanged).toBeUndefined();
+    expect(site.bodies.filter((b) => b.target)).toHaveLength(1);
   });
 });
