@@ -189,6 +189,8 @@ export function pushContextFrom(siteInfo, user, project) {
       mediaImport: caps.mediaImport === true || hasMediaImport(project),
       layoutRead: caps.layoutRead === true || hasLayoutRead(project),
       seoGateOnPush: caps.seoGateOnPush === true,
+      // e2e O10: the editor copy says where publishing happens.
+      publishFromOs: caps.publishFromOs === true || project?.cmsCapabilities?.publishFromOs === true,
     },
     collections: (siteInfo?.collections || []).map((c) => ({
       name: c.name,
