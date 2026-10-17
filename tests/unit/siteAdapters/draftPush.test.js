@@ -648,7 +648,14 @@ describe('v1.5.4 §30.1: service role / scope refusals', () => {
     };
     const out = await pushDraft({ draftId: 'd9', user: JANE });
     expect(out.result.error).toMatchObject({ code: 'SERVICE_TOKEN_UNAVAILABLE', details: { reason: 'scope' } });
-    expect(out.result.error.message).toMatch(/missing a permission/);
+    expect(out.result.error.message).toMatch(/missing a permission/); // no scope named: the full list
+    // e2e O24: the scope the site names is the one asked for
+    site.upsert = async () => {
+      throw new CmsBridgeError({ status: 503, code: 'SERVICE_TOKEN_UNAVAILABLE', message: 'scope', details: { reason: 'scope', scope: 'content:write' }, retryable: false });
+    };
+    const named = await pushDraft({ draftId: 'd9', user: JANE });
+    expect(named.result.error.details).toMatchObject({ reason: 'scope', scope: 'content:write' });
+    expect(named.result.error.message).toBe("The site's service token is missing the content:write permission. Ask the site admin to add it to the token. Nothing was written.");
     site.upsert = async () => {
       throw new CmsBridgeError({ status: 503, code: 'SERVICE_TOKEN_UNAVAILABLE', message: 'refused', details: {}, retryable: false });
     };

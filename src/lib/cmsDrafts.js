@@ -317,6 +317,10 @@ export function pushErrorMessage(err) {
     case 'SERVICE_TOKEN_UNAVAILABLE':
       // v1.5.4 §30.1: reason "scope" = a scope is missing (token not refused); otherwise missing or refused (401).
       if (d.reason === 'scope') {
+        // e2e O24: name the scope the site reports; the full list only when it does not say.
+        if (typeof d.scope === 'string' && /^[a-z0-9:_-]{1,64}$/i.test(d.scope)) {
+          return `The site's service token is missing the ${d.scope} permission. Ask the site admin to add it to the token. Nothing was written.`;
+        }
         return 'The site\'s service token is missing a permission. Ask the site admin to give it content:read, content:write, media:write and mcp:tools:emdash-seo. Nothing was written.';
       }
       return 'The site cannot set the exact URL right now (its service token is missing or refused). Ask the site admin, or push with best-effort URL.';
@@ -370,7 +374,7 @@ function errorRecord(err) {
   if (err.code === 'SERVICE_ROLE_INSUFFICIENT') {
     Object.assign(details, { requiredRole: d.requiredRole ?? null, role: d.role ?? null, operation: d.operation ?? null, collection: d.collection ?? null, entryId: d.entryId ?? null });
   }
-  if (err.code === 'SERVICE_TOKEN_UNAVAILABLE') Object.assign(details, { reason: d.reason ?? null });
+  if (err.code === 'SERVICE_TOKEN_UNAVAILABLE') Object.assign(details, { reason: d.reason ?? null, scope: typeof d.scope === 'string' ? d.scope.slice(0, 64) : null });
   if (err.code === 'PARENT_NOT_FOUND') Object.assign(details, { allowed: Array.isArray(d.allowed) ? d.allowed : null });
   if (err.code === 'CONTRACT_LOCKED') Object.assign(details, { contractVersion: d.contractVersion ?? null, violations: Array.isArray(d.violations) ? d.violations.slice(0, 50) : [] });
   if (Array.isArray(d.errors)) details.errors = d.errors.slice(0, 100);
