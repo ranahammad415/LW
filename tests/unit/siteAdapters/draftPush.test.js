@@ -649,3 +649,30 @@ describe('v1.5.4 §30.1: service role / scope refusals', () => {
     expect((await pushDraft({ draftId: 'd9', user: JANE })).result.error.message).toMatch(/best-effort URL/);
   });
 });
+
+describe('v1.5.4 §30.4: SLUG_TAKEN names the holder (also in the trash)', () => {
+  const NEW = { id: 'd10', projectId: 'p1', contentMapNodeId: null, taskId: null, collection: 'pages', title: 'Hot Tub Heater Repair', slug: 'hot-tub-heater-repair', parent: null, contentKind: 'layout', layout: [], cmsEntryId: null, cmsRev: null, lastPushStatus: 'never' };
+  const refuse = (details) => async () => {
+    throw new CmsBridgeError({ status: 409, code: 'SLUG_TAKEN', message: 'taken', details, retryable: false });
+  };
+
+  it('a live holder we mirror: "open the existing page" link (site admin edit URL)', async () => {
+    db.overrides['cmsDraft.findUnique'] = async () => NEW;
+    db.overrides['wpPage.findFirst'] = async (a) => (a.where.cmsEntryId === '01JAB4M9ZQ7X3K2V8N5T6R1W0C' ? { id: 'wp1', url: 'https://s.example/x/', cmsEditUrl: 'https://s.example/_emdash/admin/content/pages/01JAB' } : null);
+    site.upsert = refuse({ existingEntryId: '01JAB4M9ZQ7X3K2V8N5T6R1W0C', existingEntryTrashed: false, suggestedSlug: 'hot-tub-heater-repair-2' });
+    const out = await pushDraft({ draftId: 'd10', user: JANE });
+    expect(out.result.error.details).toMatchObject({ existingEntryId: '01JAB4M9ZQ7X3K2V8N5T6R1W0C', existingEntryTrashed: false, existingWpPageId: 'wp1', existingEditUrl: 'https://s.example/_emdash/admin/content/pages/01JAB', suggestedSlug: 'hot-tub-heater-repair-2' });
+    expect(out.result.error.message).toMatch(/Open that page instead/);
+  });
+
+  it('a trashed holder (contract example): restore-from-trash note, no open link', async () => {
+    db.overrides['cmsDraft.findUnique'] = async () => NEW;
+    db.overrides['wpPage.findFirst'] = async () => ({ id: 'wp-trash', url: 'x', cmsEditUrl: 'y' });
+    const e = ex('error.response--slug-taken-trashed').error;
+    site.upsert = refuse(e.details);
+    const out = await pushDraft({ draftId: 'd10', user: JANE });
+    expect(out.result.error.details).toMatchObject({ existingEntryId: e.details.existingEntryId, existingEntryTrashed: true });
+    expect(out.result.error.details).not.toHaveProperty('existingEditUrl');
+    expect(out.result.error.message).toMatch(/in the site's trash\. Restore it/);
+  });
+});

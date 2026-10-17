@@ -301,7 +301,11 @@ export function pushErrorMessage(err) {
     case 'ENTRY_LOCKED':
       return `The page is being edited${d.lockedBy ? ` by ${d.lockedBy}` : ''}${d.lockedUntil ? ` until ${new Date(d.lockedUntil).toLocaleString()}` : ''}. Try again later.`;
     case 'SLUG_TAKEN':
-      return `That URL slug is already used on the site.${d.suggestedSlug ? ` Suggested: ${d.suggestedSlug}.` : ''}`;
+      // v1.5.4 §30.4: the holder is always named (existingEntryId), also when it is in the site's trash.
+      if (d.existingEntryTrashed === true) {
+        return `That URL slug belongs to a page in the site's trash. Restore it from the trash in the site admin and edit it, or use another slug.${d.suggestedSlug ? ` Suggested: ${d.suggestedSlug}.` : ''}`;
+      }
+      return `That URL slug is already used by another page on the site.${d.existingEntryId ? ' Open that page instead, or use another slug.' : ''}${d.suggestedSlug ? ` Suggested: ${d.suggestedSlug}.` : ''}`;
     case 'PARENT_NOT_FOUND':
       return 'That parent section does not exist on the site.';
     case 'CONTRACT_LOCKED':
@@ -345,7 +349,9 @@ function errorRecord(err) {
     if (d.entry && typeof d.entry === 'object') details.entry = { title: d.entry.title ?? null, path: d.entry.path ?? null, updatedAt: d.entry.updatedAt ?? null, wordCount: d.entry.wordCount ?? null, rev: d.entry.rev ?? null };
   }
   if (err.code === 'ENTRY_LOCKED') Object.assign(details, { lockedUntil: d.lockedUntil ?? null, lockedBy: d.lockedBy ?? null });
-  if (err.code === 'SLUG_TAKEN') Object.assign(details, { suggestedSlug: d.suggestedSlug ?? null });
+  if (err.code === 'SLUG_TAKEN') {
+    Object.assign(details, { suggestedSlug: d.suggestedSlug ?? null, existingEntryId: typeof d.existingEntryId === 'string' ? d.existingEntryId.slice(0, 64) : null, existingEntryTrashed: d.existingEntryTrashed === true });
+  }
   if (err.code === 'SERVICE_ROLE_INSUFFICIENT') {
     Object.assign(details, { requiredRole: d.requiredRole ?? null, role: d.role ?? null, operation: d.operation ?? null, collection: d.collection ?? null, entryId: d.entryId ?? null });
   }
@@ -472,6 +478,11 @@ async function pushClaimedDraft({ draft, project, user, opts, log, previous = 'n
     const err = attempt.err;
     const unknownOutcome = err.retryable === true || err.code === 'UPSTREAM_UNAVAILABLE';
     const rec = errorRecord(err);
+    // v1.5.4 §30.4: "open existing page" (site admin edit link / OS page) when we mirror the holder and it is not trashed.
+    if (err.code === 'SLUG_TAKEN' && rec.details.existingEntryId && !rec.details.existingEntryTrashed) {
+      const holder = await prisma.wpPage.findFirst({ where: { projectId: project.id, cmsEntryId: rec.details.existingEntryId }, select: { id: true, url: true, cmsEditUrl: true } }).catch(() => null);
+      if (holder) Object.assign(rec.details, { existingWpPageId: holder.id, existingEditUrl: holder.cmsEditUrl || null, existingPageUrl: holder.url || null });
+    }
     const status = err.code === 'CONFLICT_REV' ? 'conflict' : err.code === 'ENTRY_LOCKED' ? 'locked' : 'failed';
     await prisma.cmsDraftPush.update({ where: { id: pushRow.id }, data: { status: unknownOutcome ? 'unknown' : 'failed', errorCode: err.code, summary: { bodySha } } });
     const updated = await prisma.cmsDraft.update({
