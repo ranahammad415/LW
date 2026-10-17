@@ -12,8 +12,6 @@ import { loadEmdashConnection, mirrorEmdashReview, listPms } from './cmsStore.js
 import {
   CmsBridgeError,
   emdashRoutes,
-  hasDraftPushFromOs,
-  hasMediaImport,
   hasLayoutRead,
   INTERACTIVE_RETRY_DELAYS_MS,
 } from './siteAdapters/emdash.js';
@@ -183,14 +181,19 @@ export function clearSiteInfoCache() {
 export function pushContextFrom(siteInfo, user, project) {
   const caps = siteInfo?.capabilities || {};
   const bylines = Array.isArray(siteInfo?.bylines) ? siteInfo.bylines : [];
+  // e2e O26: the site-info here may be cached (60 s, longer until ?fresh=1), while every heartbeat stores the site's
+  // current flags in Project.cmsCapabilities. The stored flag wins whenever the heartbeat reported it; the cached
+  // site-info is only the fallback (e.g. right after pairing).
+  const stored = project?.cmsCapabilities && typeof project.cmsCapabilities === 'object' ? project.cmsCapabilities : {};
+  const flag = (name) => (typeof stored[name] === 'boolean' ? stored[name] : caps[name] === true);
   return {
     capabilities: {
-      draftPushFromOs: caps.draftPushFromOs === true || hasDraftPushFromOs(project),
-      mediaImport: caps.mediaImport === true || hasMediaImport(project),
-      layoutRead: caps.layoutRead === true || hasLayoutRead(project),
-      seoGateOnPush: caps.seoGateOnPush === true,
+      draftPushFromOs: flag('draftPushFromOs'),
+      mediaImport: flag('mediaImport'),
+      layoutRead: flag('layoutRead'),
+      seoGateOnPush: flag('seoGateOnPush'),
       // e2e O10: the editor copy says where publishing happens.
-      publishFromOs: caps.publishFromOs === true || project?.cmsCapabilities?.publishFromOs === true,
+      publishFromOs: flag('publishFromOs'),
     },
     collections: (siteInfo?.collections || []).map((c) => ({
       name: c.name,

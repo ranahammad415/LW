@@ -719,3 +719,14 @@ describe('e2e O18b: the unchanged check uses the status from before the push cla
     expect(calls('cmsDraft.update').at(-1).args.data).toEqual({ lastPushStatus: 'never' });
   });
 });
+
+describe('e2e O26: push context flags follow the heartbeat, not the cached site-info', () => {
+  it('a heartbeat that turned publishFromOs on (or off) wins over a stale cached site-info', () => {
+    const cached = { ...ex('site-info.response'), capabilities: { ...ex('site-info.response').capabilities, publishFromOs: false, draftPushFromOs: true } };
+    expect(pushContextFrom(cached, JANE, { ...PROJECT, cmsCapabilities: { draftPushFromOs: true, publishFromOs: true } }).capabilities.publishFromOs).toBe(true);
+    const cachedOn = { ...cached, capabilities: { ...cached.capabilities, publishFromOs: true } };
+    expect(pushContextFrom(cachedOn, JANE, { ...PROJECT, cmsCapabilities: { draftPushFromOs: false, publishFromOs: false } }).capabilities).toMatchObject({ publishFromOs: false, draftPushFromOs: false });
+    // no stored flag yet (e.g. right after pairing): the site-info value is used
+    expect(pushContextFrom(cachedOn, JANE, { ...PROJECT, cmsCapabilities: {} }).capabilities.publishFromOs).toBe(true);
+  });
+});
