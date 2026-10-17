@@ -147,6 +147,25 @@ async function recordProfileDrift(projectId, row, changes, actorName) {
   return created;
 }
 
+/** Window around a publish in which lifecycle.* changes count as its side effect (e2e O15). */
+export const LIFECYCLE_PUBLISH_WINDOW_MS = 30 * 60_000;
+
+async function lifecycleChangeIsPublish(projectId, ev) {
+  if (ev?.actor?.kind && ev.actor.kind !== 'human') return true; // plugin / system bookkeeping
+  const entryId = ev?.profile?.entry_id ? String(ev.profile.entry_id).slice(0, 64) : null;
+  if (!entryId) return false;
+  const at = ev.at ? new Date(ev.at) : new Date();
+  if (Number.isNaN(at.getTime())) return false;
+  const n = await prisma.wpContentReview.count({
+    where: {
+      projectId,
+      cmsEntryId: entryId,
+      publishedAt: { gte: new Date(at.getTime() - LIFECYCLE_PUBLISH_WINDOW_MS), lte: new Date(at.getTime() + LIFECYCLE_PUBLISH_WINDOW_MS) },
+    },
+  });
+  return n > 0;
+}
+
 /**
  * Apply one seo.* event (§25.4). Returns 'applied' | 'stale' | 'stored'. Reserved seo.* types are stored only.
  */
@@ -160,7 +179,12 @@ export async function applySeoEvent(projectId, ev) {
       const outcome = await upsertProfileRow(projectId, row);
       if (outcome === 'stale') return 'stale';
       if (ev.type === 'seo.profile_changed') {
-        const changes = osOwnedChanges(ev.changed);
+        let changes = osOwnedChanges(ev.changed);
+        // e2e O15: a publish moves lifecycle.* (e.g. next_review_on) on the site. That is the publish, not an edit of the
+        // profile: lifecycle-only changes made automatically or right after a publish of the entry raise no drift.
+        if (changes.some((c) => c.field.startsWith('lifecycle.')) && (await lifecycleChangeIsPublish(projectId, ev))) {
+          changes = changes.filter((c) => !c.field.startsWith('lifecycle.'));
+        }
         if (changes.length) await recordProfileDrift(projectId, row, changes, actorName);
       }
       return 'applied';

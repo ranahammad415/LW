@@ -134,6 +134,29 @@ describe('seo.* events (§25.4)', () => {
     expect(calls('contentMapDrift.create')).toHaveLength(0);
   });
 
+  it('e2e O15: lifecycle.* moved by a publish raises no drift; other OS-owned changes in the same event still do', async () => {
+    db.overrides['wpPage.findMany'] = async () => [{ id: 'wp1' }];
+    db.overrides['contentMapNode.findMany'] = async () => [{ id: 'n1', mapId: 'm1', wpPageId: 'wp1' }];
+    const life = { ...seo()[1], changed: [{ field: 'lifecycle.next_review_on', owner: 'os' }] };
+    db.overrides['wpContentReview.count'] = async () => 1; // the entry was published around the event
+    await applySeoEvent('p1', life);
+    expect(calls('contentMapDrift.create')).toHaveLength(0);
+    const where = calls('wpContentReview.count')[0].args.where;
+    expect(where).toMatchObject({ projectId: 'p1', cmsEntryId: life.profile.entry_id });
+    // no publish nearby, edited by a person → still drift
+    db.overrides['wpContentReview.count'] = async () => 0;
+    await applySeoEvent('p1', life);
+    expect(calls('contentMapDrift.create')).toHaveLength(1);
+    // the plugin itself (not a person) moving lifecycle → no drift
+    db.calls = [];
+    await applySeoEvent('p1', { ...life, actor: { kind: 'plugin', source: 'plugin' } });
+    expect(calls('contentMapDrift.create')).toHaveLength(0);
+    // mixed: the lifecycle part is dropped, the targeting change still drifts
+    db.overrides['wpContentReview.count'] = async () => 1;
+    await applySeoEvent('p1', { ...life, changed: [{ field: 'lifecycle.next_review_on', owner: 'os' }, { field: 'targeting.secondary_keywords', owner: 'os' }] });
+    expect(calls('contentMapDrift.create').at(-1).args.data.payload.fields).toEqual(['targeting.secondary_keywords']);
+  });
+
   it('site-owned changes and contract locks only update the mirror', async () => {
     const ev = { ...seo()[1], changed: [{ field: 'lifecycle.status', owner: 'site' }] };
     await applySeoEvent('p1', ev);
