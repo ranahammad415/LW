@@ -155,6 +155,20 @@ describe('seo.* events (§25.4)', () => {
     expect(await applySeoEvent('p1', { type: 'seo.redirect_proposed', actor: {} })).toBe('stored');
   });
 
+  it('e2e O14: a decided proposal takes one off the mirrored open count (never below 0); opened / repeated do not', async () => {
+    const dec = () => calls('cmsSeoProfile.updateMany').filter((c) => c.args.data?.openProposals?.decrement === 1);
+    db.overrides['cmsSeoProposal.findUnique'] = async () => ({ id: 'x', state: 'open' });
+    await applySeoEvent('p1', seo()[3]);
+    expect(dec()).toHaveLength(1);
+    expect(dec()[0].args.where).toMatchObject({ projectId: 'p1', openProposals: { gt: 0 } });
+    db.overrides['cmsSeoProposal.findUnique'] = async () => ({ id: 'x', state: 'approved' });
+    await applySeoEvent('p1', seo()[3]); // same decision again: no second decrement
+    expect(dec()).toHaveLength(1);
+    db.overrides['cmsSeoProposal.findUnique'] = async () => null;
+    await applySeoEvent('p1', seo()[2]); // opened
+    expect(dec()).toHaveLength(1);
+  });
+
   it('processEventBatch routes seo.* to the store and accepts the batch', async () => {
     const outcomes = [];
     const store = {

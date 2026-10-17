@@ -173,6 +173,14 @@ export async function applySeoEvent(projectId, ev) {
       if (existing && !proposalStateAdvances(existing.state, row.state)) return 'stale';
       if (existing) await prisma.cmsSeoProposal.update({ where: { id: existing.id }, data: row });
       else await prisma.cmsSeoProposal.create({ data: { projectId, ...row } });
+      // e2e O14: the site emits the approval's seo.profile_changed BEFORE proposal_decided, so the mirrored
+      // open_proposals still counts this one. A proposal that just left "open" takes one off (never below 0); the next
+      // profile summary sets the exact number again.
+      if (row.state !== 'open' && existing?.state !== row.state) {
+        await prisma.cmsSeoProfile
+          .updateMany({ where: { projectId, pageId: row.pageId, openProposals: { gt: 0 } }, data: { openProposals: { decrement: 1 } } })
+          .catch(() => {});
+      }
       return 'applied';
     }
     case 'seo.check_failed': {
