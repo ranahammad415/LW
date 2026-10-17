@@ -19,7 +19,8 @@ import {
   reviewToMirrorData,
   CmsBridgeError,
 } from './siteAdapters/emdash.js';
-import { KEY_ROTATION_OVERLAP_SEC, PAIRING_MAX_FAILED_ATTEMPTS } from './siteAdapters/signing.js';
+import { KEY_ROTATION_OVERLAP_SEC, PAIRING_MAX_FAILED_ATTEMPTS, revisionAtLeast } from './siteAdapters/signing.js';
+import { sanitizeServiceToken } from './siteAdapters/push.js';
 import { sanitizeMigratedFrom, sanitizeOutboxPause } from './siteAdapters/migration.js';
 import {
   suggestionToRow,
@@ -144,6 +145,8 @@ function siteInfoProjectData(siteInfo, contract, now) {
       siteName: siteInfo?.siteName ? String(siteInfo.siteName).slice(0, 200) : null,
       supportedContracts: Array.isArray(siteInfo?.supportedContracts) ? siteInfo.supportedContracts : null,
       contractRevision: typeof siteInfo?.contractRevision === 'string' ? siteInfo.contractRevision.slice(0, 16) : null,
+      // v1.5.4 §30.1: service user role and problems (never the token), sites at 1.5.4 or later.
+      serviceToken: revisionAtLeast(siteInfo?.contractRevision, '1.5.4') ? sanitizeServiceToken(siteInfo?.serviceToken) : null,
       // v1.0.4 §17(d): false = the site has no preview secret; review links will not open.
       previewConfigured: typeof siteInfo?.previewConfigured === 'boolean' ? siteInfo.previewConfigured : null,
       // v1.0.7 §20: template-linked paths (orphan logic) and the advertised sitemap URL (validated again on use).

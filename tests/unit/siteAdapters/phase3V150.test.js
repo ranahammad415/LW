@@ -503,3 +503,18 @@ describe('v1.5.3 §29: outbox pause (stored from site-info / handshake / health)
     if (o) expect(o.paused).toBeNull();
   });
 });
+
+describe('v1.5.4 §30.1: service user role (site-info.serviceToken)', () => {
+  it('stored normalised from a 1.5.4 site; ignored from an older one; never the token', async () => {
+    const info = ex('site-info.response--service-role');
+    await prismaCmsStore.recordHeartbeat({ projectId: 'p1', siteInfo: info, contract: 1 });
+    const st = calls('project.update').at(-1).args.data.cmsHealth.serviceToken;
+    expect(st).toMatchObject({ usable: true, role: 'author', requiredRole: 'editor', meetsRequiredRole: false, problems: [{ code: 'ROLE_INSUFFICIENT' }] });
+    await prismaCmsStore.recordHeartbeat({ projectId: 'p1', siteInfo: { ...info, contractRevision: '1.5.3' }, contract: 1 });
+    expect(calls('project.update').at(-1).args.data.cmsHealth.serviceToken).toBeNull();
+    const { sanitizeServiceToken } = await import('../../../src/lib/siteAdapters/push.js');
+    expect(sanitizeServiceToken({ usable: true, role: 'boss', token: 'secret', problems: [{ code: 'NOPE' }, { code: 'SCOPE_MISSING', message: 'm' }] })).toEqual({
+      usable: true, role: 'unknown', requiredRole: 'editor', meetsRequiredRole: null, checkedAt: null, problems: [{ code: 'SCOPE_MISSING', message: 'm' }],
+    });
+  });
+});

@@ -253,3 +253,27 @@ export function draftFromEntryGet(response, extra = {}) {
   };
   return { ok: true, draft, errors: [] };
 }
+
+// ─────────────────────────────── v1.5.4 §30.1: service user role ───────────────────────────────
+
+export const SERVICE_ROLES = Object.freeze(['subscriber', 'contributor', 'author', 'editor', 'admin']);
+export const SERVICE_ROLE_REQUIRED = 'editor';
+export const SERVICE_TOKEN_PROBLEMS = Object.freeze(['NOT_CONFIGURED', 'TOKEN_REFUSED', 'SCOPE_MISSING', 'ROLE_INSUFFICIENT', 'ROLE_UNVERIFIED', 'ROLE_ABOVE_REQUIRED', 'SEO_TOOLS_UNREACHABLE']);
+
+/** site-info.serviceToken (never the token): normalised for Project.cmsHealth.serviceToken, or null. */
+export function sanitizeServiceToken(v) {
+  if (!v || typeof v !== 'object') return null;
+  const role = SERVICE_ROLES.includes(v.role) ? v.role : 'unknown';
+  const requiredRole = SERVICE_ROLES.includes(v.requiredRole) ? v.requiredRole : SERVICE_ROLE_REQUIRED;
+  return {
+    usable: v.usable === true,
+    role,
+    requiredRole,
+    meetsRequiredRole: v.meetsRequiredRole === true ? true : v.meetsRequiredRole === false ? false : null,
+    checkedAt: typeof v.checkedAt === 'string' && !Number.isNaN(Date.parse(v.checkedAt)) ? new Date(v.checkedAt).toISOString() : null,
+    problems: (Array.isArray(v.problems) ? v.problems : [])
+      .filter((p) => p && SERVICE_TOKEN_PROBLEMS.includes(p.code))
+      .slice(0, 10)
+      .map((p) => ({ code: p.code, message: typeof p.message === 'string' ? p.message.slice(0, 500) : '' })),
+  };
+}
