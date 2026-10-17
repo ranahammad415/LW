@@ -117,6 +117,12 @@ export async function draftAccess(user, project, scope, target = {}) {
   return { read: projectAccess || write, write };
 }
 
+/** e2e O18: what the push writes, without the per-push parts (baseRev, actor, reviewAfter). */
+export function contentSha(body) {
+  const { baseRev: _b, actor: _a, reviewAfter: _r, ...content } = body || {};
+  return sha(JSON.stringify(content));
+}
+
 /** The entry's open review in our mirror (not published, not cancelled), or null. */
 export async function openReviewForEntry(projectId, cmsEntryId) {
   if (!cmsEntryId) return null;
@@ -340,14 +346,14 @@ export async function pushDraft({ draftId, user, opts = {}, log }) {
   try {
     // Re-read under the claim: a push that just finished may have created the entry (then this one updates it).
     const draft = (await prisma.cmsDraft.findUnique({ where: { id: first.id } })) || first;
-    return await pushClaimedDraft({ draft, project, user, opts, log });
+    return await pushClaimedDraft({ draft, project, user, opts, log, previous });
   } catch (err) {
     await prisma.cmsDraft.updateMany({ where: { id: first.id, lastPushStatus: 'pushing' }, data: { lastPushStatus: previous } }).catch(() => {});
     throw err;
   }
 }
 
-async function pushClaimedDraft({ draft, project, user, opts, log }) {
+async function pushClaimedDraft({ draft, project, user, opts, log, previous = 'never' }) {
   if (draft.cmsEntryId && !(opts.baseRev || draft.cmsRev)) throw bad('The current version of the page is unknown. Reload the page data, then push again.');
 
   const siteInfo = await loadSiteInfo(project.id);
@@ -400,6 +406,28 @@ async function pushClaimedDraft({ draft, project, user, opts, log }) {
     }
   };
 
+  // e2e O18: an unchanged update is not sent (the site would still write a new draft revision and a content.saved).
+  // Unchanged = same content as the last successful push of this draft (contentSha: the body without baseRev, actor and
+  // reviewAfter), or a draft read from the site and never edited. A review request, a URL change, an explicit baseRev
+  // or a "replace the pending draft" read always go to the site.
+  if (draft.cmsEntryId && !reviewAfter && !opts.changeUrl && !opts.baseRev) {
+    const probe = buildDraftUpsertBody(draft, { user, ctx, collectionInfo, slugPolicy, changeUrl: false, reviewAfter: null });
+    const csha = contentSha(probe);
+    const replacesPending = Array.isArray(draft.lastPushWarnings) && draft.lastPushWarnings.some((w) => w?.code === 'REPLACES_PENDING_DRAFT');
+    const readUnedited = draft.lastPushStatus === 'never' && !draft.cmsEditedAt && !replacesPending;
+    let sameAsLast = false;
+    if (!readUnedited && !draft.cmsEditedAt) {
+      const lastOk = await prisma.cmsDraftPush.findFirst({ where: { draftId: draft.id, route: 'draft-upsert', status: 'ok' }, orderBy: { createdAt: 'desc' }, select: { summary: true } });
+      sameAsLast = !!lastOk?.summary?.contentSha && lastOk.summary.contentSha === csha;
+    }
+    if (readUnedited || sameAsLast) {
+      const unchangedWarning = { code: 'UNCHANGED', path: '$', message: 'Nothing changed since the page was last read or pushed: the site was not called.' };
+      const updated = await prisma.cmsDraft.update({ where: { id: draft.id }, data: { lastPushStatus: previous === 'never' ? 'never' : previous } });
+      log?.info?.({ projectId: project.id, draftId: draft.id }, 'EmDash draft push skipped (unchanged)');
+      return { draft: updated, result: { ok: true, unchanged: true, created: false, warnings: [...extraWarnings, unchangedWarning], seoCheck: null, review: false } };
+    }
+  }
+
   let attempt = await attemptOnce(reviewAfter);
   if (attempt.err && reviewAfter && attempt.err.code === 'INVALID_TRANSITION') {
     await prisma.cmsDraftPush.update({ where: { id: attempt.pushRow.id }, data: { status: 'failed', errorCode: attempt.err.code, summary: { bodySha: attempt.bodySha } } });
@@ -446,7 +474,7 @@ async function pushClaimedDraft({ draft, project, user, opts, log }) {
   });
   await prisma.cmsDraftPush.update({
     where: { id: pushRow.id },
-    data: { status: 'ok', errorCode: null, summary: { bodySha, created: !!res.created, entryId: res.entryId || null, rev: res.rev || null, replay: !!res.idempotentReplay, warnings: warnings.length } },
+    data: { status: 'ok', errorCode: null, summary: { bodySha, contentSha: contentSha(body), created: !!res.created, entryId: res.entryId || null, rev: res.rev || null, replay: !!res.idempotentReplay, warnings: warnings.length } },
   });
   // reviewAfter: the site answers with the Review; mirror it now (the pipeline_submitted event notifies once).
   if (res.review) await mirrorEmdashReview(project.id, res.review, { log }).catch(() => {});

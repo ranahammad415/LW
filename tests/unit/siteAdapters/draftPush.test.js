@@ -543,3 +543,45 @@ describe('e2e O20: a push links its node to the entry page when the page row exi
     expect(link.args).toEqual({ where: { id: 'n1', wpPageId: null }, data: { wpPageId: 'wp-9' } });
   });
 });
+
+describe('e2e O18: an unchanged update is not sent to the site', () => {
+  const ENTRY = { id: 'd7', projectId: 'p1', contentMapNodeId: null, taskId: null, collection: 'pages', title: 'T', slug: 's', parent: null, contentKind: 'layout', layout: [], cmsEntryId: 'E7', cmsRev: 'v3', cmsEditedAt: null };
+
+  it('a page read from the site and not edited: no site call, status unchanged, UNCHANGED warning', async () => {
+    db.overrides['cmsDraft.findUnique'] = async () => ({ ...ENTRY, lastPushStatus: 'never' });
+    site.upsert = async () => ({ ok: true, entryId: 'E7', rev: 'v4' });
+    const out = await pushDraft({ draftId: 'd7', user: JANE });
+    expect(site.bodies).toHaveLength(0);
+    expect(out.result).toMatchObject({ ok: true, unchanged: true });
+    expect(out.result.warnings.map((w) => w.code)).toContain('UNCHANGED');
+    expect(calls('cmsDraft.update').at(-1).args.data).toEqual({ lastPushStatus: 'never' });
+  });
+
+  it('same content as the last successful push: skipped; edited, review requested or "replace pending draft": sent', async () => {
+    db.overrides['cmsDraft.findUnique'] = async () => ({ ...ENTRY, lastPushStatus: 'ok' });
+    site.upsert = async () => ({ ok: true, entryId: 'E7', rev: 'v4' });
+    // first push records the content hash
+    db.overrides['cmsDraftPush.findFirst'] = async () => null;
+    await pushDraft({ draftId: 'd7', user: JANE });
+    expect(site.bodies).toHaveLength(1);
+    const recorded = calls('cmsDraftPush.update').at(-1).args.data.summary.contentSha;
+    expect(recorded).toMatch(/^[0-9a-f]{64}$/);
+    db.overrides['cmsDraftPush.findFirst'] = async (a) => (a.where.status === 'ok' ? { summary: { contentSha: recorded } } : null);
+    expect((await pushDraft({ draftId: 'd7', user: JANE })).result.unchanged).toBe(true);
+    expect(site.bodies).toHaveLength(1);
+    // an edit since the last push
+    db.overrides['cmsDraft.findUnique'] = async () => ({ ...ENTRY, lastPushStatus: 'ok', cmsEditedAt: new Date() });
+    await pushDraft({ draftId: 'd7', user: JANE });
+    expect(site.bodies).toHaveLength(2);
+    // a review request always goes
+    db.overrides['cmsDraft.findUnique'] = async () => ({ ...ENTRY, lastPushStatus: 'ok' });
+    db.overrides['wpContentReview.findFirst'] = async () => null;
+    await pushDraft({ draftId: 'd7', user: JANE, opts: { reviewAfter: {} } });
+    expect(site.bodies).toHaveLength(3);
+    // the live version read over a pending draft is meant to replace it
+    db.overrides['cmsDraft.findUnique'] = async () => ({ ...ENTRY, lastPushStatus: 'never', lastPushWarnings: [{ code: 'REPLACES_PENDING_DRAFT' }] });
+    db.overrides['cmsDraftPush.findFirst'] = async () => null;
+    await pushDraft({ draftId: 'd7', user: JANE });
+    expect(site.bodies).toHaveLength(4);
+  });
+});
