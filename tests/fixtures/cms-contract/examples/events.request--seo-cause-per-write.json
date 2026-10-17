@@ -1,0 +1,312 @@
+{
+  "contract": 1,
+  "siteId": "site_9f3c2a7b41d0",
+  "sentAt": "2026-10-21T10:00:05Z",
+  "events": [
+    {
+      "eventId": "01JAH1EV0000000000000000D1",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "seo.profile_changed",
+      "at": "2026-10-21T10:00:00Z",
+      "cursor": 301,
+      "actor": {
+        "kind": "human",
+        "id": "usr_1",
+        "name": "Dev Admin",
+        "role": "admin",
+        "source": "admin-panel"
+      },
+      "profile": {
+        "page_id": "P12",
+        "target": "pages:hot-tub-repair",
+        "entry_id": "01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+        "collection": "pages",
+        "path": "/spa-services/hot-tub-repair/",
+        "status": "in-review",
+        "primary_keyword": "hot tub repair",
+        "contract": {
+          "version": 3,
+          "locked": true,
+          "locked_on": "2026-10-20T14:02:00Z",
+          "locked_by": "Site editor",
+          "fingerprint": "c3a1"
+        },
+        "checks": {
+          "block": 0,
+          "warn": 2,
+          "info": 1,
+          "ran_at": "2026-10-20T14:05:00Z",
+          "variant": "draft"
+        },
+        "facts": {
+          "requested": 1,
+          "placeholder": 0,
+          "confirmed": 4
+        },
+        "open_proposals": 1,
+        "next_review_on": "2027-05-15",
+        "updated_at": "2026-10-21T10:00:00Z",
+        "profile_hash": "c82b422147cf36c3b4114253584f57ddf842adaa2eb9f38235d8b04f720a6266"
+      },
+      "changed": [
+        {
+          "field": "contract.title",
+          "owner": "os-until-locked"
+        },
+        {
+          "field": "contract.version",
+          "owner": "site"
+        }
+      ],
+      "cause": {
+        "source": "site-admin",
+        "actor": {
+          "kind": "human",
+          "id": "usr_1",
+          "name": "Dev Admin",
+          "role": "admin",
+          "source": "admin-panel"
+        }
+      }
+    },
+    {
+      "eventId": "01JAH1EV0000000000000000D2",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "seo.profile_changed",
+      "at": "2026-10-21T10:00:01Z",
+      "cursor": 302,
+      "actor": {
+        "kind": "human",
+        "id": "usr_svc",
+        "name": "Agency OS service",
+        "role": "editor",
+        "source": "api"
+      },
+      "profile": {
+        "page_id": "P12",
+        "target": "pages:hot-tub-repair",
+        "entry_id": "01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+        "collection": "pages",
+        "path": "/spa-services/hot-tub-repair/",
+        "status": "in-review",
+        "primary_keyword": "hot tub repair",
+        "contract": {
+          "version": 3,
+          "locked": true,
+          "locked_on": "2026-10-20T14:02:00Z",
+          "locked_by": "Site editor",
+          "fingerprint": "c3a1"
+        },
+        "checks": {
+          "block": 0,
+          "warn": 2,
+          "info": 1,
+          "ran_at": "2026-10-20T14:05:00Z",
+          "variant": "draft"
+        },
+        "facts": {
+          "requested": 1,
+          "placeholder": 0,
+          "confirmed": 4
+        },
+        "open_proposals": 1,
+        "next_review_on": "2027-05-15",
+        "updated_at": "2026-10-21T10:00:01Z",
+        "profile_hash": "c82b422147cf36c3b4114253584f57ddf842adaa2eb9f38235d8b04f720a6266"
+      },
+      "changed": [
+        {
+          "field": "lifecycle.status",
+          "owner": "site"
+        }
+      ],
+      "cause": {
+        "source": "os",
+        "osRequest": {
+          "route": "draft-upsert",
+          "idempotencyKey": "6f1c2b9e-3d4a-4b5c-8d7e-9f0a1b2c3d4e"
+        },
+        "actor": {
+          "kind": "human",
+          "id": "usr_svc",
+          "name": "Agency OS service",
+          "role": "editor",
+          "source": "api"
+        }
+      }
+    },
+    {
+      "eventId": "01JAH1EV0000000000000000D3",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "seo.profile_changed",
+      "at": "2026-10-21T11:00:00Z",
+      "cursor": 303,
+      "actor": {
+        "kind": "plugin",
+        "source": "plugin"
+      },
+      "profile": {
+        "page_id": "P12",
+        "target": "pages:hot-tub-repair",
+        "entry_id": "01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+        "collection": "pages",
+        "path": "/spa-services/hot-tub-repair/",
+        "status": "in-review",
+        "primary_keyword": "hot tub repair",
+        "contract": {
+          "version": 3,
+          "locked": true,
+          "locked_on": "2026-10-20T14:02:00Z",
+          "locked_by": "Site editor",
+          "fingerprint": "c3a1"
+        },
+        "checks": {
+          "block": 0,
+          "warn": 2,
+          "info": 1,
+          "ran_at": "2026-10-20T14:05:00Z",
+          "variant": "draft"
+        },
+        "facts": {
+          "requested": 1,
+          "placeholder": 0,
+          "confirmed": 4
+        },
+        "open_proposals": 1,
+        "next_review_on": "2027-05-15",
+        "updated_at": "2026-10-21T11:00:00Z",
+        "profile_hash": "c82b422147cf36c3b4114253584f57ddf842adaa2eb9f38235d8b04f720a6266"
+      },
+      "changed": [
+        {
+          "field": "lifecycle.status",
+          "owner": "site"
+        }
+      ],
+      "cause": {
+        "source": "publish",
+        "actor": {
+          "kind": "human",
+          "id": null,
+          "name": "Test PM",
+          "role": "PM",
+          "osUserId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90",
+          "source": "os"
+        }
+      }
+    },
+    {
+      "eventId": "01JAH1EV0000000000000000D4",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "seo.contract_locked",
+      "at": "2026-10-21T11:00:00Z",
+      "cursor": 304,
+      "actor": {
+        "kind": "plugin",
+        "source": "plugin"
+      },
+      "profile": {
+        "page_id": "P12",
+        "target": "pages:hot-tub-repair",
+        "entry_id": "01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+        "collection": "pages",
+        "path": "/spa-services/hot-tub-repair/",
+        "status": "in-review",
+        "primary_keyword": "hot tub repair",
+        "contract": {
+          "version": 3,
+          "locked": true,
+          "locked_on": "2026-10-20T14:02:00Z",
+          "locked_by": "Site editor",
+          "fingerprint": "c3a1"
+        },
+        "checks": {
+          "block": 0,
+          "warn": 2,
+          "info": 1,
+          "ran_at": "2026-10-20T14:05:00Z",
+          "variant": "draft"
+        },
+        "facts": {
+          "requested": 1,
+          "placeholder": 0,
+          "confirmed": 4
+        },
+        "open_proposals": 1,
+        "next_review_on": "2027-05-15",
+        "updated_at": "2026-10-21T11:00:00Z",
+        "profile_hash": "c82b422147cf36c3b4114253584f57ddf842adaa2eb9f38235d8b04f720a6266"
+      },
+      "cause": {
+        "source": "publish",
+        "actor": {
+          "kind": "human",
+          "id": null,
+          "name": "Test PM",
+          "role": "PM",
+          "osUserId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90",
+          "source": "os"
+        }
+      }
+    },
+    {
+      "eventId": "01JAH1EV0000000000000000D5",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "seo.profile_changed",
+      "at": "2026-10-22T06:00:00Z",
+      "cursor": 305,
+      "actor": {
+        "kind": "plugin",
+        "source": "plugin"
+      },
+      "profile": {
+        "page_id": "P12",
+        "target": "pages:hot-tub-repair",
+        "entry_id": "01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+        "collection": "pages",
+        "path": "/spa-services/hot-tub-repair/",
+        "status": "in-review",
+        "primary_keyword": "hot tub repair",
+        "contract": {
+          "version": 3,
+          "locked": true,
+          "locked_on": "2026-10-20T14:02:00Z",
+          "locked_by": "Site editor",
+          "fingerprint": "c3a1"
+        },
+        "checks": {
+          "block": 0,
+          "warn": 2,
+          "info": 1,
+          "ran_at": "2026-10-20T14:05:00Z",
+          "variant": "draft"
+        },
+        "facts": {
+          "requested": 1,
+          "placeholder": 0,
+          "confirmed": 4
+        },
+        "open_proposals": 1,
+        "next_review_on": "2027-05-15",
+        "updated_at": "2026-10-22T06:00:00Z",
+        "profile_hash": "c82b422147cf36c3b4114253584f57ddf842adaa2eb9f38235d8b04f720a6266"
+      },
+      "changed": [
+        {
+          "field": "lifecycle.status",
+          "owner": "site"
+        }
+      ],
+      "cause": {
+        "source": "scheduler",
+        "actor": {
+          "kind": "human",
+          "id": "usr_1",
+          "name": "Dev Admin",
+          "role": "admin",
+          "source": "admin-panel"
+        }
+      }
+    }
+  ]
+}

@@ -324,3 +324,34 @@ describe('v1.5.4 §30.10: seo.* cause decides drift (1.5.4+ sites)', () => {
     expect(calls('wpContentReview.count')).toHaveLength(1);
   });
 });
+
+describe('v1.5.5 §31.2/31.4: one seo.* event per write and cause', () => {
+  const perWrite = () => JSON.parse(readFileSync(path.join(here, '../../fixtures/cms-contract/examples', 'events.request--seo-cause-per-write.json'), 'utf8')).events;
+  const withNode = () => {
+    db.overrides['wpPage.findMany'] = async () => [{ id: 'wp1' }];
+    db.overrides['contentMapNode.findMany'] = async () => [{ id: 'n1', mapId: 'm1', wpPageId: 'wp1' }];
+  };
+
+  it('a person\'s admin change right before an OS push stays drift; our own write and the publishes do not', async () => {
+    withNode();
+    const [admin, own, publish, , scheduled] = perWrite();
+    for (const ev of perWrite()) expect(validateEvent(ev)).toBeNull();
+    db.overrides['cmsDraftPush.count'] = async (a) => (a.where.idempotencyKey === own.cause.osRequest.idempotencyKey ? 1 : 0);
+    await applySeoEvent('p1', admin, { siteRevision: '1.5.5' });
+    expect(calls('contentMapDrift.create')).toHaveLength(1);
+    expect(calls('contentMapDrift.create')[0].args.data.payload).toMatchObject({ fields: ['contract.title'], changedBy: 'Dev Admin' });
+    db.calls = [];
+    for (const ev of [own, publish, scheduled]) await applySeoEvent('p1', { ...ev, changed: [...ev.changed, { field: 'lifecycle.next_review_on', owner: 'os' }] }, { siteRevision: '1.5.5' });
+    expect(calls('contentMapDrift.create').length + calls('contentMapDrift.update').length).toBe(0);
+  });
+
+  it('an "os" cause without a request of ours (no osRequest, or a key we never sent) is not dropped', async () => {
+    withNode();
+    const own = perWrite()[1];
+    db.overrides['cmsDraftPush.count'] = async () => 0;
+    const field = [{ field: 'targeting.intent', owner: 'os' }];
+    await applySeoEvent('p1', { ...own, changed: field, cause: { source: 'os', actor: own.cause.actor } }, { siteRevision: '1.5.5' });
+    await applySeoEvent('p1', { ...own, changed: field }, { siteRevision: '1.5.5' });
+    expect(calls('contentMapDrift.create').length + calls('contentMapDrift.update').length).toBe(2);
+  });
+});

@@ -564,3 +564,14 @@ describe('v1.5.4 §30.7: lead photo 503 + Retry-After after a site restart', () 
     expect(busyRetryDelayMs('3600')).toBe(180_000);
   });
 });
+
+describe('v1.5.5 §31.1: serviceToken in the heartbeat body', () => {
+  it('a heartbeat that carries it refreshes the stored value', async () => {
+    const hb = ex('handshake.request--heartbeat-service-token');
+    db.overrides['project.findUnique'] = async () => ({ cmsHealth: { serviceToken: { usable: true, role: 'editor', requiredRole: 'editor', meetsRequiredRole: true, checkedAt: null, problems: [] } } });
+    await prismaCmsStore.recordHeartbeat({ projectId: 'p1', siteInfo: hb, contract: 1 });
+    const st = calls('project.update').at(-1).args.data.cmsHealth.serviceToken;
+    expect(st).toMatchObject({ usable: true, role: 'author', meetsRequiredRole: false });
+    expect(st.problems.map((p) => p.code)).toEqual(['ROLE_INSUFFICIENT', 'SCOPE_MISSING']);
+  });
+});

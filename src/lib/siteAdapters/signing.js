@@ -17,7 +17,7 @@ import crypto from 'node:crypto';
 export const CONTRACT_NAME = 'agency-os-bridge';
 export const CONTRACT_VERSION = 1;
 /** Errata level implemented by this OS (informational; X-AOS-Contract stays 1). */
-export const CONTRACT_REVISION = '1.5.4';
+export const CONTRACT_REVISION = '1.5.5';
 
 /**
  * True when the site's reported errata level (site-info / handshake `contractRevision`, e.g. "1.5.4") is at least
