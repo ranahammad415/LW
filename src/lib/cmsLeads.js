@@ -219,6 +219,10 @@ export async function eraseLocalLead(projectId, leadId, reason) {
 /** OS → site lead-erase (OWNER), then our own erasure path. */
 export async function eraseLead({ projectId, leadId, reason, user, log }) {
   if (!LEAD_ERASE_REASONS.includes(reason)) throw new CmsBridgeError({ status: 400, code: 'VALIDATION', message: 'Choose a reason.' });
+  // e2e O17: only a lead we know (by the site's leadId, not our row id) can be erased from the OS; an unknown id must
+  // never reach the site or leave a tombstone for a lead that does not exist.
+  const known = await prisma.cmsLead.findUnique({ where: { projectId_leadId: { projectId, leadId: String(leadId).slice(0, 64) } }, select: { id: true, erasedAt: true } });
+  if (!known) throw new CmsBridgeError({ status: 404, code: 'NOT_FOUND', message: 'Unknown lead.' });
   const { conn } = await loadEmdashConnection(projectId);
   const res = await emdashRoutes.leadErase(
     conn,

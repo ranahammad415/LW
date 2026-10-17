@@ -264,6 +264,13 @@ describe('leads (§26.1)', () => {
     expect(calls('cmsLead.update')[0].args.data.erasedReason).toBe('subject_request');
   });
 
+  it('e2e O17: erasing an unknown id (e.g. our row id) is a 404: no site call, no tombstone', async () => {
+    db.overrides['cmsLead.findUnique'] = async () => null;
+    await expect(eraseLead({ projectId: 'p1', leadId: '7d0c6c55-1111-4222-8333-944444444444', reason: 'subject_request', user: { id: 'o', name: 'Owner', role: 'OWNER' } })).rejects.toMatchObject({ code: 'NOT_FOUND', status: 404 });
+    expect(site.routes).toEqual([]);
+    expect(calls('cmsLead.create')).toHaveLength(0);
+  });
+
   it('a failing lead apply is logged with a code only (no lead data)', async () => {
     const logged = [];
     const store = {
