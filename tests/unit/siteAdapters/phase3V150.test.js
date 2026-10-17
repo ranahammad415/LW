@@ -65,7 +65,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { planWpHistoryMove, buildRekeyPlan, sanitizeMigratedFrom, sanitizeOutboxPause } from '../../../src/lib/siteAdapters/migration.js';
 import { validateLeadEvent, leadToRow } from '../../../src/lib/siteAdapters/leads.js';
-import { applyLeadEvent, copyLeadPhotos, eraseLocalLead, eraseLead, leadPhotoUrlAllowed, sweepOrphanLeadPhotos } from '../../../src/lib/cmsLeads.js';
+import { applyLeadEvent, copyLeadPhotos, eraseLocalLead, eraseLead, leadPhotoUrlAllowed, sweepOrphanLeadPhotos, busyRetryDelayMs } from '../../../src/lib/cmsLeads.js';
 import { pullSiteReports, sanitizeReport } from '../../../src/lib/cmsReports.js';
 import { previewMigration, applyMigration, mapHash, identityCheck, isMigrationActive } from '../../../src/lib/cmsMigration.js';
 import { applyEmdashContentEvent, mirrorEmdashReview, prismaCmsStore, isForeignWpPage } from '../../../src/lib/cmsStore.js';
@@ -206,7 +206,7 @@ describe('leads (§26.1)', () => {
     const w = writes('cmsLeadPhoto.updateMany');
     expect(w.find(([id, d]) => id === 'race' && d.storageName)).toBeTruthy();
     expect(readdirSync(process.env.CMS_LEADS_DIR).length).toBe(before); // the written copy was deleted again
-    expect(w.find(([id, d]) => id === 'down' && d.error === 'HTTP_503')[1]).not.toHaveProperty('sourceUrl');
+    expect(w.find(([id, d]) => id === 'down' && d.error === 'SITE_BUSY')[1]).not.toHaveProperty('sourceUrl'); // v1.5.4: 503 = site busy, link kept
     expect(w.find(([id, d]) => id === 'gone' && d.error === 'HTTP_404')[1]).toMatchObject({ sourceUrl: null });
   });
 
@@ -516,5 +516,40 @@ describe('v1.5.4 §30.1: service user role (site-info.serviceToken)', () => {
     expect(sanitizeServiceToken({ usable: true, role: 'boss', token: 'secret', problems: [{ code: 'NOPE' }, { code: 'SCOPE_MISSING', message: 'm' }] })).toEqual({
       usable: true, role: 'unknown', requiredRole: 'editor', meetsRequiredRole: null, checkedAt: null, problems: [{ code: 'SCOPE_MISSING', message: 'm' }],
     });
+  });
+});
+
+describe('v1.5.4 §30.7: lead photo 503 + Retry-After after a site restart', () => {
+  const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0, 0, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x02, 0x58, 0x03, 0x20, 0x03]);
+  const URL1 = 'https://s.example/_emdash/api/plugins/agency-os-bridge/lead-photo?sig=busy';
+  const LEAD = { erasedAt: null, project: { wpUrl: 'https://s.example' } };
+
+  it('keeps the link (SITE_BUSY), retries the lead after Retry-After, then copies; never past the retry budget', async () => {
+    const future = new Date(Date.now() + 86_400_000);
+    let busy = true;
+    db.overrides['cmsLeadPhoto.findMany'] = async () => [{ id: 'phB', sourceUrl: URL1, sourceExpiresAt: future, error: null, lead: LEAD }];
+    const fetchImpl = async () => (busy ? new Response('restarting', { status: 503, headers: { 'retry-after': '60' } }) : new Response(JPEG, { status: 200 }));
+    const scheduled = [];
+    const schedule = (fn, ms) => scheduled.push({ fn, ms });
+    expect(await copyLeadPhotos('l1', { fetchImpl, busyRetries: 2, schedule })).toBe(0);
+    const failed = calls('cmsLeadPhoto.updateMany').map((c) => c.args.data).find((d) => d.error === 'SITE_BUSY');
+    expect(failed).toEqual({ error: 'SITE_BUSY' }); // sourceUrl kept
+    expect(scheduled).toHaveLength(1);
+    expect(scheduled[0].ms).toBe(60_000);
+    busy = false;
+    await scheduled[0].fn();
+    expect(calls('cmsLeadPhoto.updateMany').some((c) => c.args.data.storageName)).toBe(true);
+    // budget: with no retries left nothing more is scheduled
+    busy = true;
+    scheduled.length = 0;
+    await copyLeadPhotos('l1', { fetchImpl, busyRetries: 0, schedule });
+    expect(scheduled).toHaveLength(0);
+    // the hourly run (no lead id) never schedules; an expired link is still dropped
+    db.overrides['cmsLeadPhoto.findMany'] = async () => [{ id: 'phE', sourceUrl: URL1, sourceExpiresAt: new Date(Date.now() - 1000), error: 'SITE_BUSY', lead: LEAD }];
+    await copyLeadPhotos(null, { fetchImpl, busyRetries: 3, schedule });
+    expect(scheduled).toHaveLength(0);
+    expect(calls('cmsLeadPhoto.updateMany').at(-1).args.data).toEqual({ sourceUrl: null, error: 'EXPIRED' });
+    expect(busyRetryDelayMs(undefined)).toBe(60_000);
+    expect(busyRetryDelayMs('3600')).toBe(180_000);
   });
 });

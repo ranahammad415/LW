@@ -73,7 +73,7 @@ export async function applyLeadEvent(project, ev) {
       const created = await prisma.cmsLead.create({ data: { projectId: project.id, ...row } });
       for (const p of photos) await prisma.cmsLeadPhoto.create({ data: { leadRowId: created.id, ...p } });
       await bumpLeadMetrics(project.id, row).catch(() => {});
-      if (photos.some((p) => p.sourceUrl)) copyLeadPhotos(created.id).catch(() => {});
+      if (photos.some((p) => p.sourceUrl)) copyLeadPhotos(created.id, { busyRetries: LEAD_PHOTO_BUSY_RETRIES }).catch(() => {});
       return 'applied';
     }
     if (ev.type === 'lead.erased') {
@@ -107,7 +107,21 @@ function claimIsLive(error, now) {
  * result is written only while the row is still uncopied: when the lead was erased meanwhile (row gone), the file just
  * written is deleted again, so an erase during a copy never leaves PII on disk.
  */
-export async function copyLeadPhotos(leadRowId = null, { fetchImpl = guardedFetch, now = new Date(), limit = 25, env = process.env } = {}) {
+/**
+ * v1.5.4 §30.7: right after a site restart the photo route answers 503 + Retry-After (≈60 s) for a few minutes. That is
+ * retryable: the link is kept (the 7-day expiry rule still applies) and a per-lead copy tries again after Retry-After,
+ * at most LEAD_PHOTO_BUSY_RETRIES times (≈10 min); later the hourly housekeeping picks it up.
+ */
+export const LEAD_PHOTO_BUSY_RETRIES = 5;
+const BUSY_DELAY_MAX_SEC = 180;
+export function busyRetryDelayMs(retryAfter) {
+  const n = Number(retryAfter);
+  const sec = Number.isFinite(n) && n > 0 ? n : 60;
+  return Math.min(sec, BUSY_DELAY_MAX_SEC) * 1000;
+}
+
+export async function copyLeadPhotos(leadRowId = null, { fetchImpl = guardedFetch, now = new Date(), limit = 25, env = process.env, busyRetries = 0, schedule = (fn, ms) => setTimeout(fn, ms).unref?.() } = {}) {
+  let busyDelay = null;
   const rows = await prisma.cmsLeadPhoto.findMany({
     where: { ...(leadRowId ? { leadRowId } : {}), copiedAt: null, sourceUrl: { not: null } },
     include: { lead: { select: { erasedAt: true, project: { select: { wpUrl: true } } } } },
@@ -135,6 +149,10 @@ export async function copyLeadPhotos(leadRowId = null, { fetchImpl = guardedFetc
         if (err?.code === 'RESPONSE_TOO_LARGE') throw Object.assign(new Error('size'), { code: 'TOO_LARGE' });
         throw Object.assign(new Error('fetch'), { code: 'FETCH_FAILED' });
       }
+      if (res.status === 503) {
+        busyDelay = Math.max(busyDelay || 0, busyRetryDelayMs(res.headers?.get?.('retry-after')));
+        throw Object.assign(new Error('busy'), { code: 'SITE_BUSY' });
+      }
       if (!res.ok) throw Object.assign(new Error('fetch'), { code: res.status >= 300 && res.status < 400 ? 'REDIRECT' : `HTTP_${res.status}` });
       const buf = Buffer.from(await res.arrayBuffer());
       if (buf.length > LEAD_PHOTO_MAX_BYTES) throw Object.assign(new Error('size'), { code: 'TOO_LARGE' });
@@ -160,6 +178,9 @@ export async function copyLeadPhotos(leadRowId = null, { fetchImpl = guardedFetc
         .updateMany({ where: { id: ph.id, copiedAt: null, error: claimValue }, data: { error: code, ...(PERMANENT_PHOTO_ERRORS.has(code) ? { sourceUrl: null } : {}) } })
         .catch(() => {});
     }
+  }
+  if (busyDelay && leadRowId && busyRetries > 0) {
+    schedule(() => copyLeadPhotos(leadRowId, { fetchImpl, limit, env, busyRetries: busyRetries - 1, schedule }).catch(() => {}), busyDelay);
   }
   return copied;
 }
