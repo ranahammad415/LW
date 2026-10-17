@@ -595,7 +595,14 @@ async function findParentNodeId(mapId, segments, nodesByPath) {
   return dbRoot?.id || null;
 }
 
-async function queueDrift(mapId, drift) {
+/** Fields of a drift payload that make it "news" when they change (volatile ones like wordCount / modifiedAt don't). */
+const DRIFT_NEWS_KEYS = ['from', 'to', 'title', 'url', 'path', 'status', 'nodeName'];
+
+/**
+ * Queue (or refresh) one pending drift. Returns true when it is news for the people notified: a new drift row, or a
+ * pending one whose meaningful payload changed (e2e O23). A drift that is merely still pending returns false.
+ */
+export async function queueDrift(mapId, drift) {
   const existing = await prisma.contentMapDrift.findFirst({
     where: {
       mapId,
@@ -604,15 +611,19 @@ async function queueDrift(mapId, drift) {
       nodeId: drift.nodeId ?? null,
       wpPageId: drift.wpPageId ?? null,
     },
-    select: { id: true },
+    select: { id: true, payload: true },
   });
   if (existing) {
-    return prisma.contentMapDrift.update({
+    await prisma.contentMapDrift.update({
       where: { id: existing.id },
       data: { payload: drift.payload ?? undefined, confidence: drift.confidence ?? null },
     });
+    const before = existing.payload && typeof existing.payload === 'object' ? existing.payload : {};
+    const after = drift.payload && typeof drift.payload === 'object' ? drift.payload : {};
+    return DRIFT_NEWS_KEYS.some((k) => k in after && JSON.stringify(after[k] ?? null) !== JSON.stringify(before[k] ?? null));
   }
-  return prisma.contentMapDrift.create({ data: { mapId, ...drift } });
+  await prisma.contentMapDrift.create({ data: { mapId, ...drift } });
+  return true;
 }
 
 /**
@@ -649,6 +660,11 @@ export async function reconcileMap(mapId, { userId = null, notify = true } = {})
 
   const stats = { published: 0, newContent: 0, removed: 0, urlChanged: 0, titleChanged: 0, statusChanged: 0, likelyMatch: 0 };
   const publishedNodes = [];
+  // e2e O23: notify for news only (new drift rows, or a pending one that changed), never for drift still pending.
+  let newsCount = 0;
+  const queue = async (drift) => {
+    if (await queueDrift(mapId, drift)) newsCount += 1;
+  };
 
   // EmDash (e2e O20): an entry the OS created from a node's draft belongs to THAT node. The pushed node is no longer
   // PLANNED (IN_PIPELINE) and its planned path may differ from the site's, so path / title matching missed it and
@@ -721,7 +737,7 @@ export async function reconcileMap(mapId, { userId = null, notify = true } = {})
       }
       if (!nowLive && wasLive) {
         stats.statusChanged++;
-        await queueDrift(mapId, {
+        await queue({
           nodeId: linked.id,
           wpPageId: item.page.id,
           driftType: 'STATUS_CHANGED',
@@ -745,7 +761,7 @@ export async function reconcileMap(mapId, { userId = null, notify = true } = {})
       }
       if (linkedPath && linkedPath !== item.path && !ownUrl) {
         stats.urlChanged++;
-        await queueDrift(mapId, {
+        await queue({
           nodeId: linked.id,
           wpPageId: item.page.id,
           driftType: 'URL_CHANGED',
@@ -754,7 +770,7 @@ export async function reconcileMap(mapId, { userId = null, notify = true } = {})
       }
       if (linked.name !== item.page.title && item.page.title && !ownTitle) {
         stats.titleChanged++;
-        await queueDrift(mapId, {
+        await queue({
           nodeId: linked.id,
           wpPageId: item.page.id,
           driftType: 'TITLE_CHANGED',
@@ -794,7 +810,7 @@ export async function reconcileMap(mapId, { userId = null, notify = true } = {})
 
     if (candidate && candidate.score >= 0.6) {
       stats.likelyMatch++;
-      await queueDrift(mapId, {
+      await queue({
         nodeId: candidate.node.id,
         wpPageId: item.page.id,
         driftType: 'LIKELY_MATCH',
@@ -843,7 +859,7 @@ export async function reconcileMap(mapId, { userId = null, notify = true } = {})
     }
 
     stats.newContent++;
-    await queueDrift(mapId, {
+    await queue({
       wpPageId: item.page.id,
       driftType: 'NEW_CONTENT',
       payload: {
@@ -860,10 +876,21 @@ export async function reconcileMap(mapId, { userId = null, notify = true } = {})
 
   // Mapped WordPress nodes whose page has vanished from the inventory.
   const liveWpPageIds = new Set(inventory.items.map((i) => i.page.id));
+  // e2e O23: a pending drift about a page that is gone (trashed / deleted on the site) is obsolete: close it. REMOVED
+  // drifts are about exactly that and stay; PROFILE_CHANGED drifts are owned by the SEO profile mirror.
+  const pendingAboutPages = await prisma.contentMapDrift.findMany({
+    where: { mapId, status: 'PENDING', wpPageId: { not: null }, driftType: { in: ['NEW_CONTENT', 'LIKELY_MATCH', 'URL_CHANGED', 'TITLE_CHANGED', 'STATUS_CHANGED'] } },
+    select: { id: true, wpPageId: true },
+  });
+  const obsolete = pendingAboutPages.filter((d) => !liveWpPageIds.has(d.wpPageId)).map((d) => d.id);
+  if (obsolete.length) {
+    await prisma.contentMapDrift.updateMany({ where: { id: { in: obsolete }, status: 'PENDING' }, data: { status: 'OBSOLETE', resolvedAt: new Date() } });
+    stats.obsolete = obsolete.length;
+  }
   for (const node of nodes) {
     if (!node.wpPageId || liveWpPageIds.has(node.wpPageId)) continue;
     stats.removed++;
-    await queueDrift(mapId, {
+    await queue({
       nodeId: node.id,
       driftType: 'REMOVED',
       payload: { nodeName: node.name, url: node.url, slug: node.slug },
@@ -889,7 +916,7 @@ export async function reconcileMap(mapId, { userId = null, notify = true } = {})
   const pendingCount =
     stats.newContent + stats.removed + stats.urlChanged + stats.titleChanged + stats.statusChanged + stats.likelyMatch;
 
-  if (notify && (publishedNodes.length || pendingCount)) {
+  if (notify && (publishedNodes.length || newsCount)) {
     try {
       const { project, recipientIds } = await resolveContentMapRecipients(map.projectId);
       for (const { node, item } of publishedNodes) {
@@ -906,14 +933,14 @@ export async function reconcileMap(mapId, { userId = null, notify = true } = {})
           metadata: { mapId, projectId: map.projectId, nodeId: node.id },
         });
       }
-      if (pendingCount) {
+      if (newsCount) {
         await notifyContentMap({
           slug: 'content_map_site_drift',
           recipientIds,
           variables: {
             mapName: map.name,
             projectName: project?.name || '',
-            driftCount: String(pendingCount),
+            driftCount: String(newsCount),
           },
           actionUrl: `/portal/pm/content-profile/${map.projectId}`,
           metadata: { mapId, projectId: map.projectId },

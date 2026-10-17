@@ -2148,7 +2148,7 @@ model ContentMapDrift {
   driftType    String    @db.VarChar(30)
   payload      Json?
   confidence   Float?
-  /// PENDING | ADOPTED | MERGED | IGNORED
+  /// PENDING | ADOPTED | MERGED | IGNORED | OBSOLETE (auto-closed: its page left the site)
   status       String    @default("PENDING") @db.VarChar(20)
   resolvedById String?
   resolvedAt   DateTime?

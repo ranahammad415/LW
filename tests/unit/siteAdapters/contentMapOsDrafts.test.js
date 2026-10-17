@@ -114,3 +114,31 @@ describe('e2e O7: the OS’s own pushes are not site drift', () => {
     expect(calls('contentMapDrift.create').map((c) => c.args.data.driftType)).toContain('TITLE_CHANGED');
   });
 });
+
+describe('e2e O23: drift notifications only for news; drift about a gone page is closed', () => {
+  const node = { id: 'n1', name: 'Heater repair', url: 'https://oasispoolspas.com/spa-services/heater-repair/', slug: '/spa-services/heater-repair/', lifecycle: 'IN_PIPELINE', wpPageId: 'wp-new', source: 'PLANNED' };
+  const page = { ...PAGE, title: 'Edited in the site admin' };
+  const driftNotices = () => notified.filter((n) => n.slug === 'content_map_site_drift');
+
+  it('a drift that is merely still pending (same payload) does not notify again; a changed one does', async () => {
+    setup({ nodes: [node], pages: [page], drafts: [] });
+    const pendingFor = (to) => async (a) => (a.where.driftType === 'TITLE_CHANGED' ? { id: 'd-t', payload: { from: node.name, to } } : a.where.driftType === 'URL_CHANGED' ? { id: 'd-u', payload: { from: '/spa-services/heater-repair/', to: '/spa-services/hot-tub-heater-repair/', title: page.title } } : null);
+    db.overrides['contentMapDrift.findFirst'] = pendingFor(page.title);
+    await reconcileMap('m1', { notify: true });
+    expect(driftNotices()).toHaveLength(0);
+    expect(calls('contentMapDrift.update').length).toBeGreaterThan(0); // refreshed, not re-announced
+    db.overrides['contentMapDrift.findFirst'] = pendingFor('An older title');
+    await reconcileMap('m1', { notify: true });
+    expect(driftNotices()).toHaveLength(1);
+    expect(driftNotices()[0].variables.driftCount).toBe('1');
+  });
+
+  it('pending drift whose page left the inventory (trashed / deleted) becomes OBSOLETE; REMOVED drift stays', async () => {
+    setup({ nodes: [node], pages: [PAGE], drafts: [] });
+    db.overrides['contentMapDrift.findMany'] = async (a) => (a.where.status === 'PENDING' && a.where.wpPageId ? [{ id: 'd-gone', wpPageId: 'wp-trashed' }, { id: 'd-live', wpPageId: 'wp-new' }] : []);
+    await reconcileMap('m1', { notify: false });
+    const close = calls('contentMapDrift.updateMany').find((c) => c.args.data.status === 'OBSOLETE');
+    expect(close.args.where).toEqual({ id: { in: ['d-gone'] }, status: 'PENDING' });
+    expect(calls('contentMapDrift.findMany').find((c) => c.args.where.driftType).args.where.driftType.in).not.toContain('REMOVED');
+  });
+});
