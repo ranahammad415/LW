@@ -97,6 +97,7 @@ import { initSentry } from './lib/sentry.js';
 import { redactedRequestSerializer } from './lib/logRedaction.js';
 import { redactResponseSecrets, responseDropKeys } from './lib/redactSecrets.js';
 import { registerApiTokenHooks } from './lib/apiTokens.js';
+import { purgeExpiredIdempotencyKeys } from './lib/idempotency.js';
 import { runWeeklyClientDigest } from './lib/weeklyDigest.js';
 import { runScheduledTaskSync } from './lib/dataImport/scheduledSync.js';
 import { runInterviewSchedulerTick, isSchedulerEnabled, isLeader } from './lib/interviewScheduler.js';
@@ -398,6 +399,18 @@ try {
     });
     app.log.info({ leader: isLeader() }, 'Interview scheduler enabled');
   }
+
+  // SEO Engine retention (OS-05 / OS-14): hourly purge of expired Idempotency-Key rows. Leader only
+  // (NODE_APP_INSTANCE 0 / unset); the deletes are plain conditional deleteMany calls, so a double run is harmless.
+  cron.schedule('23 * * * *', async () => {
+    if (!isLeader()) return;
+    try {
+      const idempotencyKeys = await purgeExpiredIdempotencyKeys();
+      if (idempotencyKeys) app.log.info({ idempotencyKeys }, 'Engine retention purge complete');
+    } catch (err) {
+      app.log.error({ err }, 'Engine retention purge failed');
+    }
+  });
 
   // Daily notification digest ("You have N unread notifications" email) —
   // DISABLED per request. These digest emails are no longer sent. The in-app

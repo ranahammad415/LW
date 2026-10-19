@@ -168,6 +168,26 @@ model ApiToken {
   @@map("apitoken")
 }
 
+/// Idempotency-Key records (SEO Engine OS-05): one row per (user, route, key). Same key + same canonical request hash
+/// replays the stored status/body; a different hash is a 409. Rows expire after 7 days (leader-only hourly purge).
+model IdempotencyKey {
+  id           String   @id @default(uuid())
+  userId       String   @db.VarChar(191)
+  route        String   @db.VarChar(100)
+  key          String   @db.VarChar(255)
+  requestHash  String   @db.VarChar(64)
+  /// pending | done
+  state        String   @default("pending") @db.VarChar(16)
+  statusCode   Int?
+  responseBody String?  @db.LongText
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
+
+  @@unique([userId, route, key])
+  @@index([expiresAt])
+  @@map("idempotencykey")
+}
+
 model SystemAlert {
   id        String   @id @default(uuid())
   userId    String
@@ -763,6 +783,8 @@ model Task {
   clientVisible Boolean      @default(true)
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @default(now()) @updatedAt
+  /// Set when status becomes COMPLETED, cleared when it leaves COMPLETED (SEO Engine OS-07).
+  completedAt   DateTime?
 
   parentTaskId     String?
   wpAccessPresetId String?

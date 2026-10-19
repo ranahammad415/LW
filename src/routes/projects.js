@@ -432,6 +432,8 @@ export async function projectRoutes(app) {
       const sanitizeProject = (p) => ({
         ...p,
         wpApiKey: p.wpApiKey != null ? '[REDACTED]' : null,
+        // OS-07: assigneeId, updatedAt, completedAt, workCycleId on every task (recursively).
+        tasks: Array.isArray(p.tasks) ? p.tasks.map(withTaskReadFields) : p.tasks,
       });
 
       if (user.role === 'OWNER') {

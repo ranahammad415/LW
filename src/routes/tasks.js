@@ -12,7 +12,10 @@ import { resolveUploadBaseUrl, validateUpload, sanitizeUploadFilename, MAX_UPLOA
 import { resolveCycle, ensureCurrentCycle } from '../lib/workCycle.js';
 import { checkAgentStatusChange } from '../lib/agentPolicy.js';
 import { isWorkerApiToken, tokenProjectIds } from '../lib/apiTokens.js';
-import { pruneTasksForWorker, withTaskReadFields } from '../lib/taskReadFields.js';
+import { pruneTasksForWorker, withTaskReadFields, completedAtPatch } from '../lib/taskReadFields.js';
+import { idempotency } from '../lib/idempotency.js';
+
+const TASK_STATUSES = new Set(['TO_DO', 'IN_PROGRESS', 'NEEDS_REVIEW', 'REVISION_NEEDED', 'BLOCKED', 'WAITING_DEPENDENCY', 'COMPLETED', 'CANCELLED']);
 
 /**
  * Resolve a `workCycleId` where-clause from request query params.
@@ -56,6 +59,11 @@ function buildTaskWhere(user) {
 }
 
 export async function taskRoutes(app) {
+  // Idempotency-Key support (SEO Engine OS-05), keys scoped per user + route.
+  const idemCreate = idempotency('POST /api/tasks');
+  const idemStatus = idempotency('PATCH /api/tasks/:id/status');
+  const idemComment = idempotency('POST /api/tasks/:id/comments');
+
   app.get(
     '/',
     {
@@ -91,13 +99,31 @@ export async function taskRoutes(app) {
         return reply.status(403).send({ message: 'Forbidden' });
       }
 
+      // OS-08: ?assignee=me → only the caller's own assigned tasks (any level, flat); ?status=A,B filters status.
+      const assigneeMe = request.query?.assignee === 'me';
+      if (request.query?.assignee !== undefined && !assigneeMe) {
+        return reply.status(400).send({ message: 'assignee only supports "me"' });
+      }
+      let statusWhere = {};
+      if (typeof request.query?.status === 'string' && request.query.status.trim()) {
+        const statuses = [...new Set(request.query.status.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean))];
+        if (statuses.some((s) => !TASK_STATUSES.has(s))) {
+          return reply.status(400).send({ message: 'Unknown status in status filter' });
+        }
+        statusWhere = { status: { in: statuses } };
+      }
+
       const cycleWhere = await buildCycleWhere(request.query);
       // Project-restricted API tokens only list tasks of their allowlisted projects.
       const allowedProjects = tokenProjectIds(request);
       const projectWhere = allowedProjects ? { projectId: { in: allowedProjects } } : {};
+      const mineOnly = { assignees: { some: { id: user.id } } };
+      const scopeWhere = assigneeMe
+        ? { AND: [where, mineOnly] }
+        : { ...where, parentTaskId: null };
 
       const tasks = await prisma.task.findMany({
-        where: { ...where, ...cycleWhere, ...projectWhere, parentTaskId: null },
+        where: { ...scopeWhere, ...cycleWhere, ...projectWhere, ...statusWhere },
         orderBy: [{ status: 'asc' }, { dueDate: 'asc' }],
         include: {
           project: {
@@ -111,19 +137,24 @@ export async function taskRoutes(app) {
           dependsOnTasks: {
             select: { id: true, status: true },
           },
-          subTasks: {
-            orderBy: [{ status: 'asc' }, { dueDate: 'asc' }],
-            include: {
-              assignees: { select: { id: true, name: true, email: true, avatarUrl: true } },
-              dependsOnTasks: { select: { id: true, status: true } },
-            },
-          },
+          // assignee=me returns a flat list (assigned sub-tasks appear as their own rows, with parentTaskId).
+          ...(assigneeMe
+            ? {}
+            : {
+                subTasks: {
+                  orderBy: [{ status: 'asc' }, { dueDate: 'asc' }],
+                  include: {
+                    assignees: { select: { id: true, name: true, email: true, avatarUrl: true } },
+                    dependsOnTasks: { select: { id: true, status: true } },
+                  },
+                },
+              }),
         },
       });
 
       // Worker API tokens never see sub-tasks they are not assigned to (OS-02).
-      const visible = isWorkerApiToken(request) ? pruneTasksForWorker(tasks, user.id) : tasks;
-      return reply.send(visible);
+      const visible = isWorkerApiToken(request) && !assigneeMe ? pruneTasksForWorker(tasks, user.id) : tasks;
+      return reply.send(visible.map(withTaskReadFields));
     }
   );
 
@@ -177,6 +208,8 @@ export async function taskRoutes(app) {
     '/',
     {
       onRequest: [app.verifyJwt],
+      preHandler: idemCreate.preHandler,
+      onSend: idemCreate.onSend,
       schema: {
         body: {
           type: 'object',
@@ -297,6 +330,7 @@ export async function taskRoutes(app) {
             ? { connect: validDependencyIds.map((id) => ({ id })) }
             : undefined,
         },
+        include: { assignees: { select: { id: true, name: true, email: true, avatarUrl: true } } },
       });
 
       // Log task_created activity
@@ -315,7 +349,7 @@ export async function taskRoutes(app) {
         }).catch(() => {});
       }
 
-      return reply.status(201).send(task);
+      return reply.status(201).send(withTaskReadFields(task));
     }
   );
 
@@ -514,6 +548,8 @@ Return the id of the single most restrictive preset that still allows this task 
     '/:id/status',
     {
       onRequest: [app.verifyJwt],
+      preHandler: idemStatus.preHandler,
+      onSend: idemStatus.onSend,
       schema: {
         params: {
           type: 'object',
@@ -589,7 +625,7 @@ Return the id of the single most restrictive preset that still allows this task 
 
       const updated = await prisma.task.update({
         where: { id },
-        data: { status },
+        data: { status, ...completedAtPatch(status, task.status) },
       });
 
       await prisma.taskActivityLog.create({
@@ -645,7 +681,15 @@ Return the id of the single most restrictive preset that still allows this task 
         }
       }
 
-      return reply.send({ id: updated.id, status: updated.status });
+      // OS-07 fields are additive; the UI only reads id/status.
+      return reply.send({
+        id: updated.id,
+        status: updated.status,
+        updatedAt: updated.updatedAt ?? null,
+        completedAt: updated.completedAt ?? null,
+        workCycleId: updated.workCycleId ?? null,
+        assigneeId: task.assignees[0]?.id ?? null,
+      });
     }
   );
 
@@ -1087,6 +1131,8 @@ Return the id of the single most restrictive preset that still allows this task 
     '/:id/comments',
     {
       onRequest: [app.verifyJwt],
+      preHandler: idemComment.preHandler,
+      onSend: idemComment.onSend,
       schema: {
         params: {
           type: 'object',

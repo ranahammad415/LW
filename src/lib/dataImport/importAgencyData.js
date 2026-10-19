@@ -2,6 +2,7 @@ import { prisma } from '../prisma.js';
 import { findProjectByMatch } from './resolveProject.js';
 import { resolveTeamRoster, resolveAssignee } from './resolveTeam.js';
 import { ensureCurrentCycle } from '../workCycle.js';
+import { syncCompletedAt } from '../taskReadFields.js';
 import {
   TASKTYPE_TO_PRESET,
   VALID_TASK_TYPES,
@@ -178,6 +179,7 @@ export async function importAgencyData(data, options = {}) {
             taskType,
             priority: 'MEDIUM',
             status: stepStatus,
+            ...(stepStatus === 'COMPLETED' ? { completedAt: new Date() } : {}),
             workCycleId,
             milestone: milestone !== '(Unspecified)' ? milestone : null,
             clientVisible,
@@ -280,6 +282,7 @@ export async function importAgencyData(data, options = {}) {
                 taskType,
                 priority,
                 status: subStatus,
+                ...(subStatus === 'COMPLETED' ? { completedAt: new Date() } : {}),
                 workCycleId,
                 milestone: milestone !== '(Unspecified)' ? milestone : null,
                 description: buildDescription(task),
@@ -460,6 +463,7 @@ async function applyProjectUpdates(updates, refToTaskId, team, fallbackUserId, d
             where: { id: taskId },
             data: { status: newStatus },
           });
+          await syncCompletedAt(prisma, taskId, newStatus);
           await prisma.taskActivityLog.create({
             data: {
               taskId,
@@ -507,6 +511,7 @@ async function rollupParentStatuses(taskIds) {
       where: { id: task.parentTaskId },
       data: { status: parentStatus },
     });
+    await syncCompletedAt(prisma, task.parentTaskId, parentStatus);
 
     const grandparent = await prisma.task.findUnique({
       where: { id: task.parentTaskId },

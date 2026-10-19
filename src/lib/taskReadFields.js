@@ -26,6 +26,25 @@ export function pruneTasksForWorker(tasks, userId) {
 }
 
 /**
+ * OS-07: Task.completedAt follows the status. Returns the data patch for an update from prevStatus to nextStatus:
+ * entering COMPLETED stamps now, staying COMPLETED keeps the stamp, leaving COMPLETED clears it.
+ */
+export function completedAtPatch(nextStatus, prevStatus) {
+  if (nextStatus === 'COMPLETED') return prevStatus === 'COMPLETED' ? {} : { completedAt: new Date() };
+  return { completedAt: null };
+}
+
+/**
+ * Same rule when the previous status is unknown (bulk/import paths): stamps only when not yet stamped.
+ */
+export async function syncCompletedAt(db, taskId, status) {
+  if (status === 'COMPLETED') {
+    return db.task.updateMany({ where: { id: taskId, completedAt: null }, data: { completedAt: new Date() } });
+  }
+  return db.task.updateMany({ where: { id: taskId, NOT: { completedAt: null } }, data: { completedAt: null } });
+}
+
+/**
  * OS-07: every task object carries assigneeId (first assignee or null; `assignees` stays), updatedAt,
  * completedAt (nullable) and workCycleId. Applied recursively to subTasks.
  */
