@@ -107,6 +107,7 @@ beforeEach(() => {
       return row ? { ...row, user: { ...USERS[row.userId] } } : null;
     },
     'user.findUnique': async ({ where }) => (USERS[where.id] ? { ...USERS[where.id] } : null),
+    'user.findMany': async ({ where }) => (where.id?.in || []).filter((id) => USERS[id] && USERS[id].role !== 'CLIENT').map((id) => ({ id })),
     'project.findUnique': async () => ({ ...PROJECT }),
     'task.findUnique': async () => ({ ...TASK }),
     'task.create': async ({ data }) => {
@@ -272,5 +273,35 @@ describe('task read fields (OS-07) and assignee listing (OS-08)', () => {
     expect(data.status).toBe('COMPLETED');
     expect(data.completedAt).toBeInstanceOf(Date);
     expect(res.json()).toHaveProperty('completedAt');
+  });
+});
+
+describe('notification rule (OS-10)', () => {
+  it('Engine-created tasks can only be assigned to staff, so clients are never notified', async () => {
+    const { notify } = await import('../../../src/lib/notificationService.js');
+    notify.mockClear();
+    const CLIENT_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    USERS[CLIENT_ID] = { id: CLIENT_ID, role: 'CLIENT', name: 'Client', isActive: true, tokenVersion: 0 };
+    const bad = await app.inject({ method: 'POST', url: '/api/tasks', headers: bearer(issue(ENGINE)), payload: { ...createBody, assigneeIds: [CLIENT_ID] } });
+    expect(bad.statusCode).toBe(400);
+    expect(notify).not.toHaveBeenCalled();
+    const ok = await app.inject({ method: 'POST', url: '/api/tasks', headers: bearer(issue(ENGINE)), payload: createBody });
+    expect(ok.statusCode).toBe(201);
+    const call = notify.mock.calls.find(([n]) => n.slug === 'task_created')[0];
+    expect(call.recipientIds).toEqual([WORKER.id]);
+  });
+
+  it('an agent comment notifies the same people as a human comment (assignees + project lead PM, minus the author)', async () => {
+    const { notify } = await import('../../../src/lib/notificationService.js');
+    notify.mockClear();
+    await app.inject({ method: 'POST', url: '/api/tasks/t1/comments', headers: bearer(issue(WORKER)), payload: { content: 'Agent update' } });
+    const agentCall = notify.mock.calls.find(([n]) => n.slug === 'task_comment_added')[0];
+    notify.mockClear();
+    db.overrides['user.findUnique'] = async ({ where }) => (where.id === WORKER.id ? { ...WORKER, isAgent: false } : USERS[where.id] || null);
+    await app.inject({ method: 'POST', url: '/api/tasks/t1/comments', headers: bearer(jwt.sign({ sub: WORKER.id, role: 'TEAM_MEMBER' }, SECRET)), payload: { content: 'Human update' } });
+    const humanCall = notify.mock.calls.find(([n]) => n.slug === 'task_comment_added')[0];
+    expect(agentCall.recipientIds).toEqual(humanCall.recipientIds);
+    expect(agentCall.recipientIds).toEqual([ENGINE.id]);
+    expect(JSON.stringify(agentCall)).not.toContain('isAgent');
   });
 });

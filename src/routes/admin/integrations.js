@@ -6,7 +6,6 @@ import {
   exchangeAgencyCode,
   saveAgencyConnection,
   getAgencyConnectionStatus,
-  disconnectAgencyConnection,
   getAgencyOAuth2Client,
   getGscAuth,
   isAgencyGoogleOAuthConfigured,
@@ -15,6 +14,7 @@ import { runGscSync } from '../../lib/gscSync.js';
 import { runNativeAnalyticsSync } from '../../lib/analytics/runNativeSync.js';
 import { normalizeGmbIdentifier } from '../../lib/analytics/gmbIdentifier.js';
 import { runConnectionHealth, probeProjectGmbDfs } from '../../lib/analytics/connectionHealth.js';
+import { DisconnectError, disconnectAgencyGoogle, isConsentStale } from '../../lib/analytics/googleDisconnect.js';
 
 const accessSecret = process.env.JWT_ACCESS_SECRET;
 const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
@@ -82,6 +82,8 @@ export async function adminIntegrationsRoutes(app) {
     try {
       const payload = jwt.verify(String(state), accessSecret);
       if (payload.purpose !== 'agency_google') throw new Error('Invalid state');
+      // OS-18: a consent started before the latest agency disconnect cannot reconnect.
+      if (await isConsentStale(payload.iat)) throw new Error('stale_consent: start Connect Google again');
       const exchanged = await exchangeAgencyCode(String(code));
       await saveAgencyConnection({
         refreshToken: exchanged.refreshToken,
@@ -98,13 +100,27 @@ export async function adminIntegrationsRoutes(app) {
     }
   });
 
-  // ── Disconnect ─────────────────────────────────────────────────────────
+  // ── Disconnect (agency-wide; SEO Engine OS-18) ─────────────────────────
+  // Body {scope:'entire-agency-google', confirmAgencyWide:true}. Revokes the refresh token at Google and wipes the
+  // stored credential. 200 when Google confirmed the revocation, 202 when it could not be confirmed (credential still
+  // wiped locally; the owner must remove the app from the Google account).
   app.post(
     '/integrations/google/disconnect',
     { onRequest: [app.verifyJwt, requireOwner] },
-    async (_request, reply) => {
-      await disconnectAgencyConnection();
-      return reply.send({ success: true });
+    async (request, reply) => {
+      try {
+        const receipt = await disconnectAgencyGoogle({
+          actor: request.user,
+          scope: request.body?.scope,
+          confirmAgencyWide: request.body?.confirmAgencyWide,
+        });
+        request.log.info({ status: receipt.status, revoked: receipt.revokedCredentials, unconfirmed: receipt.unconfirmedCredentials }, 'Agency Google disconnected');
+        return reply.status(receipt.remoteRevocationConfirmed ? 200 : 202).send(receipt);
+      } catch (err) {
+        if (err instanceof DisconnectError) return reply.status(err.status).send({ message: err.message, code: err.code });
+        request.log.error({ code: err?.code }, 'Agency Google disconnect failed');
+        return reply.status(500).send({ message: 'Disconnect failed; check the connection state before retrying' });
+      }
     }
   );
 

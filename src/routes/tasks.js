@@ -11,7 +11,7 @@ import { extractMentionedUserIds } from '../lib/mentionParser.js';
 import { resolveUploadBaseUrl, validateUpload, sanitizeUploadFilename, MAX_UPLOAD_SIZE_BYTES } from '../lib/uploadUrl.js';
 import { resolveCycle, ensureCurrentCycle } from '../lib/workCycle.js';
 import { checkAgentStatusChange } from '../lib/agentPolicy.js';
-import { isWorkerApiToken, tokenProjectIds } from '../lib/apiTokens.js';
+import { isAgentOrToken, isWorkerApiToken, tokenProjectIds } from '../lib/apiTokens.js';
 import { pruneTasksForWorker, withTaskReadFields, completedAtPatch } from '../lib/taskReadFields.js';
 import { idempotency } from '../lib/idempotency.js';
 
@@ -295,6 +295,18 @@ export async function taskRoutes(app) {
       const assigneeIdList = Array.isArray(assigneeIds) && assigneeIds.length > 0
         ? assigneeIds
         : (assignedTo ? [assignedTo] : []);
+
+      // OS-10: tasks created by the Engine (API token) or an agent account may only be assigned to active agency
+      // staff, so the task_created notification can never reach a client user. Human sessions are unchanged.
+      if (isAgentOrToken(request) && assigneeIdList.length > 0) {
+        const staff = await prisma.user.findMany({
+          where: { id: { in: assigneeIdList }, isActive: true, role: { in: ['OWNER', 'PM', 'TEAM_MEMBER', 'CONTRACTOR'] } },
+          select: { id: true },
+        });
+        if (staff.length !== new Set(assigneeIdList).size) {
+          return reply.status(400).send({ message: 'Assignees must be active agency staff' });
+        }
+      }
 
       // Sub-tasks inherit their parent's session; top-level tasks join the current one.
       let workCycleId = null;
