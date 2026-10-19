@@ -2,6 +2,7 @@
  * EmDash site connection management (plan O4, contract §3.3, §4, §4.1). Mounted at /api/projects:
  *   POST /:id/cms/pairing-code   OWNER/PM with project access. Returns the one-time code ONCE.
  *   POST /:id/cms/rotate-keys    OWNER/PM. Stages a new key pair, delivered on the next heartbeat.
+ *                                Body {revokePrev: true} (OWNER only, v1.5.6 §32.1): the old pair is refused at once.
  *   GET  /:id/cms/health         OWNER/PM. Stored handshake health (+ live `health` call with ?live=1).
  *
  * The pairing code is never stored: only its verifier and the AES-GCM encrypted pairing signing key
@@ -19,9 +20,11 @@ import {
   generateSiteId,
   pairingSigningKey,
   pairingVerifier,
+  revisionAtLeast,
 } from '../lib/siteAdapters/signing.js';
 import { emdashRoutes, CmsBridgeError } from '../lib/siteAdapters/emdash.js';
-import { loadEmdashConnection } from '../lib/cmsStore.js';
+import { loadEmdashConnection, sanitizeKeyState } from '../lib/cmsStore.js';
+import { revokeConfirmOutcome } from '../lib/emdashSync.js';
 import { validateSiteUrl } from '../lib/siteAdapters/netGuard.js';
 import { sanitizeOutboxPause } from '../lib/siteAdapters/migration.js';
 
@@ -181,6 +184,18 @@ export async function projectCmsRoutes(app) {
     if (!project) return reply;
     if (project.cmsType !== 'EMDASH') return reply.status(400).send({ message: 'This project is not an EmDash site.' });
     if (!isCmsKeyCryptoConfigured()) return reply.status(503).send({ code: 'CMS_KEY_ENCRYPTION_KEY_MISSING', message: KEY_MISSING_MESSAGE });
+    const revokePrev = request.body?.revokePrev === true;
+    // v1.5.6 §32.1 compromise response: OWNER only; the site must understand revokePrev (1.5.6+), else the site would
+    // keep the old pair for 24 h on its side: use Disconnect + a new pairing code for the same site instead.
+    if (revokePrev && request.user.role !== 'OWNER') {
+      return reply.status(403).send({ code: 'FORBIDDEN', message: 'Only the Owner can rotate keys with immediate revocation.' });
+    }
+    if (revokePrev && !revisionAtLeast(project.cmsHealth?.contractRevision, '1.5.6')) {
+      return reply.status(409).send({
+        code: 'SITE_TOO_OLD',
+        message: "This site's bridge is older than contract 1.5.6 and cannot drop the old keys at once. Disconnect the site and create a new pairing code for it instead.",
+      });
+    }
     const cred = await prisma.cmsCredential.findUnique({ where: { projectId: project.id } });
     if (!cred) return reply.status(409).send({ message: 'Pair the site before rotating keys.' });
 
@@ -189,18 +204,24 @@ export async function projectCmsRoutes(app) {
       where: { projectId: project.id, keyId: cred.keyId },
       data: {
         pendingKeyId,
+        // A normal rotation never downgrades a staged revoke (only the Owner stages one).
+        pendingRevokePrev: revokePrev || cred.pendingRevokePrev === true,
         inboundKeyPendingEnc: encryptCmsSecret(generateKey(), cmsAad(project.id, 'inbound')),
         outboundKeyPendingEnc: encryptCmsSecret(generateKey(), cmsAad(project.id, 'outbound')),
         pendingCreatedAt: new Date(),
       },
     });
     if (r.count !== 1) return reply.status(409).send({ message: 'Keys changed meanwhile; try again.' });
-    request.log.info({ projectId: project.id, pendingKeyId }, 'EmDash key rotation staged');
+    const revoking = revokePrev || cred.pendingRevokePrev === true;
+    request.log.info({ projectId: project.id, pendingKeyId, revokePrev: revoking }, 'EmDash key rotation staged');
     return reply.send({
       success: true,
       currentKeyId: cred.keyId,
       pendingKeyId,
-      message: 'New keys are staged and will be delivered on the next site heartbeat. The previous keys stay valid for 24 hours after that.',
+      revokePrev: revoking,
+      message: revoking
+        ? 'New keys are staged with immediate revocation: the next site heartbeat receives them and the old keys stop working at once. Agency OS then checks the site with the new keys.'
+        : 'New keys are staged and will be delivered on the next site heartbeat. The previous keys stay valid for 24 hours after that.',
     });
   });
 
@@ -211,7 +232,7 @@ export async function projectCmsRoutes(app) {
     const cred = project.cmsType === 'EMDASH'
       ? await prisma.cmsCredential.findUnique({
           where: { projectId: project.id },
-          select: { keyId: true, pendingKeyId: true, prevKeyId: true, prevExpiresAt: true, rotatedAt: true },
+          select: { keyId: true, pendingKeyId: true, prevKeyId: true, prevExpiresAt: true, rotatedAt: true, pendingRevokePrev: true, prevRevokedAt: true, revokeConfirmedAt: true, revokeConfirmError: true },
         })
       : null;
     const lastCode = project.cmsType === 'EMDASH'
@@ -234,6 +255,12 @@ export async function projectCmsRoutes(app) {
       pendingKeyId: cred?.pendingKeyId ?? null,
       prevKeyExpiresAt: cred?.prevExpiresAt || null,
       rotatedAt: cred?.rotatedAt || null,
+      // v1.5.6 §32.1 revoke-now state (OS side).
+      pendingRevokePrev: cred?.pendingRevokePrev === true,
+      prevRevokedAt: cred?.prevRevokedAt || null,
+      revokeConfirmedAt: cred?.revokeConfirmedAt || null,
+      revokeConfirmError: cred?.revokeConfirmError || null,
+      revokeSupported: revisionAtLeast(project.cmsHealth?.contractRevision, '1.5.6'),
       contractVersion: project.cmsContractVersion ?? null,
       contractRevision: project.cmsHealth?.contractRevision ?? null,
       previewConfigured: project.cmsHealth?.previewConfigured ?? null,
@@ -274,6 +301,17 @@ export async function projectCmsRoutes(app) {
             message: err instanceof CmsBridgeError ? err.message : 'Health check failed',
           },
         };
+      }
+    }
+    // v1.5.6 §32.1: the site's key state (never a key): live health first, else the stored heartbeat value.
+    body.siteKeys = sanitizeKeyState(body.live?.keys) || sanitizeKeyState(project.cmsHealth?.keys);
+    // A live check signed with the new key that shows the revoke also confirms it (same rule as the automatic check).
+    if (body.live?.ok !== false && body.live && cred?.prevRevokedAt && !cred.revokeConfirmedAt) {
+      const outcome = revokeConfirmOutcome(body.live, { keyId: cred.keyId, rotatedAt: cred.prevRevokedAt });
+      if (outcome.ok) {
+        await prisma.cmsCredential.updateMany({ where: { projectId: project.id, keyId: cred.keyId }, data: { revokeConfirmedAt: new Date(), revokeConfirmError: null } });
+        body.revokeConfirmedAt = new Date();
+        body.revokeConfirmError = null;
       }
     }
     // v1.5.3 §29: outbox give-up pause (live health first, else the stored handshake/site-info value).

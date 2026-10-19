@@ -151,6 +151,42 @@ describe('rotate-keys and health', () => {
     expect(decryptCmsSecret(data.outboundKeyPendingEnc, cmsAad(PID, 'outbound'))).toMatch(/^aosk1_/);
   });
 
+  it('v1.5.6 revokePrev: Owner only, site 1.5.6+, staged with pendingRevokePrev; a normal rotation never downgrades it', async () => {
+    db.overrides['project.findUnique'] = async () => project({ cmsSiteId: 'site_existing01', cmsHealth: { contractRevision: '1.5.6' } });
+    db.overrides['cmsCredential.findUnique'] = async () => ({ keyId: 3, pendingKeyId: null });
+    db.user = { id: 'pm-1', role: 'PM' };
+    const pm = await app.inject({ method: 'POST', url: `/api/projects/${PID}/cms/rotate-keys`, payload: { revokePrev: true } });
+    expect(pm.statusCode).toBe(403);
+    db.user = { id: 'owner-1', role: 'OWNER' };
+    const r = await app.inject({ method: 'POST', url: `/api/projects/${PID}/cms/rotate-keys`, payload: { revokePrev: true } });
+    expect(r.json()).toMatchObject({ success: true, pendingKeyId: 4, revokePrev: true });
+    expect(db.calls.find((c) => c.key === 'cmsCredential.updateMany').args.data.pendingRevokePrev).toBe(true);
+    db.calls = [];
+    db.overrides['cmsCredential.findUnique'] = async () => ({ keyId: 3, pendingKeyId: 4, pendingRevokePrev: true });
+    const n = await app.inject({ method: 'POST', url: `/api/projects/${PID}/cms/rotate-keys` });
+    expect(n.json()).toMatchObject({ pendingKeyId: 5, revokePrev: true });
+    expect(db.calls.find((c) => c.key === 'cmsCredential.updateMany').args.data.pendingRevokePrev).toBe(true);
+  });
+
+  it('v1.5.6 revokePrev on a site below 1.5.6 → 409 SITE_TOO_OLD (disconnect + re-pair instead)', async () => {
+    db.overrides['project.findUnique'] = async () => project({ cmsSiteId: 'site_existing01', cmsHealth: { contractRevision: '1.5.5' } });
+    db.overrides['cmsCredential.findUnique'] = async () => ({ keyId: 3, pendingKeyId: null });
+    const r = await app.inject({ method: 'POST', url: `/api/projects/${PID}/cms/rotate-keys`, payload: { revokePrev: true } });
+    expect(r.statusCode).toBe(409);
+    expect(r.json().code).toBe('SITE_TOO_OLD');
+    expect(db.calls.some((c) => c.key === 'cmsCredential.updateMany')).toBe(false);
+  });
+
+  it('health shows the site key state and the OS revoke state (never a key)', async () => {
+    db.overrides['project.findUnique'] = async () =>
+      project({ cmsSiteId: 'site_existing01', cmsPairedAt: new Date(), cmsLastSeenAt: new Date(), cmsHealth: { contractRevision: '1.5.8', keys: { keyId: 4, prevKeyId: null, prevExpiresAt: null, prevRevokedAt: '2026-10-19T09:00:00Z', secret: 'aosk1_x' } } });
+    db.overrides['cmsCredential.findUnique'] = async () => ({ keyId: 4, pendingKeyId: null, prevKeyId: 3, prevExpiresAt: new Date(), rotatedAt: new Date(), pendingRevokePrev: false, prevRevokedAt: new Date('2026-10-19T09:00:00Z'), revokeConfirmedAt: null, revokeConfirmError: 'UNREACHABLE' });
+    const body = (await app.inject({ method: 'GET', url: `/api/projects/${PID}/cms/health` })).json();
+    expect(body.siteKeys).toEqual({ keyId: 4, prevKeyId: null, prevExpiresAt: null, prevRevokedAt: '2026-10-19T09:00:00.000Z' });
+    expect(body).toMatchObject({ revokeSupported: true, revokeConfirmError: 'UNREACHABLE', pendingRevokePrev: false });
+    expect(JSON.stringify(body.siteKeys)).not.toMatch(/aosk1_/);
+  });
+
   it('reports stored health without secrets', async () => {
     db.overrides['project.findUnique'] = async () =>
       project({ cmsSiteId: 'site_existing01', cmsPairedAt: new Date(), cmsLastSeenAt: new Date(Date.now() - 25 * 3600e3), cmsContractVersion: 1, cmsPluginVersion: '1.0.0', cmsHealth: { outbox: { pending: 0, failed: 0 } } });

@@ -130,6 +130,14 @@ function sanitizeAbsoluteUrl(v) {
   }
 }
 
+/** v1.5.6 §32.1 keyState { keyId, prevKeyId, prevExpiresAt, prevRevokedAt } → plain values (never a key), or null. */
+export function sanitizeKeyState(k) {
+  if (!k || typeof k !== 'object' || Array.isArray(k)) return null;
+  const id = (v) => (Number.isInteger(v) && v >= 1 ? v : null);
+  const at = (v) => (typeof v === 'string' && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : null);
+  return { keyId: id(k.keyId), prevKeyId: id(k.prevKeyId), prevExpiresAt: at(k.prevExpiresAt), prevRevokedAt: at(k.prevRevokedAt) };
+}
+
 function siteInfoProjectData(siteInfo, contract, now) {
   const health = siteInfo?.health && typeof siteInfo.health === 'object' ? siteInfo.health : {};
   return {
@@ -140,6 +148,8 @@ function siteInfoProjectData(siteInfo, contract, now) {
       ...health,
       // v1.5.3 §29: outbox.paused normalised ({reason, since, until} | null); sites below 1.5.3 omit it.
       ...(health.outbox && typeof health.outbox === 'object' ? { outbox: { ...health.outbox, paused: sanitizeOutboxPause(health.outbox.paused) } } : {}),
+      // v1.5.6 §32.1: key state (never a key); sites below 1.5.6 send none.
+      keys: sanitizeKeyState(health.keys),
       platform: siteInfo?.platform || null,
       siteUrlReported: siteInfo?.siteUrl ? String(siteInfo.siteUrl).slice(0, 500) : null,
       siteName: siteInfo?.siteName ? String(siteInfo.siteName).slice(0, 200) : null,
@@ -271,6 +281,10 @@ export const prismaCmsStore = {
       outboundKeyPendingEnc: null,
       pendingCreatedAt: null,
       rotatedAt: null,
+      pendingRevokePrev: false,
+      prevRevokedAt: null,
+      revokeConfirmedAt: null,
+      revokeConfirmError: null,
     };
     await prisma.$transaction([
       // Receipts are scoped per siteId (v1.0.3 §16(b)): a new siteId starts with none and the old
@@ -311,17 +325,26 @@ export const prismaCmsStore = {
   /**
    * Promote the staged key pair: current → prev (valid 24 h), pending → current.
    * CAS on (keyId, pendingKeyId) so two concurrent heartbeats rotate once.
+   * v1.5.6 §32.1 revokePrev (staged by the OWNER "Rotate keys now (revoke old)"): the previous pair is dropped at once
+   * (ciphertext cleared, prevRevokedAt set), so a request signed with it gets 401 UNKNOWN_KEY and the lagging-site
+   * re-send can never hand the new pair to a holder of the old key. The returned rotate carries revokePrev: true.
    */
   async applyRotation({ projectId, fromKeyId, now = new Date() }) {
     const cred = await prisma.cmsCredential.findUnique({ where: { projectId } });
     if (!cred || cred.keyId !== fromKeyId || cred.pendingKeyId == null) return null;
+    const revokePrev = cred.pendingRevokePrev === true;
     const r = await prisma.cmsCredential.updateMany({
       where: { projectId, keyId: fromKeyId, pendingKeyId: cred.pendingKeyId },
       data: {
         prevKeyId: cred.keyId,
-        inboundKeyPrevEnc: cred.inboundKeyEnc,
-        outboundKeyPrevEnc: cred.outboundKeyEnc,
-        prevExpiresAt: new Date(now.getTime() + KEY_ROTATION_OVERLAP_SEC * 1000),
+        inboundKeyPrevEnc: revokePrev ? null : cred.inboundKeyEnc,
+        outboundKeyPrevEnc: revokePrev ? null : cred.outboundKeyEnc,
+        prevExpiresAt: revokePrev ? now : new Date(now.getTime() + KEY_ROTATION_OVERLAP_SEC * 1000),
+        pendingRevokePrev: false,
+        // prevRevokedAt describes the CURRENT prev slot: set by a revoke, cleared by a normal rotation.
+        prevRevokedAt: revokePrev ? now : null,
+        revokeConfirmedAt: null,
+        revokeConfirmError: null,
         keyId: cred.pendingKeyId,
         inboundKeyEnc: cred.inboundKeyPendingEnc,
         outboundKeyEnc: cred.outboundKeyPendingEnc,
@@ -338,6 +361,7 @@ export const prismaCmsStore = {
       keyId: cred.pendingKeyId,
       inbound: decryptCmsSecret(cred.inboundKeyPendingEnc, cmsAad(projectId, 'inbound')),
       outbound: decryptCmsSecret(cred.outboundKeyPendingEnc, cmsAad(projectId, 'outbound')),
+      ...(revokePrev ? { revokePrev: true } : {}),
     };
   },
 

@@ -461,3 +461,31 @@ describe('e2e O13: an EmDash publish notifies once, even when the mirror saw "pu
     expect(notify.mock.calls.map((c) => c[0].slug)).not.toContain('content_published');
   });
 });
+
+describe('v1.5.6 §32.1 revokePrev rotation (Prisma store)', () => {
+  beforeAll(() => {
+    process.env.CMS_KEY_ENCRYPTION_KEY = process.env.CMS_KEY_ENCRYPTION_KEY || 'test-cms-key-0123456789-abcdefghijklmnop';
+  });
+  it('drops the previous ciphertext at once, records prevRevokedAt and returns rotate.revokePrev', async () => {
+    const { encryptCmsSecret } = await import('../../../src/lib/cmsKeyCrypto.js');
+    db.calls = [];
+    db.overrides = {};
+    const enc = (v, p) => encryptCmsSecret(v, cmsAad('p1', p));
+    db.overrides['cmsCredential.findUnique'] = async () => ({ projectId: 'p1', keyId: 1, inboundKeyEnc: enc('aosk1_in1', 'inbound'), outboundKeyEnc: enc('aosk1_out1', 'outbound'), pendingKeyId: 2, pendingRevokePrev: true, inboundKeyPendingEnc: enc('aosk1_in2', 'inbound'), outboundKeyPendingEnc: enc('aosk1_out2', 'outbound') });
+    db.overrides['cmsCredential.updateMany'] = async () => ({ count: 1 });
+    const now = new Date('2026-10-19T09:00:00Z');
+    const rot = await prismaCmsStore.applyRotation({ projectId: 'p1', fromKeyId: 1, now });
+    expect(rot).toEqual({ keyId: 2, inbound: 'aosk1_in2', outbound: 'aosk1_out2', revokePrev: true });
+    const data = db.calls.find((c) => c.key === 'cmsCredential.updateMany').args.data;
+    expect(data).toMatchObject({ inboundKeyPrevEnc: null, outboundKeyPrevEnc: null, prevExpiresAt: now, prevRevokedAt: now, pendingRevokePrev: false, keyId: 2 });
+  });
+  it('a normal rotation keeps the 24 h overlap and clears the revoke marker', async () => {
+    db.calls = [];
+    db.overrides['cmsCredential.findUnique'] = async () => ({ projectId: 'p1', keyId: 1, inboundKeyEnc: 'a', outboundKeyEnc: 'b', pendingKeyId: 2, pendingRevokePrev: false, inboundKeyPendingEnc: null, outboundKeyPendingEnc: null });
+    db.overrides['cmsCredential.updateMany'] = async () => ({ count: 0 });
+    await prismaCmsStore.applyRotation({ projectId: 'p1', fromKeyId: 1, now: new Date('2026-10-19T09:00:00Z') });
+    const data = db.calls.find((c) => c.key === 'cmsCredential.updateMany').args.data;
+    expect(data).toMatchObject({ inboundKeyPrevEnc: 'a', outboundKeyPrevEnc: 'b', prevRevokedAt: null });
+    expect(data.prevExpiresAt.toISOString()).toBe('2026-10-20T09:00:00.000Z');
+  });
+});

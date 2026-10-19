@@ -1,0 +1,41 @@
+{
+  "ok": true,
+  "entryId": "01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+  "revision": "01JAC6ZK3D4F5G6H7J8K9M0N1P",
+  "draftHash": "v1:07fe445535a6e9136294cdc1233873b601f24e3816d816b9fd213ab8a5c3bf5a",
+  "hashBasis": {
+    "collection": "pages",
+    "slug": "hot-tub-repair",
+    "parent": "spa-services",
+    "title": "Hot Tub Repair for Most Brands",
+    "excerpt": null,
+    "fields": {},
+    "seo": {
+      "title": "Hot Tub Repair in Waukesha & Milwaukee | Oasis Pool and Spa",
+      "description": "Hot tub not heating? Oasis repairs most spa brands across Waukesha and Milwaukee.",
+      "canonical": null,
+      "noIndex": false,
+      "image": null
+    },
+    "bylines": [],
+    "taxonomies": {}
+  },
+  "entryNo": 118,
+  "created": false,
+  "draftRevisionId": "01JAC6ZK3D4F5G6H7J8K9M0N1P",
+  "rev": "01JAC6ZK3D4F5G6H7J8K9M0N1P",
+  "path": "/spa-services/hot-tub-repair/",
+  "editUrl": "https://oasispoolspas.com/_emdash/admin/content/pages/01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+  "warnings": [
+    {
+      "code": "SEO_LIVE_REFUSED",
+      "message": "This entry is live and the SEO panel has no drafts, so seo.title would change the live page at once; not written. Change it in the admin.",
+      "fields": [
+        "seo.title"
+      ]
+    }
+  ],
+  "review": null,
+  "slug": "hot-tub-repair",
+  "parent": "spa-services"
+}

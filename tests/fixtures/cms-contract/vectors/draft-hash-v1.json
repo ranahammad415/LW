@@ -1,0 +1,206 @@
+{
+	"description": "draftHash v1 (contract §33.4): draftHash = \"v1:\" + sha256hex(UTF-8(canonical)), canonical = RFC 8785 style JSON of the draft object (keys sorted by UTF-16 code units, no whitespace, ECMAScript JSON.stringify strings/numbers). Each case: the draft object, the exact canonical string, the expected draftHash.",
+	"cases": [
+		{
+			"name": "page: nested layout blocks with _key/_version, unicode text, numbers, SEO panel",
+			"note": "Keys are sorted at every level (\"_key\" < \"_type\" < \"_version\" < \"heading\"); \"é\", \"—\" and the emoji stay literal (UTF-8 bytes are hashed); 1e21 is written 1e+21, 0.1 stays 0.1, 1e-7 is written 1e-7, 4.5 stays 4.5.",
+			"draft": {
+				"collection": "pages",
+				"slug": "hot-tub-repair",
+				"parent": "spa-services",
+				"title": "Hot Tub Repair — Café-Style Service 🛁",
+				"excerpt": null,
+				"content": {
+					"format": "layout",
+					"value": [
+						{
+							"_type": "page_hero",
+							"_key": "hero1",
+							"_version": 2,
+							"heading": "Hot Tub Repair for Most Brands",
+							"intro": "Naïve fixes fail; we diagnose “properly”.",
+							"image": {
+								"id": "01MEDIA0000000000000000001",
+								"provider": "local",
+								"src": "/_emdash/api/media/file/1.png",
+								"alt": "Spa",
+								"meta": {
+									"storageKey": "1.png"
+								},
+								"width": 1200,
+								"height": 800
+							}
+						},
+						{
+							"_type": "faq",
+							"_key": "faq1",
+							"_version": 1,
+							"heading": "Questions",
+							"items": [
+								{
+									"_key": "q1",
+									"question": "Why is my hot tub not heating?",
+									"answer": "A tripped high-limit switch.\nOr low flow."
+								},
+								{
+									"_key": "q2",
+									"question": "Do you service Jacuzzi®?",
+									"answer": "Yes"
+								}
+							]
+						},
+						{
+							"_type": "stats",
+							"_key": "st1",
+							"_version": 1,
+							"values": [
+								{
+									"label": "big",
+									"value": 1e+21
+								},
+								{
+									"label": "tenth",
+									"value": 0.1
+								},
+								{
+									"label": "zero",
+									"value": 0
+								},
+								{
+									"label": "tiny",
+									"value": 1e-7
+								},
+								{
+									"label": "rating",
+									"value": 4.5
+								}
+							]
+						}
+					]
+				},
+				"fields": {},
+				"seo": {
+					"title": "Hot Tub Repair | Oasis",
+					"description": "Fast spa repair.",
+					"canonical": null,
+					"noIndex": false,
+					"image": null
+				},
+				"bylines": [],
+				"taxonomies": {}
+			},
+			"canonical": "{\"bylines\":[],\"collection\":\"pages\",\"content\":{\"format\":\"layout\",\"value\":[{\"_key\":\"hero1\",\"_type\":\"page_hero\",\"_version\":2,\"heading\":\"Hot Tub Repair for Most Brands\",\"image\":{\"alt\":\"Spa\",\"height\":800,\"id\":\"01MEDIA0000000000000000001\",\"meta\":{\"storageKey\":\"1.png\"},\"provider\":\"local\",\"src\":\"/_emdash/api/media/file/1.png\",\"width\":1200},\"intro\":\"Naïve fixes fail; we diagnose “properly”.\"},{\"_key\":\"faq1\",\"_type\":\"faq\",\"_version\":1,\"heading\":\"Questions\",\"items\":[{\"_key\":\"q1\",\"answer\":\"A tripped high-limit switch.\\nOr low flow.\",\"question\":\"Why is my hot tub not heating?\"},{\"_key\":\"q2\",\"answer\":\"Yes\",\"question\":\"Do you service Jacuzzi®?\"}]},{\"_key\":\"st1\",\"_type\":\"stats\",\"_version\":1,\"values\":[{\"label\":\"big\",\"value\":1e+21},{\"label\":\"tenth\",\"value\":0.1},{\"label\":\"zero\",\"value\":0},{\"label\":\"tiny\",\"value\":1e-7},{\"label\":\"rating\",\"value\":4.5}]}]},\"excerpt\":null,\"fields\":{},\"parent\":\"spa-services\",\"seo\":{\"canonical\":null,\"description\":\"Fast spa repair.\",\"image\":null,\"noIndex\":false,\"title\":\"Hot Tub Repair | Oasis\"},\"slug\":\"hot-tub-repair\",\"taxonomies\":{},\"title\":\"Hot Tub Repair — Café-Style Service 🛁\",\"v\":1}",
+			"draftHash": "v1:c596c8152b86f79074221b9b176e20e546fe8bd82bd719faf555c865b54f54ef"
+		},
+		{
+			"name": "post: portableText with marks and links, bylines in credit order, taxonomies sorted",
+			"note": "taxonomies term slugs are sorted and deduplicated, a taxonomy with no terms is dropped; bylines keep credit order; fields carries the other stored fields (\"_\"-prefixed ones are dropped).",
+			"draft": {
+				"collection": "posts",
+				"slug": "winterize-hot-tub",
+				"parent": null,
+				"title": "How to Winterize a Hot Tub",
+				"excerpt": "Drain, blow out the lines, cover.",
+				"content": {
+					"format": "portableText",
+					"value": [
+						{
+							"_type": "block",
+							"_key": "b1",
+							"style": "h2",
+							"markDefs": [],
+							"children": [
+								{
+									"_type": "span",
+									"_key": "s1",
+									"text": "Drain?",
+									"marks": []
+								}
+							]
+						},
+						{
+							"_type": "block",
+							"_key": "b2",
+							"style": "normal",
+							"markDefs": [
+								{
+									"_type": "link",
+									"_key": "l1",
+									"href": "/spa-services/"
+								}
+							],
+							"children": [
+								{
+									"_type": "span",
+									"_key": "s2",
+									"text": "Keep it running at 4 °C, or ",
+									"marks": []
+								},
+								{
+									"_type": "span",
+									"_key": "s3",
+									"text": "call us",
+									"marks": [
+										"l1",
+										"strong"
+									]
+								}
+							]
+						}
+					]
+				},
+				"fields": {
+					"author_name": "Jane Tech",
+					"author_role": null,
+					"featured_image": null,
+					"updated_on": "2026-10-15T12:00:00Z",
+					"_slug": "ignored"
+				},
+				"seo": {
+					"title": null,
+					"description": "Winter care",
+					"canonical": "/articles/winterize-hot-tub/",
+					"noIndex": true,
+					"image": null
+				},
+				"bylines": [
+					"jane-tech",
+					"oasis-team"
+				],
+				"taxonomies": {
+					"tags": [],
+					"category": [
+						"pools",
+						"hot-tubs",
+						"pools"
+					]
+				}
+			},
+			"canonical": "{\"bylines\":[\"jane-tech\",\"oasis-team\"],\"collection\":\"posts\",\"content\":{\"format\":\"portableText\",\"value\":[{\"_key\":\"b1\",\"_type\":\"block\",\"children\":[{\"_key\":\"s1\",\"_type\":\"span\",\"marks\":[],\"text\":\"Drain?\"}],\"markDefs\":[],\"style\":\"h2\"},{\"_key\":\"b2\",\"_type\":\"block\",\"children\":[{\"_key\":\"s2\",\"_type\":\"span\",\"marks\":[],\"text\":\"Keep it running at 4 °C, or \"},{\"_key\":\"s3\",\"_type\":\"span\",\"marks\":[\"l1\",\"strong\"],\"text\":\"call us\"}],\"markDefs\":[{\"_key\":\"l1\",\"_type\":\"link\",\"href\":\"/spa-services/\"}],\"style\":\"normal\"}]},\"excerpt\":\"Drain, blow out the lines, cover.\",\"fields\":{\"author_name\":\"Jane Tech\",\"author_role\":null,\"featured_image\":null,\"updated_on\":\"2026-10-15T12:00:00Z\"},\"parent\":null,\"seo\":{\"canonical\":\"/articles/winterize-hot-tub/\",\"description\":\"Winter care\",\"image\":null,\"noIndex\":true,\"title\":null},\"slug\":\"winterize-hot-tub\",\"taxonomies\":{\"category\":[\"hot-tubs\",\"pools\"]},\"title\":\"How to Winterize a Hot Tub\",\"v\":1}",
+			"draftHash": "v1:e99740b0941252cb5a9fa0145838f05c4e28c5ffe32de43cbd8d58036b1d2d6e"
+		},
+		{
+			"name": "collection without SEO panel: seo null; markdown content",
+			"draft": {
+				"collection": "notes",
+				"slug": null,
+				"parent": null,
+				"title": null,
+				"excerpt": null,
+				"content": {
+					"format": "markdown",
+					"value": "# Title\n\nTabs\tand \"quotes\" \\ backslash"
+				},
+				"fields": {
+					"count": 3,
+					"flag": true
+				},
+				"seo": null,
+				"bylines": [],
+				"taxonomies": {}
+			},
+			"canonical": "{\"bylines\":[],\"collection\":\"notes\",\"content\":{\"format\":\"markdown\",\"value\":\"# Title\\n\\nTabs\\tand \\\"quotes\\\" \\\\ backslash\"},\"excerpt\":null,\"fields\":{\"count\":3,\"flag\":true},\"parent\":null,\"seo\":null,\"slug\":null,\"taxonomies\":{},\"title\":null,\"v\":1}",
+			"draftHash": "v1:0c4aa16e1a2828e51e9064eb4aae990305f78658a5c25a448187eed31c8d69c1"
+		}
+	]
+}

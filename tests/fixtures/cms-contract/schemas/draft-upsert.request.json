@@ -90,7 +90,8 @@
       ]
     },
     "seo": {
-      "$ref": "common.json#/$defs/seo"
+      "$ref": "common.json#/$defs/seo",
+      "description": "SEO panel values. v1.5.7 (§33.5): title, description, canonical (same-site path or same-origin URL; rewritten to the path) and noIndex are written; image is still ignored (SEO_FIELD_IGNORED). The SEO panel is not revisioned: on a published/scheduled entry seo.* is refused with warning SEO_LIVE_REFUSED (rest of the push applied) unless the site allows live SEO writes"
     },
     "fields": {
       "type": "object",
@@ -104,7 +105,7 @@
       "anyOf": [
         {
           "$ref": "common.json#/$defs/id",
-          "description": "The rev from the last draft-upsert/entry-get; mismatch -> 409 CONFLICT_REV. v1.2.0: REQUIRED on updates of existing entries"
+          "description": "The rev from the last draft-upsert/entry-get; mismatch -> 409 CONFLICT_REV. v1.2.0: REQUIRED on updates of existing entries. v1.5.7 (§33.3): checked and written in one compare-and-set (capability atomicDraftUpdate)"
         },
         {
           "type": "null"

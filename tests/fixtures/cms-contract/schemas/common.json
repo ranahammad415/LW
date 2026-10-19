@@ -1176,7 +1176,7 @@
           "anyOf": [
             {
               "$ref": "common.json#/$defs/url",
-              "description": "Non-null ONLY in the response/event that minted the link (links are hashed at rest). Receivers keep their stored URL when this is null."
+              "description": "Non-null ONLY in the response/event that minted the link (links are hashed at rest). Receivers keep their stored URL when this is null. v1.5.6 (§32.3): STAFF ONLY (OWNER/PM). The PM link carries PM review rights; never show or send it to client users (client portal, client e-mails, client API responses)."
             },
             {
               "type": "null"
@@ -1571,6 +1571,14 @@
         "seoGateOnPush": {
           "type": "boolean",
           "description": "v1.2.0: the site runs the emdash-seo draft checks and locked-contract guard on every OS push"
+        },
+        "atomicDraftUpdate": {
+          "type": "boolean",
+          "description": "v1.5.7 (§33.3): draft-upsert updates are one compare-and-set on baseRev (EmDash REST _rev through the service token). false: updates are refused with SERVICE_TOKEN_UNAVAILABLE reason cas, unless the site admin allowed non-atomic updates"
+        },
+        "draftHash": {
+          "type": "boolean",
+          "description": "v1.5.7 (§33.4): draft-upsert and entry-get editable return draftHash"
         }
       },
       "required": [
@@ -2718,6 +2726,61 @@
         }
       ]
     },
+    "keyState": {
+      "type": "object",
+      "properties": {
+        "keyId": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "description": "current key generation (null: not paired)"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "prevKeyId": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "description": "previous generation still accepted (24 h overlap after a normal rotation); null when none"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "prevExpiresAt": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime",
+              "description": "when the previous pair stops being accepted"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "prevRevokedAt": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime",
+              "description": "v1.5.6 (§32.1): when the site last dropped a previous pair immediately because a rotation carried revokePrev: true; null when never"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "keyId"
+      ],
+      "description": "v1.5.6 (§32.1): the site's key state. Never contains a key."
+    },
     "health": {
       "type": "object",
       "properties": {
@@ -2785,6 +2848,10 @@
         "lastCursor": {
           "type": "integer",
           "minimum": 0
+        },
+        "keys": {
+          "$ref": "common.json#/$defs/keyState",
+          "description": "v1.5.6 (§32.1): key generation and previous-key state (prevRevokedAt after a revokePrev rotation). Absent from sites below 1.5.6"
         }
       },
       "required": []
@@ -2991,6 +3058,142 @@
         "capabilities"
       ]
     },
+    "draftHash": {
+      "type": "string",
+      "pattern": "^v1:[0-9a-f]{64}$",
+      "description": "v1.5.7 (§33.4): \"v1:\" + sha256 hex of the canonical JSON (RFC 8785 style) of the stored draft. Compare for equality; vectors/draft-hash-v1.json"
+    },
+    "draftHashBasis": {
+      "type": "object",
+      "properties": {
+        "collection": {
+          "$ref": "common.json#/$defs/collection"
+        },
+        "slug": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parent": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "excerpt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fields": {
+          "type": "object",
+          "description": "The other stored data fields of the draft (\"_\"-prefixed keys dropped)"
+        },
+        "seo": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "description": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "canonical": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "noIndex": {
+                  "type": "boolean"
+                },
+                "image": {}
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bylines": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "description": "Explicit byline credits (slugs) in credit order"
+        },
+        "taxonomies": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          "description": "Assigned term slugs per taxonomy, sorted; taxonomies without terms left out"
+        }
+      },
+      "required": [
+        "collection",
+        "slug",
+        "parent",
+        "title",
+        "excerpt",
+        "fields",
+        "seo",
+        "bylines",
+        "taxonomies"
+      ],
+      "description": "v1.5.7 (§33.4): the draft-hash input without content. canonical draft = { v: 1, ...hashBasis, content: { format, value } }"
+    },
     "block": {
       "type": "object",
       "properties": {
@@ -3114,6 +3317,20 @@
             "limit"
           ],
           "description": "Set INSTEAD of the content when a draft-upsert carrying it would exceed the draft-upsert limits (LAYOUT_READ_LIMITS); edit this entry in the EmDash admin"
+        },
+        "draftHash": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/draftHash"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hashBasis": {
+          "$ref": "common.json#/$defs/draftHashBasis",
+          "description": "v1.5.7 (§33.4), variant draft only: everything draftHash covers except the content value (which is layout / portableText / body here), exactly as hashed"
         },
         "valid": {
           "type": "boolean",

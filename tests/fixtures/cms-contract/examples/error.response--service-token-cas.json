@@ -1,0 +1,11 @@
+{
+  "ok": false,
+  "error": {
+    "code": "SERVICE_TOKEN_UNAVAILABLE",
+    "message": "Updates need the site's service token: only that path checks baseRev and writes in one step. Ask the site admin to fix the service token (or to allow non-atomic updates).",
+    "retryable": false,
+    "details": {
+      "reason": "cas"
+    }
+  }
+}

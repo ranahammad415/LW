@@ -702,6 +702,14 @@ model CmsCredential {
   outboundKeyPendingEnc String?   @db.Text
   pendingCreatedAt      DateTime?
   rotatedAt             DateTime?
+  /// v1.5.6 §32.1: the staged rotation is delivered with rotate.revokePrev (OWNER "Rotate keys now (revoke old)").
+  pendingRevokePrev     Boolean   @default(false)
+  /// When the OS dropped the previous pair at once (revokePrev rotation delivered); prev ciphertext is cleared.
+  prevRevokedAt         DateTime?
+  /// Confirmation of the last revokePrev rotation: a health call signed with the new key saw keys.keyId = new id.
+  revokeConfirmedAt     DateTime?
+  /// Why that confirmation failed (UNKNOWN_KEY, KEY_MISMATCH, PREV_NOT_REVOKED, NO_KEY_STATE, UNREACHABLE); null when ok.
+  revokeConfirmError    String?   @db.VarChar(64)
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @default(now()) @updatedAt
 

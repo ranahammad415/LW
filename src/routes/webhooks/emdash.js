@@ -144,6 +144,8 @@ export async function emdashWebhookRoutes(app, opts = {}) {
   const nowFn = opts.now || (() => Date.now());
   const onHeal = opts.onHeal || (await import('../../lib/emdashSync.js')).healReviews;
   const onPaired = opts.onPaired || (await import('../../lib/emdashSync.js')).scheduleInventoryAfterPairing;
+  // v1.5.6 §32.1: confirm a revokePrev rotation with a health call signed with the new key.
+  const onRevokeRotated = opts.onRevokeRotated || (await import('../../lib/emdashSync.js')).scheduleRevokeConfirm;
   const rateLimit = createRateLimiter(
     Number(opts.eventsPerMin || process.env.CMS_EVENTS_RATE_PER_MIN) || 300
   );
@@ -360,9 +362,17 @@ export async function emdashWebhookRoutes(app, opts = {}) {
     let rotate = null;
     if (reqKeyId === cred.keyId && cred.pendingKeyId != null) {
       rotate = await store.applyRotation({ projectId: project.id, fromKeyId: cred.keyId, now: new Date(now) });
-      if (rotate) request.log.info({ projectId: project.id, keyId: rotate.keyId }, 'EmDash keys rotated');
-    } else if (rings.inbound.prev && reqKeyId === rings.inbound.prev.id && reqKeyId < cred.keyId) {
+      if (rotate) request.log.info({ projectId: project.id, keyId: rotate.keyId, revokePrev: rotate.revokePrev === true }, 'EmDash keys rotated');
+      if (rotate?.revokePrev) {
+        try {
+          onRevokeRotated(project.id, rotate.keyId, request.log);
+        } catch (err) {
+          request.log.warn({ err: { message: err?.message } }, 'Could not schedule the revokePrev confirmation');
+        }
+      }
+    } else if (rings.inbound.prev && reqKeyId === rings.inbound.prev.id && reqKeyId < cred.keyId && !cred.prevRevokedAt) {
       // The site never installed the last rotation (lost response): deliver the current pair again.
+      // v1.5.6 §32.1: never after a revokePrev rotation (the old key may be a thief's; prev is gone then anyway).
       rotate = { keyId: cred.keyId, inbound: rings.inbound.current.secret, outbound: rings.outbound.current.secret };
     }
 

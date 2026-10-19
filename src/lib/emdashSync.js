@@ -30,6 +30,7 @@ import {
   closeForeignReview,
   isForeignWpPage,
   prismaCmsStore,
+  sanitizeKeyState,
 } from './cmsStore.js';
 import { isCmsKeyCryptoConfigured } from './cmsKeyCrypto.js';
 
@@ -293,6 +294,59 @@ export function scheduleInventoryAfterPairing(projectId, log, { delayMs = PAIRIN
   return t;
 }
 
+/**
+ * v1.5.6 §32.1 / §3.3(a): confirm a revokePrev rotation with a `health` call signed with the NEW inbound key (the
+ * connection has no previous key any more, so no fallback to the old one). Pure decision part, testable.
+ * ok: keys.keyId = new id and prevRevokedAt at/after our rotation (minus clock skew).
+ */
+export function revokeConfirmOutcome(health, { keyId, rotatedAt, skewMs = 5 * 60 * 1000 }) {
+  const keys = sanitizeKeyState(health?.keys);
+  if (!keys) return { ok: false, code: 'NO_KEY_STATE' };
+  if (keys.keyId !== keyId) return { ok: false, code: 'KEY_MISMATCH' };
+  const since = rotatedAt ? new Date(rotatedAt).getTime() - skewMs : 0;
+  if (!keys.prevRevokedAt || Date.parse(keys.prevRevokedAt) < since) return { ok: false, code: 'PREV_NOT_REVOKED' };
+  return { ok: true, keys };
+}
+
+/**
+ * Run the confirmation (attempts after delays; the site installs the pair after our response). Records
+ * revokeConfirmedAt / revokeConfirmError on the credential. A 401 UNKNOWN_KEY on the last attempt means someone else
+ * may have collected the rotation: flag re-pair needed (OWNERs notified; polling stops) so an OWNER disconnects and
+ * re-pairs (contract §3.3 (b)).
+ */
+export async function confirmRevokeRotation(projectId, keyId, { log, delaysMs = [15_000, 60_000], sleep = (ms) => new Promise((r) => setTimeout(r, ms).unref?.()) } = {}) {
+  let last = { ok: false, code: 'UNREACHABLE' };
+  for (let i = 0; i < delaysMs.length; i += 1) {
+    await sleep(delaysMs[i]);
+    const cred = await prisma.cmsCredential.findUnique({ where: { projectId }, select: { keyId: true, rotatedAt: true, prevRevokedAt: true } });
+    // Re-paired or rotated again meanwhile: this check is moot.
+    if (!cred || cred.keyId !== keyId || !cred.prevRevokedAt) return { ok: false, code: 'SUPERSEDED' };
+    try {
+      const { conn } = await loadEmdashConnection(projectId);
+      const health = await emdashRoutes.health(conn, { retryDelays: [], timeoutMs: 8000 });
+      last = revokeConfirmOutcome(health, { keyId, rotatedAt: cred.prevRevokedAt });
+      if (last.ok) break;
+    } catch (err) {
+      last = { ok: false, code: err?.code === 'UNKNOWN_KEY' || err?.code === 'UNKNOWN_SITE' ? 'UNKNOWN_KEY' : 'UNREACHABLE' };
+    }
+  }
+  await prisma.cmsCredential.updateMany({
+    where: { projectId, keyId },
+    data: last.ok ? { revokeConfirmedAt: new Date(), revokeConfirmError: null } : { revokeConfirmError: last.code },
+  });
+  if (last.ok) log?.info?.({ projectId, keyId }, 'EmDash revokePrev rotation confirmed');
+  else log?.warn?.({ projectId, keyId, code: last.code }, 'EmDash revokePrev rotation not confirmed');
+  if (last.code === 'UNKNOWN_KEY') {
+    await prismaCmsStore.flagRepairNeeded(projectId, 'the site did not accept the new keys after "Rotate keys now (revoke old)"; someone else may have collected the rotation. Disconnect and re-pair the site', log);
+  }
+  return last;
+}
+
+/** Fire-and-forget wrapper used by the heartbeat route (timer unref'd; failures only logged). */
+export function scheduleRevokeConfirm(projectId, keyId, log) {
+  confirmRevokeRotation(projectId, keyId, { log }).catch((err) => log?.warn?.({ projectId, err: { message: err?.message } }, 'EmDash revokePrev confirmation failed'));
+}
+
 /** Daily inventory for every paired EmDash project (leader only; called from the 03:00 cron). */
 export async function syncAllEmdashProjects() {
   const ids = await pairedEmdashProjectIds();
@@ -440,7 +494,12 @@ export async function cleanupCmsTables() {
       data: { signingKeyEnc: null },
     }),
   ]);
-  return { receipts: receipts.count, nonces: nonces.count, expiredCodes: codes.count };
+  // v1.5.6: previous-key ciphertext is useless once its overlap ended (revoked pairs are cleared at rotation).
+  const prevKeys = await prisma.cmsCredential.updateMany({
+    where: { prevExpiresAt: { lt: now }, OR: [{ inboundKeyPrevEnc: { not: null } }, { outboundKeyPrevEnc: { not: null } }] },
+    data: { inboundKeyPrevEnc: null, outboundKeyPrevEnc: null },
+  });
+  return { receipts: receipts.count, nonces: nonces.count, expiredCodes: codes.count, expiredPrevKeys: prevKeys.count };
 }
 
 let intervalId = null;

@@ -127,10 +127,12 @@ function createMemoryStore() {
     async applyRotation({ projectId, fromKeyId, now }) {
       const c = s.creds.get(projectId);
       if (!c || c.keyId !== fromKeyId || c.pendingKeyId == null) return null;
+      const revoke = c.pendingRevokePrev === true;
       const next = {
         keyId: c.pendingKeyId,
         inbound: decIn(c.inboundKeyPendingEnc),
         outbound: decOut(c.outboundKeyPendingEnc),
+        ...(revoke ? { revokePrev: true } : {}),
       };
       s.creds.set(projectId, {
         projectId,
@@ -138,9 +140,10 @@ function createMemoryStore() {
         inboundKeyEnc: c.inboundKeyPendingEnc,
         outboundKeyEnc: c.outboundKeyPendingEnc,
         prevKeyId: c.keyId,
-        inboundKeyPrevEnc: c.inboundKeyEnc,
-        outboundKeyPrevEnc: c.outboundKeyEnc,
-        prevExpiresAt: new Date(now.getTime() + 86_400_000),
+        inboundKeyPrevEnc: revoke ? null : c.inboundKeyEnc,
+        outboundKeyPrevEnc: revoke ? null : c.outboundKeyEnc,
+        prevExpiresAt: revoke ? now : new Date(now.getTime() + 86_400_000),
+        prevRevokedAt: revoke ? now : null,
         pendingKeyId: null,
       });
       return next;
@@ -226,6 +229,7 @@ let store;
 let nowMs;
 const onHeal = vi.fn(async () => {});
 const onPaired = vi.fn();
+const onRevokeRotated = vi.fn();
 
 function addProject(overrides = {}) {
   store.projects.set(PROJECT_ID, {
@@ -304,7 +308,7 @@ beforeEach(async () => {
   onHeal.mockClear();
   app = Fastify();
   app.setValidatorCompiler(() => (data) => ({ value: data }));
-  await app.register(emdashWebhookRoutes, { prefix: '/api/webhooks/emdash', store, now: () => nowMs, onHeal, onPaired });
+  await app.register(emdashWebhookRoutes, { prefix: '/api/webhooks/emdash', store, now: () => nowMs, onHeal, onPaired, onRevokeRotated });
   await app.ready();
 });
 
@@ -503,6 +507,32 @@ describe('POST /handshake — heartbeat and rotation', () => {
     const late = await post(HS, handshakeBody('heartbeat'), { secret: outbound, keyId: 1 });
     expect(late.statusCode).toBe(401);
     expect(late.json().error.code).toBe('UNKNOWN_KEY');
+  });
+
+  it('v1.5.6 revokePrev: old keys refused at once, the new pair is never re-sent to an old-key request, confirmation scheduled', async () => {
+    addProject();
+    const { outbound } = pairKeys();
+    const nextIn = generateKey();
+    const nextOut = generateKey();
+    Object.assign(store.creds.get(PROJECT_ID), {
+      pendingKeyId: 2,
+      pendingRevokePrev: true,
+      inboundKeyPendingEnc: encIn(nextIn),
+      outboundKeyPendingEnc: encOut(nextOut),
+    });
+    onRevokeRotated.mockClear();
+    const r = await post(HS, handshakeBody('heartbeat'), { secret: outbound, keyId: 1 });
+    expect(r.statusCode).toBe(200);
+    expect(r.json().rotate).toEqual({ keyId: 2, inbound: nextIn, outbound: nextOut, revokePrev: true });
+    expect(onRevokeRotated).toHaveBeenCalledWith(PROJECT_ID, 2, expect.anything());
+    // The old key (a thief's copy, or a site that missed the answer) is refused at once and never gets the new pair.
+    const again = await post(HS, handshakeBody('heartbeat'), { secret: outbound, keyId: 1 });
+    expect(again.statusCode).toBe(401);
+    expect(again.json().error.code).toBe('UNKNOWN_KEY');
+    expect(again.body).not.toContain(nextIn);
+    const ev = ex('events.request').events[2];
+    expect((await post(EV, eventsBody([ev]), { secret: outbound, keyId: 1 })).statusCode).toBe(401);
+    expect((await post(EV, eventsBody([ev]), { secret: nextOut, keyId: 2 })).statusCode).toBe(200);
   });
 
   it('answers 503 NOT_PAIRED for a known site without keys and 401 UNKNOWN_SITE for an unknown one', async () => {

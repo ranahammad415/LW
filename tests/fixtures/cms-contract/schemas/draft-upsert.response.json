@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/draft-upsert.response.json",
   "title": "draft-upsert response",
-  "description": "warnings may include SLUG_MISMATCH {wanted, got} (Phase 1 cannot set a slug on create).",
+  "description": "warnings may include SLUG_MISMATCH {wanted, got} (Phase 1 cannot set a slug on create); v1.5.7: SEO_LIVE_REFUSED {fields} (seo.* not written on a live entry, §33.5), DRAFT_HASH_UNAVAILABLE.",
   "type": "object",
   "properties": {
     "ok": {
@@ -28,6 +28,32 @@
     "rev": {
       "$ref": "common.json#/$defs/id",
       "description": "Opaque concurrency token: compare for equality only; send back as baseRev"
+    },
+    "revision": {
+      "$ref": "common.json#/$defs/id",
+      "description": "v1.5.7 (§33.4): the same value as rev (name used by the SEO Engine: { entryId, revision, draftHash })"
+    },
+    "draftHash": {
+      "anyOf": [
+        {
+          "$ref": "common.json#/$defs/draftHash",
+          "description": "v1.5.7 (§33.4): hash of the draft as stored after this write; null only with warning DRAFT_HASH_UNAVAILABLE"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "hashBasis": {
+      "anyOf": [
+        {
+          "$ref": "common.json#/$defs/draftHashBasis",
+          "description": "v1.5.8 (§34.1): everything draftHash covers except the content value, exactly as hashed (the same object as entry-get editable.hashBasis); { v: 1, ...hashBasis, content: { format, value } } hashes to draftHash. Absent from sites below 1.5.8; null only with warning DRAFT_HASH_UNAVAILABLE"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "path": {
       "$ref": "common.json#/$defs/path"
