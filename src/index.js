@@ -98,6 +98,8 @@ import { redactedRequestSerializer } from './lib/logRedaction.js';
 import { redactResponseSecrets, responseDropKeys } from './lib/redactSecrets.js';
 import { registerApiTokenHooks } from './lib/apiTokens.js';
 import { purgeExpiredIdempotencyKeys } from './lib/idempotency.js';
+import { installEngineReview } from './lib/engineReview/install.js';
+import { purgeEngineReviewRecords } from './lib/engineReview/retention.js';
 import { runWeeklyClientDigest } from './lib/weeklyDigest.js';
 import { runScheduledTaskSync } from './lib/dataImport/scheduledSync.js';
 import { runInterviewSchedulerTick, isSchedulerEnabled, isLeader } from './lib/interviewScheduler.js';
@@ -220,6 +222,8 @@ app.register(adminApiTokenRoutes, { prefix: '/api/admin' });
 app.register(projectRoutes, { prefix: '/api/projects' });
 app.register(projectCmsRoutes, { prefix: '/api/projects' });
 app.register(taskRoutes, { prefix: '/api/tasks' });
+// SEO Engine exact-result review issuer (OS-11..13). Off unless ENGINE_REVIEW_ISSUER_ENABLED=1; never blocks boot.
+const engineReviewState = await installEngineReview(app);
 app.register(clientDashboardRoutes, { prefix: '/api/client' });
 app.register(clientAnalyticsRoutes, { prefix: '/api/client' });
 app.register(clientReportRoutes, { prefix: '/api/client' });
@@ -406,7 +410,8 @@ try {
     if (!isLeader()) return;
     try {
       const idempotencyKeys = await purgeExpiredIdempotencyKeys();
-      if (idempotencyKeys) app.log.info({ idempotencyKeys }, 'Engine retention purge complete');
+      const engineReview = engineReviewState.issuer ? await purgeEngineReviewRecords() : null;
+      if (idempotencyKeys || engineReview) app.log.info({ idempotencyKeys, engineReview }, 'Engine retention purge complete');
     } catch (err) {
       app.log.error({ err }, 'Engine retention purge failed');
     }

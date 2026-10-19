@@ -188,6 +188,69 @@ model IdempotencyKey {
   @@map("idempotencykey")
 }
 
+// ── SEO Engine exact-result review issuer (OS-11..14, lib/engineReview/) ─────
+// Adapted from the Engine's localwaves-review bundle. No FKs to task/comment on purpose: a frozen report must not
+// change or vanish when the original comment is edited/deleted. Retention: lib/engineReview/retention.js.
+
+/// Frozen copy of an Engine worker-result comment (append-only).
+model EngineReviewFrozenResult {
+  id         String   @id @db.VarChar(191)
+  taskId     String   @db.VarChar(191)
+  commentId  String   @unique @db.VarChar(191)
+  reportHash String   @db.Char(64)
+  data       String   @db.LongText
+  createdAt  DateTime @default(now())
+
+  @@index([taskId])
+  @@index([createdAt])
+  @@map("engine_review_frozen_result")
+}
+
+/// Per-task review head (CAS on resultId/version/state).
+model EngineReviewTaskHead {
+  taskId   String @id @db.VarChar(191)
+  resultId String @db.VarChar(191)
+  version  Int
+  state    String @db.VarChar(30)
+
+  @@map("engine_review_task_head")
+}
+
+/// 120-second single-use confirmation challenge.
+model EngineReviewChallenge {
+  id        String   @id @db.VarChar(191)
+  taskId    String   @db.VarChar(191)
+  userId    String   @db.VarChar(191)
+  consumed  Boolean  @default(false)
+  data      String   @db.LongText
+  createdAt DateTime @default(now())
+
+  @@index([taskId])
+  @@index([createdAt])
+  @@map("engine_review_challenge")
+}
+
+/// Signed review envelopes waiting to be collected by the Engine (pull-only outbox, OS-13).
+model EngineReviewOutbox {
+  eventId     String    @id @db.VarChar(191)
+  challengeId String    @unique @db.VarChar(191)
+  taskId      String    @db.VarChar(191)
+  osProjectId String?   @db.VarChar(191)
+  resultId    String    @db.VarChar(191)
+  version     Int
+  data        String    @db.LongText
+  /// The signed event's own expiry (issuedAt + 15 min).
+  expiresAt   DateTime?
+  ackedAt     DateTime?
+  ackedById   String?   @db.VarChar(191)
+  createdAt   DateTime  @default(now())
+
+  @@unique([taskId, resultId, version])
+  @@index([createdAt])
+  @@index([osProjectId])
+  @@map("engine_review_outbox")
+}
+
 model SystemAlert {
   id        String   @id @default(uuid())
   userId    String
