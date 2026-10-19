@@ -149,7 +149,7 @@ describe('pairing codes', () => {
 });
 
 describe('applyReviewEvent: one upsert for both CMSs', () => {
-  const project = { id: 'p1', leadPmId: 'pm1', name: 'Oasis' };
+  const project = { id: 'p1', leadPmId: 'pm1', name: 'Oasis', wpUrl: 'https://oasispoolspas.com' };
 
   it('EmDash: writes cms* columns + cmsSeq and skips the WP stale-rewind guard (seq already ordered)', async () => {
     db.overrides['wpContentReview.findUnique'] = async () => ({ id: 'r1', isPublished: false, assignedWorkerId: null, status: 'client_approved', clientReviewedAt: '2026-10-15 12:00:00' });

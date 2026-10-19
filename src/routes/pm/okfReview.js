@@ -5,6 +5,7 @@
  * a client's knowledge base. Approving a draft calls writeOkfFile (which records
  * an OkfVersion) and then reindexes the client's assets.
  */
+import { rejectAgentReviewer } from '../../lib/agentPolicy.js';
 import { prisma } from '../../lib/prisma.js';
 import crypto from 'crypto';
 import { z } from 'zod';
@@ -148,7 +149,7 @@ export async function pmOkfReviewRoutes(app) {
   app.post(
     '/okf-review/drafts/:id/approve',
     {
-      onRequest: [app.verifyJwt, requirePmOrOwner],
+      onRequest: [app.verifyJwt, requirePmOrOwner, rejectAgentReviewer],
       schema: {
         body: {
           type: 'object',
@@ -246,7 +247,7 @@ export async function pmOkfReviewRoutes(app) {
   app.post(
     '/okf-review/drafts/:id/reject',
     {
-      onRequest: [app.verifyJwt, requirePmOrOwner],
+      onRequest: [app.verifyJwt, requirePmOrOwner, rejectAgentReviewer],
       schema: {
         body: {
           type: 'object',
@@ -284,7 +285,7 @@ export async function pmOkfReviewRoutes(app) {
   app.post(
     '/okf-review/drafts/bulk-approve',
     {
-      onRequest: [app.verifyJwt, requirePmOrOwner],
+      onRequest: [app.verifyJwt, requirePmOrOwner, rejectAgentReviewer],
       schema: {
         body: {
           type: 'object',
@@ -377,7 +378,7 @@ export async function pmOkfReviewRoutes(app) {
   // ── Bulk reject ───────────────────────────────────────────────────────────
   app.post(
     '/okf-review/drafts/bulk-reject',
-    { onRequest: [app.verifyJwt, requirePmOrOwner] },
+    { onRequest: [app.verifyJwt, requirePmOrOwner, rejectAgentReviewer] },
     async (request, reply) => {
       const parsed = z.object({
         ids: z.array(z.string().max(191)).min(1).max(100),

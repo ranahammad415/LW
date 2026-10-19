@@ -1,4 +1,6 @@
+import { rejectAgentReviewer } from '../lib/agentPolicy.js';
 import { prisma } from '../lib/prisma.js';
+import { safeSiteLink } from '../lib/siteLinks.js';
 import { createProjectBodySchema } from '../schemas/projects.js';
 import { generateChat, isAiConfigured } from '../lib/ai.js';
 import { syncProjectPages } from '../lib/wpSync.js';
@@ -7,6 +9,8 @@ import { validateSiteUrl } from '../lib/siteAdapters/netGuard.js';
 import { ensureProjectAccess } from '../lib/ensureProjectAccess.js';
 import { notify } from '../lib/notificationService.js';
 import { resolveCycle } from '../lib/workCycle.js';
+import { isWorkerApiToken } from '../lib/apiTokens.js';
+import { pruneTasksForWorker, withTaskReadFields } from '../lib/taskReadFields.js';
 
 const SUGGEST_TASKS_SYSTEM = `You are a Senior Digital Strategist at a premium agency. Your job is to suggest the next high-impact tasks to keep a client campaign moving forward.
 
@@ -428,6 +432,8 @@ export async function projectRoutes(app) {
       const sanitizeProject = (p) => ({
         ...p,
         wpApiKey: p.wpApiKey != null ? '[REDACTED]' : null,
+        // OS-07: assigneeId, updatedAt, completedAt, workCycleId on every task (recursively).
+        tasks: Array.isArray(p.tasks) ? p.tasks.map(withTaskReadFields) : p.tasks,
       });
 
       if (user.role === 'OWNER') {
@@ -449,6 +455,10 @@ export async function projectRoutes(app) {
         const hasTask = project.tasks.some((t) => t.assignees?.some((a) => a.id === user.id));
         if (!hasTask) {
           return reply.status(403).send({ message: 'You do not have access to this project' });
+        }
+        // Worker API tokens only see the tasks assigned to them (SEO Engine OS-02); human sessions keep the full list.
+        if (isWorkerApiToken(request)) {
+          return reply.send(sanitizeProject({ ...project, tasks: pruneTasksForWorker(project.tasks, user.id) }));
         }
         return reply.send(sanitizeProject(project));
       }
@@ -1035,7 +1045,8 @@ export async function projectRoutes(app) {
       return reply.send({
         draftId: json.draftId ?? null,
         parentId: json.parentId ?? postId,
-        editUrl: json.editUrl ?? null,
+        // Security hotfix: only an https link on the project's site host.
+        editUrl: safeSiteLink(json.editUrl, project.wpUrl),
         reused: !!json.reused,
       });
     }
@@ -1453,7 +1464,7 @@ export async function projectRoutes(app) {
 
   app.patch(
     '/:id/keywords/:keywordId/accept-edit',
-    { onRequest: [app.verifyJwt, app.requirePM] },
+    { onRequest: [app.verifyJwt, app.requirePM, rejectAgentReviewer] },
     async (request, reply) => {
       const { id, keywordId } = request.params;
 
@@ -1488,7 +1499,7 @@ export async function projectRoutes(app) {
 
   app.patch(
     '/:id/keywords/:keywordId/reject-edit',
-    { onRequest: [app.verifyJwt, app.requirePM] },
+    { onRequest: [app.verifyJwt, app.requirePM, rejectAgentReviewer] },
     async (request, reply) => {
       const { id, keywordId } = request.params;
       const { comment } = request.body || {};

@@ -681,7 +681,7 @@ export async function adminGlobalRoutes(app) {
     async (request, reply) => {
       const users = await prisma.user.findMany({
         where: { role: { in: TEAM_ROLES }, isActive: true },
-        select: { id: true, name: true, email: true, role: true, avatarUrl: true },
+        select: { id: true, name: true, email: true, role: true, avatarUrl: true, isAgent: true },
       });
 
       // GET /api/admin/team/workload — count active tasks per user (multi-assignee)
@@ -705,6 +705,8 @@ export async function adminGlobalRoutes(app) {
         email: u.email,
         role: u.role,
         avatarUrl: u.avatarUrl,
+        // Server-side agent flag (SEO Engine OS-01): OWNER admin views only; redactSecrets drops it elsewhere.
+        isAgent: u.isAgent === true,
         activeTaskCount: countByUser[u.id] ?? 0,
       }));
 
@@ -721,6 +723,7 @@ export async function adminGlobalRoutes(app) {
         const name = String(request.body?.name || '').trim();
         const email = String(request.body?.email || '').trim().toLowerCase();
         const role = String(request.body?.role || '').trim().toUpperCase();
+        const isAgent = request.body?.isAgent === true;
 
         if (!name || name.length > 255) {
           return reply.status(400).send({ message: 'Name is required' });
@@ -743,8 +746,8 @@ export async function adminGlobalRoutes(app) {
           // Reactivate a previously deactivated staff user with the new details.
           const updated = await prisma.user.update({
             where: { id: existing.id },
-            data: { name, role, isActive: true },
-            select: { id: true, name: true, email: true, role: true, avatarUrl: true },
+            data: { name, role, isActive: true, isAgent },
+            select: { id: true, name: true, email: true, role: true, avatarUrl: true, isAgent: true },
           });
           return reply.status(201).send({ ...updated, activeTaskCount: 0, tempPassword: null });
         }
@@ -761,8 +764,9 @@ export async function adminGlobalRoutes(app) {
             passwordHash,
             role,
             name,
+            isAgent,
           },
-          select: { id: true, name: true, email: true, role: true, avatarUrl: true },
+          select: { id: true, name: true, email: true, role: true, avatarUrl: true, isAgent: true },
         });
 
         return reply.status(201).send({ ...user, activeTaskCount: 0, tempPassword: plainPassword });
@@ -816,6 +820,12 @@ export async function adminGlobalRoutes(app) {
           }
           data.role = role;
         }
+        if (request.body?.isAgent !== undefined) {
+          if (typeof request.body.isAgent !== 'boolean') {
+            return reply.status(400).send({ message: 'isAgent must be a boolean' });
+          }
+          data.isAgent = request.body.isAgent;
+        }
 
         if (Object.keys(data).length === 0) {
           return reply.status(400).send({ message: 'No fields to update' });
@@ -824,7 +834,7 @@ export async function adminGlobalRoutes(app) {
         const updated = await prisma.user.update({
           where: { id },
           data,
-          select: { id: true, name: true, email: true, role: true, avatarUrl: true },
+          select: { id: true, name: true, email: true, role: true, avatarUrl: true, isAgent: true },
         });
         return reply.send(updated);
       } catch (err) {

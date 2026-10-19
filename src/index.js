@@ -83,6 +83,7 @@ import omniSearchRoutes from './routes/omniSearch/index.js';
 import { adminAiUsageRoutes } from './routes/admin/ai-usage.js';
 import { adminIntegrationsRoutes } from './routes/admin/integrations.js';
 import { adminAnalyticsRoutes } from './routes/admin/analytics.js';
+import { adminApiTokenRoutes } from './routes/admin/apiTokens.js';
 import { pmInputRequestRoutes } from './routes/pm/inputRequests.js';
 import { modalityRoutes } from './routes/modalityRoutes.js';
 import { publicIssuesRoutes } from './routes/publicIssues.js';
@@ -98,7 +99,13 @@ import { runGscSync } from './lib/gscSync.js';
 import { runNativeAnalyticsSync } from './lib/analytics/runNativeSync.js';
 import { initSentry } from './lib/sentry.js';
 import { redactedRequestSerializer } from './lib/logRedaction.js';
-import { redactResponseSecrets } from './lib/redactSecrets.js';
+import { redactResponseSecrets, responseDropKeys } from './lib/redactSecrets.js';
+import { registerApiTokenHooks } from './lib/apiTokens.js';
+import { purgeExpiredIdempotencyKeys } from './lib/idempotency.js';
+import { installEngineReview } from './lib/engineReview/install.js';
+import { purgeEngineReviewRecords } from './lib/engineReview/retention.js';
+import { engineRoutes } from './routes/engine.js';
+import { purgeGoogleTokenIssuances } from './lib/googleBroker.js';
 import { runWeeklyClientDigest } from './lib/weeklyDigest.js';
 import { runScheduledTaskSync } from './lib/dataImport/scheduledSync.js';
 import { runInterviewSchedulerTick, isSchedulerEnabled, isLeader } from './lib/interviewScheduler.js';
@@ -138,7 +145,11 @@ app.setValidatorCompiler(() => (data) => ({ value: data }));
 app.setSerializerCompiler(() => (data) => JSON.stringify(data));
 // Response schemas do not filter fields (plain JSON.stringify above): never let a plugin key or CMS credential
 // secret leave the API, whatever a route includes (e2e O21, see lib/redactSecrets.js).
-app.addHook('preSerialization', async (_request, _reply, payload) => redactResponseSecrets(payload));
+// Client audiences never get the PM preview link (token-only capability that can approve the PM stage).
+// The agent flag (User.isAgent) only reaches OWNER /api/admin/* responses (SEO Engine OS-01).
+app.addHook('preSerialization', async (request, _reply, payload) => redactResponseSecrets(payload, 0, responseDropKeys(request)));
+// API tokens (lwk_): project allowlist enforcement after auth + body parsing (lib/apiTokens.js).
+registerApiTokenHooks(app);
 
 // Security headers (register before CORS so preflight responses still include CORS headers).
 await app.register(helmet, {
@@ -213,9 +224,14 @@ app.register(adminInterviewRoutes, { prefix: '/api/admin' });
 app.register(adminAiUsageRoutes, { prefix: '/api/admin' });
 app.register(adminIntegrationsRoutes, { prefix: '/api/admin' });
 app.register(adminAnalyticsRoutes, { prefix: '/api/admin' });
+app.register(adminApiTokenRoutes, { prefix: '/api/admin' });
 app.register(projectRoutes, { prefix: '/api/projects' });
 app.register(projectCmsRoutes, { prefix: '/api/projects' });
 app.register(taskRoutes, { prefix: '/api/tasks' });
+// SEO Engine exact-result review issuer (OS-11..13). Off unless ENGINE_REVIEW_ISSUER_ENABLED=1; never blocks boot.
+const engineReviewState = await installEngineReview(app);
+// SEO Engine Google binding export + token broker (OS-15/16); full paths inside the plugin.
+app.register(engineRoutes);
 app.register(clientDashboardRoutes, { prefix: '/api/client' });
 app.register(clientAnalyticsRoutes, { prefix: '/api/client' });
 app.register(clientReportRoutes, { prefix: '/api/client' });
@@ -399,6 +415,22 @@ try {
     });
     app.log.info({ leader: isLeader() }, 'Interview scheduler enabled');
   }
+
+  // SEO Engine retention (OS-05 / OS-14): hourly purge of expired Idempotency-Key rows. Leader only
+  // (NODE_APP_INSTANCE 0 / unset); the deletes are plain conditional deleteMany calls, so a double run is harmless.
+  cron.schedule('23 * * * *', async () => {
+    if (!isLeader()) return;
+    try {
+      const idempotencyKeys = await purgeExpiredIdempotencyKeys();
+      const engineReview = engineReviewState.issuer ? await purgeEngineReviewRecords() : null;
+      const googleTokenAudit = await purgeGoogleTokenIssuances();
+      if (idempotencyKeys || engineReview || googleTokenAudit) {
+        app.log.info({ idempotencyKeys, engineReview, googleTokenAudit }, 'Engine retention purge complete');
+      }
+    } catch (err) {
+      app.log.error({ err }, 'Engine retention purge failed');
+    }
+  });
 
   // Daily notification digest ("You have N unread notifications" email) —
   // DISABLED per request. These digest emails are no longer sent. The in-app

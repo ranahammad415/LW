@@ -6,6 +6,8 @@
 // horizontally scale we will need to replace the in-memory bus with Redis
 // pub/sub or similar.
 
+import { redactResponseSecrets, AGENT_FLAG_KEYS } from './redactSecrets.js';
+
 const channels = new Map(); // projectId -> Set<{ res, userId }>
 
 /**
@@ -35,7 +37,8 @@ export function publish(projectId, event, payload) {
   if (!projectId) return;
   const set = channels.get(projectId);
   if (!set || set.size === 0) return;
-  const data = JSON.stringify(payload ?? {});
+  // Realtime frames never carry secrets or the server-only agent flag (SEO Engine OS-01).
+  const data = JSON.stringify(redactResponseSecrets(payload ?? {}, 0, AGENT_FLAG_KEYS));
   const frame = `event: ${event}\ndata: ${data}\n\n`;
   for (const { res } of set) {
     try {

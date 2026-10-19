@@ -7,6 +7,9 @@ import { verifyJwt } from '../../src/lib/verifyJwt.js';
 import { requireOwner } from '../../src/lib/requireOwner.js';
 import { requireClient, requireClientWriter } from '../../src/lib/requireClient.js';
 import { requirePM } from '../../src/lib/requirePM.js';
+import { redactResponseSecrets, responseDropKeys } from '../../src/lib/redactSecrets.js';
+import { registerApiTokenHooks } from '../../src/lib/apiTokens.js';
+import { adminApiTokenRoutes } from '../../src/routes/admin/apiTokens.js';
 
 import { authRoutes } from '../../src/routes/auth.js';
 import { userRoutes } from '../../src/routes/users.js';
@@ -77,8 +80,13 @@ export async function buildApp() {
   app.decorate('requireClientWriter', requireClientWriter);
   app.decorate('requirePM', requirePM);
 
+  // Same response redaction + API-token project hook as index.js
+  app.addHook('preSerialization', async (request, _reply, payload) => redactResponseSecrets(payload, 0, responseDropKeys(request)));
+  registerApiTokenHooks(app);
+
   // Routes — exact same prefixes as index.js
   app.register(authRoutes, { prefix: '/api/auth' });
+  app.register(adminApiTokenRoutes, { prefix: '/api/admin' });
   app.register(userRoutes, { prefix: '/api/users' });
 
   app.register(adminDashboardRoutes, { prefix: '/api/admin' });

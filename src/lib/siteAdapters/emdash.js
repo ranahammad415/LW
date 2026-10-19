@@ -17,6 +17,7 @@ import {
 } from './signing.js';
 import { decryptCmsSecret, cmsAad } from '../cmsKeyCrypto.js';
 import { guardedFetch } from './netGuard.js';
+import { safeEmdashLink, sanitizeEmdashLinks } from '../siteLinks.js';
 import { limitOutline } from './outline.js';
 import { STATUS_LABELS } from '../pipelineFormat.js';
 
@@ -233,6 +234,8 @@ export async function siteRequest(conn, route, body = {}, opts = {}) {
     }
 
     if (res && res.ok && json && json.ok !== false) {
+      // Security hotfix rule: preview / edit links only on the stored site host (https unless the dev opt-in).
+      sanitizeEmdashLinks(json, conn.siteUrl);
       Object.defineProperty(json, 'idempotentReplay', { value: isIdempotentReplay(res, json), enumerable: false, configurable: true });
       return json;
     }
@@ -240,6 +243,7 @@ export async function siteRequest(conn, route, body = {}, opts = {}) {
       err = res.ok
         ? new CmsBridgeError({ status: 502, code: 'UPSTREAM_UNAVAILABLE', message: 'The EmDash site returned an unreadable response.', retryable: true })
         : errorFromResponse(res.status, json);
+      if (err.details && typeof err.details === 'object') sanitizeEmdashLinks(err.details, conn.siteUrl);
     }
 
     if (err.code === 'UNKNOWN_KEY' && !triedPrev && conn.inbound.prev) {
@@ -400,8 +404,11 @@ function postTypeFor(collection) {
  * Contract `Review` (+ envelope bits) → the normalized review event consumed by
  * lib/reviewEvents.js applyReviewEvent (same keys as wordpress.normalizePipelineWebhook).
  */
-export function normalizeReviewEvent(review, { eventType, seq, message = null, override = false, snapshotText = null, clientActor = null } = {}) {
+export function normalizeReviewEvent(review, { eventType, seq, message = null, override = false, snapshotText = null, clientActor = null, siteUrl } = {}) {
   const r = review || {};
+  // Security hotfix rule for EmDash: links only on the stored site host (https; http only in the insecure dev opt-in).
+  // Callers that know the project pass its siteUrl; applyReviewEvent re-checks every event anyway.
+  const link = (v) => (siteUrl === undefined ? str(v, 1000) : safeEmdashLink(v, siteUrl));
   const reviewNo = int(r.reviewNo);
   const entryNo = int(r.entryNo) || 0;
   let logMessage = str(message, 500);
@@ -421,8 +428,8 @@ export function normalizeReviewEvent(review, { eventType, seq, message = null, o
     logMessage,
     status: String(r.status || '').slice(0, 50),
     revisionNumber: Number(r.round) || 1,
-    pmPreviewUrl: str(r.pmPreviewUrl, 1000),
-    clientPreviewUrl: str(r.clientPreviewUrl, 1000),
+    pmPreviewUrl: link(r.pmPreviewUrl),
+    clientPreviewUrl: link(r.clientPreviewUrl),
     pmDecision: str(r.pmDecision, 50),
     pmComment: str(r.pmComment, 10000),
     clientDecision: str(r.clientDecision, 50),
@@ -447,7 +454,7 @@ export function normalizeReviewEvent(review, { eventType, seq, message = null, o
       entryId: str(r.entryId, 64),
       revisionId: str(r.draftRevisionId, 64),
       seq: Number.isInteger(seq) ? seq : Number.isInteger(r.seq) ? r.seq : null,
-      editUrl: str(r.editUrl, 1000),
+      editUrl: link(r.editUrl),
       // v1.1.0 §21: CAS rev (sent back as expectedRev), decision channel, suggestion counts.
       rev: Number.isInteger(r.rev) ? r.rev : null,
       clientDecisionSource: r.clientDecisionSource === 'os' || r.clientDecisionSource === 'review-link' ? r.clientDecisionSource : null,
@@ -514,8 +521,8 @@ function parseDate(v) {
  * (no event, no notification). `seq` is NOT written here: only the event stream advances
  * cmsSeq, so a later event with the same seq is still applied and notified.
  */
-export function reviewToMirrorData(review) {
-  const n = normalizeReviewEvent(review, { eventType: '' });
+export function reviewToMirrorData(review, siteUrl) {
+  const n = normalizeReviewEvent(review, { eventType: '', siteUrl: siteUrl ?? null });
   const isPublished = n.status === 'published';
   const isCancelled = n.status === 'cancelled';
   return {
@@ -623,7 +630,7 @@ export function entryToPageData(entry, siteUrl) {
       cmsCollection: str(e.collection, 64),
       cmsDraftRevisionId: str(e.draftRevisionId, 64),
       cmsLiveRevisionId: str(e.liveRevisionId, 64),
-      cmsEditUrl: str(e.editUrl, 1000),
+      cmsEditUrl: safeEmdashLink(e.editUrl, siteUrl),
     },
   };
 }

@@ -23,12 +23,13 @@ import {
 } from '../../lib/siteAdapters/emdash.js';
 import { CmsKeyConfigError } from '../../lib/cmsKeyCrypto.js';
 import { osPublishDecision, checkScheduleAt, STAFF_PREVIEW_MAX_TTL_SEC } from '../../lib/siteAdapters/publish.js';
+import { safeEmdashLink } from '../../lib/siteLinks.js';
 
 const INTERACTIVE = { retryDelays: INTERACTIVE_RETRY_DELAYS_MS, timeoutMs: 8000 };
 
 const reviewInclude = {
   events: { orderBy: { createdAt: 'desc' }, take: 50 },
-  project: { select: { name: true, cmsType: true, cmsCapabilities: true, client: { select: { agencyName: true } } } },
+  project: { select: { name: true, cmsType: true, wpUrl: true, cmsCapabilities: true, client: { select: { agencyName: true } } } },
 };
 
 /** Map a bridge/config error to an OS JSON response ({ message, code }). */
@@ -264,7 +265,10 @@ export async function emdashStaffPreview({ request, reply, projectId, wpPipeline
     const { conn } = await loadEmdashConnection(projectId);
     const res = await emdashRoutes.previewLink(conn, { entryId: row.cmsEntryId, ttlSeconds: ttl, actor: osActor(request.user) }, INTERACTIVE);
     reply.header('cache-control', 'no-store');
-    return reply.send({ url: res.url, expiresAt: res.expiresAt, editUrl: res.editUrl || row.cmsEditUrl || null });
+    // Staff preview URL: same host rule as every site link (null when off the stored site host).
+    const url = safeEmdashLink(res.url, conn.siteUrl);
+    if (!url) return sendEmdashError(reply, new CmsBridgeError({ status: 502, code: 'UPSTREAM_UNAVAILABLE', message: 'The site returned a preview link that is not on the site address.' }), request.log);
+    return reply.send({ url, expiresAt: res.expiresAt, editUrl: res.editUrl || row.cmsEditUrl || null });
   } catch (err) {
     return sendEmdashError(reply, err, request.log);
   }

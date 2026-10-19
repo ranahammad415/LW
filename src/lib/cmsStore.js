@@ -768,8 +768,14 @@ async function isMigratedProject(projectId) {
   return p?.cmsMigration?.state === 'applied';
 }
 
-export async function mirrorEmdashReview(projectId, review, { log } = {}) {
-  const m = reviewToMirrorData(review);
+/** The project's stored site URL (links are kept only on its host, lib/siteLinks.js safeEmdashLink). */
+async function storedSiteUrl(projectId) {
+  const p = await prisma.project.findUnique({ where: { id: projectId }, select: { wpUrl: true } }).catch(() => null);
+  return p?.wpUrl || null;
+}
+
+export async function mirrorEmdashReview(projectId, review, { log, siteUrl } = {}) {
+  const m = reviewToMirrorData(review, siteUrl !== undefined ? siteUrl : await storedSiteUrl(projectId));
   if (!m.wpPipelineId) return null;
   if (await isForeignReview(projectId, review, log)) return null;
   if (await isPipelineTombstoned(projectId, m.wpPipelineId)) return null;

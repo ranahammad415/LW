@@ -16,6 +16,7 @@
  */
 import { prisma } from './prisma.js';
 import { emdashPublishColumns } from './siteAdapters/emdash.js';
+import { safeSiteLink, safeEmdashLink } from './siteLinks.js';
 import { maybeGenerateSummary } from './wpSync.js';
 import { notify, notifyTest } from './notificationService.js';
 import { publish as publishRealtime } from './realtimeBus.js';
@@ -51,6 +52,20 @@ export function emdashPostTypeLabel(n, postType, eventType) {
 }
 
 export async function applyReviewEvent({ project, event: n, log }) {
+  // Security hotfix: WordPress preview links are stored only when https and on the project's site host.
+  // EmDash: the same rule on the stored site host (exact host + port; http only in the insecure dev opt-in), also
+  // for the admin edit link.
+  if (n?.source !== 'EMDASH') {
+    n = { ...n, pmPreviewUrl: safeSiteLink(n.pmPreviewUrl, project?.wpUrl), clientPreviewUrl: safeSiteLink(n.clientPreviewUrl, project?.wpUrl) };
+  } else if (n) {
+    const site = project?.wpUrl || null;
+    n = {
+      ...n,
+      pmPreviewUrl: safeEmdashLink(n.pmPreviewUrl, site),
+      clientPreviewUrl: safeEmdashLink(n.clientPreviewUrl, site),
+      ...(n.cms ? { cms: { ...n.cms, editUrl: safeEmdashLink(n.cms.editUrl, site) } } : {}),
+    };
+  }
   const isEmdash = n.source === 'EMDASH';
   const {
     wpPipelineId,
@@ -527,7 +542,8 @@ async function notifyForReviewEvent({ project, n, review, alreadyPublished, port
           slug: 'content_published',
           recipientIds: recipients,
           variables: commonVars,
-          actionUrl: clientPreviewUrl || pmPreviewUrl || portalProjectUrl,
+          // Client users are recipients: never the PM link (token-only PM approval capability).
+          actionUrl: clientPreviewUrl || portalProjectUrl,
           metadata: { contentReviewId: review.id, projectId: project.id },
         }).catch(() => {});
       }
@@ -561,7 +577,7 @@ async function notifyForReviewEvent({ project, n, review, alreadyPublished, port
         const results = await notifyTest({
           slug,
           variables: commonVars,
-          actionUrl: clientPreviewUrl || pmPreviewUrl || portalProjectUrl,
+          actionUrl: te.client ? clientPreviewUrl || portalProjectUrl : clientPreviewUrl || pmPreviewUrl || portalProjectUrl,
           metadata: { contentReviewId: review.id, projectId: project.id, test: true },
           testRecipients,
         }).catch((err) => {
@@ -613,7 +629,8 @@ async function notifyForReviewEvent({ project, n, review, alreadyPublished, port
         slug,
         recipientIds: recipients,
         variables: commonVars,
-        actionUrl: clientPreviewUrl || pmPreviewUrl || portalProjectUrl,
+        // Client recipients (pending_client_review) never get the PM link.
+        actionUrl: status === 'pending_client_review' ? clientPreviewUrl || portalProjectUrl : clientPreviewUrl || pmPreviewUrl || portalProjectUrl,
         metadata: { contentReviewId: review.id, projectId: project.id, resend: true },
       }).then(() => console.log(`[pipeline-notify] notify() resolved for slug=${slug}`)).catch((err) => console.error(`[pipeline-notify] notify() FAILED:`, err));
     } else {

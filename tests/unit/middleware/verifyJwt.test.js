@@ -67,10 +67,13 @@ describe('verifyJwt', () => {
         avatarUrl: true,
         phone: true,
         timezone: true,
-        isActive: true
+        isActive: true,
+        tokenVersion: true,
+        isAgent: true
       }
     })
     expect(mockRequest.user).toEqual(dbUser)
+    expect(mockRequest.authMethod).toBe('jwt')
     expect(mockReply.status).not.toHaveBeenCalled()
   })
 
