@@ -902,7 +902,7 @@ export async function clientProjectsRoutes(app) {
           submittedById: r.submittedById,
           pmMemberName: r.pmMemberName,
           pmMemberId: r.pmMemberId,
-          pmPreviewUrl: r.pmPreviewUrl,
+          // pmPreviewUrl is never sent to clients (token-only PM approval link).
           clientPreviewUrl: r.clientPreviewUrl,
           pmDecision: r.pmDecision,
           pmComment: r.pmComment,
@@ -1007,7 +1007,7 @@ export async function clientProjectsRoutes(app) {
           submittedById: r.submittedById,
           pmMemberName: r.pmMemberName,
           pmMemberId: r.pmMemberId,
-          pmPreviewUrl: r.pmPreviewUrl,
+          // pmPreviewUrl is never sent to clients (token-only PM approval link).
           clientPreviewUrl: r.clientPreviewUrl,
           pmDecision: r.pmDecision,
           pmComment: r.pmComment,

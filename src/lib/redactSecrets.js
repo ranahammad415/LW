@@ -26,13 +26,27 @@ function isPlainObject(v) {
   return proto === Object.prototype || proto === null;
 }
 
-/** Returns the payload with secrets redacted. Copies only the branches that change; never mutates the input. */
-export function redactResponseSecrets(value, depth = 0) {
+/**
+ * The PM preview link is a token-only capability that can approve the PM stage: clients must never receive it. Dropped
+ * from every response to a CLIENT user and from every /api/client/* response (also an OWNER acting through X-Client-Id).
+ */
+export const CLIENT_DROP_KEYS = new Set(['pmPreviewUrl']);
+
+/** True when this response goes to a client audience. */
+export function isClientAudience(request) {
+  return request?.user?.role === 'CLIENT' || String(request?.url || '').startsWith('/api/client/');
+}
+
+/**
+ * Returns the payload with secrets redacted. Copies only the branches that change; never mutates the input.
+ * `extraDrop` (a Set of keys) is removed too, e.g. CLIENT_DROP_KEYS for client audiences.
+ */
+export function redactResponseSecrets(value, depth = 0, extraDrop = null) {
   if (depth > MAX_DEPTH || !value || typeof value !== 'object') return value;
   if (Array.isArray(value)) {
     let out = null;
     for (let i = 0; i < value.length; i += 1) {
-      const next = redactResponseSecrets(value[i], depth + 1);
+      const next = redactResponseSecrets(value[i], depth + 1, extraDrop);
       if (next !== value[i]) {
         if (!out) out = value.slice();
         out[i] = next;
@@ -44,7 +58,7 @@ export function redactResponseSecrets(value, depth = 0) {
   let out = null;
   for (const key of Object.keys(value)) {
     const v = value[key];
-    if (DROP_KEYS.has(key)) {
+    if (DROP_KEYS.has(key) || extraDrop?.has(key)) {
       if (!out) out = { ...value };
       delete out[key];
       continue;
@@ -56,7 +70,7 @@ export function redactResponseSecrets(value, depth = 0) {
       }
       continue;
     }
-    const next = redactResponseSecrets(v, depth + 1);
+    const next = redactResponseSecrets(v, depth + 1, extraDrop);
     if (next !== v) {
       if (!out) out = { ...value };
       out[key] = next;

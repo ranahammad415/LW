@@ -494,7 +494,8 @@ async function notifyForReviewEvent({ project, n, review, alreadyPublished, port
           slug: 'content_published',
           recipientIds: recipients,
           variables: commonVars,
-          actionUrl: clientPreviewUrl || pmPreviewUrl || portalProjectUrl,
+          // Client users are recipients: never the PM link (token-only PM approval capability).
+          actionUrl: clientPreviewUrl || portalProjectUrl,
           metadata: { contentReviewId: review.id, projectId: project.id },
         }).catch(() => {});
       }
@@ -528,7 +529,7 @@ async function notifyForReviewEvent({ project, n, review, alreadyPublished, port
         const results = await notifyTest({
           slug,
           variables: commonVars,
-          actionUrl: clientPreviewUrl || pmPreviewUrl || portalProjectUrl,
+          actionUrl: te.client ? clientPreviewUrl || portalProjectUrl : clientPreviewUrl || pmPreviewUrl || portalProjectUrl,
           metadata: { contentReviewId: review.id, projectId: project.id, test: true },
           testRecipients,
         }).catch((err) => {
@@ -580,7 +581,8 @@ async function notifyForReviewEvent({ project, n, review, alreadyPublished, port
         slug,
         recipientIds: recipients,
         variables: commonVars,
-        actionUrl: clientPreviewUrl || pmPreviewUrl || portalProjectUrl,
+        // Client recipients (pending_client_review) never get the PM link.
+        actionUrl: status === 'pending_client_review' ? clientPreviewUrl || portalProjectUrl : clientPreviewUrl || pmPreviewUrl || portalProjectUrl,
         metadata: { contentReviewId: review.id, projectId: project.id, resend: true },
       }).then(() => console.log(`[pipeline-notify] notify() resolved for slug=${slug}`)).catch((err) => console.error(`[pipeline-notify] notify() FAILED:`, err));
     } else {

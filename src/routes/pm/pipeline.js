@@ -634,7 +634,8 @@ export async function pmPipelineRoutes(app) {
                     submittedAt: nowFormatted,
                     aiSummary: updated.aiSummary || '',
                   },
-                  actionUrl: updated.clientPreviewUrl || updated.pmPreviewUrl || `/portal/admin/projects/${projectId}?tab=content-reviews`,
+                  // Client users are recipients: never the PM link.
+                  actionUrl: updated.clientPreviewUrl || `/portal/admin/projects/${projectId}?tab=content-reviews`,
                   metadata: { contentReviewId: updated.id, projectId },
                 }).catch(() => {});
               }

@@ -238,7 +238,8 @@ export async function wpWebhookRoutes(app) {
               slug: 'content_published',
               recipientIds: recipients,
               variables: commonVars,
-              actionUrl: review.clientPreviewUrl || review.pmPreviewUrl || portalProjectUrl,
+              // Client users are recipients: never the PM link.
+              actionUrl: review.clientPreviewUrl || portalProjectUrl,
               metadata: { contentReviewId: review.id, projectId: project.id },
             }).catch(() => {});
           }
