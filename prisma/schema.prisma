@@ -251,6 +251,27 @@ model EngineReviewOutbox {
   @@map("engine_review_outbox")
 }
 
+/// Audit row for every short-lived Google access token handed to the SEO Engine (OS-16). Never stores the token.
+model GoogleTokenIssuance {
+  id         String   @id @default(uuid())
+  apiTokenId String   @db.VarChar(191)
+  userId     String   @db.VarChar(191)
+  projectId  String   @db.VarChar(191)
+  /// gsc | ga4
+  product    String   @db.VarChar(16)
+  /// The bound property the token was issued for (gscSiteUrl or ga4PropertyId at issue time).
+  property   String   @db.VarChar(500)
+  scope      String   @db.VarChar(255)
+  expiresAt  DateTime
+  ip         String?  @db.VarChar(45)
+  createdAt  DateTime @default(now())
+
+  @@index([projectId, createdAt])
+  @@index([apiTokenId, createdAt])
+  @@index([createdAt])
+  @@map("googletokenissuance")
+}
+
 model SystemAlert {
   id        String   @id @default(uuid())
   userId    String

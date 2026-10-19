@@ -100,6 +100,8 @@ import { registerApiTokenHooks } from './lib/apiTokens.js';
 import { purgeExpiredIdempotencyKeys } from './lib/idempotency.js';
 import { installEngineReview } from './lib/engineReview/install.js';
 import { purgeEngineReviewRecords } from './lib/engineReview/retention.js';
+import { engineRoutes } from './routes/engine.js';
+import { purgeGoogleTokenIssuances } from './lib/googleBroker.js';
 import { runWeeklyClientDigest } from './lib/weeklyDigest.js';
 import { runScheduledTaskSync } from './lib/dataImport/scheduledSync.js';
 import { runInterviewSchedulerTick, isSchedulerEnabled, isLeader } from './lib/interviewScheduler.js';
@@ -224,6 +226,8 @@ app.register(projectCmsRoutes, { prefix: '/api/projects' });
 app.register(taskRoutes, { prefix: '/api/tasks' });
 // SEO Engine exact-result review issuer (OS-11..13). Off unless ENGINE_REVIEW_ISSUER_ENABLED=1; never blocks boot.
 const engineReviewState = await installEngineReview(app);
+// SEO Engine Google binding export + token broker (OS-15/16); full paths inside the plugin.
+app.register(engineRoutes);
 app.register(clientDashboardRoutes, { prefix: '/api/client' });
 app.register(clientAnalyticsRoutes, { prefix: '/api/client' });
 app.register(clientReportRoutes, { prefix: '/api/client' });
@@ -411,7 +415,10 @@ try {
     try {
       const idempotencyKeys = await purgeExpiredIdempotencyKeys();
       const engineReview = engineReviewState.issuer ? await purgeEngineReviewRecords() : null;
-      if (idempotencyKeys || engineReview) app.log.info({ idempotencyKeys, engineReview }, 'Engine retention purge complete');
+      const googleTokenAudit = await purgeGoogleTokenIssuances();
+      if (idempotencyKeys || engineReview || googleTokenAudit) {
+        app.log.info({ idempotencyKeys, engineReview, googleTokenAudit }, 'Engine retention purge complete');
+      }
     } catch (err) {
       app.log.error({ err }, 'Engine retention purge failed');
     }

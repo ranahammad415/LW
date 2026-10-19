@@ -18,6 +18,8 @@ const DROP_KEYS = new Set([
   'verifier',
   // API token hashes (lib/apiTokens.js) never leave the API, not even to OWNER admin views.
   'tokenHash',
+  // Agency Google refresh token (encrypted) never leaves the API either (SEO Engine OS-16 hardening).
+  'refreshTokenEnc',
 ]);
 export const REDACTED = '[REDACTED]';
 const MAX_DEPTH = 12;
