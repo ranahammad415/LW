@@ -1,3 +1,4 @@
+import { safeReviewLinks, safeSiteLink } from '../../lib/siteLinks.js';
 import { prisma } from '../../lib/prisma.js';
 import { notify } from '../../lib/notificationService.js';
 import { syncPipelineFromWp } from '../../lib/pipelineSync.js';
@@ -159,8 +160,8 @@ function formatReview(r) {
     assignedWorkerName: r.assignedWorkerName || null,
     pmMemberName: r.pmMemberName,
     pmMemberId: r.pmMemberId,
-    pmPreviewUrl: r.pmPreviewUrl,
-    clientPreviewUrl: r.clientPreviewUrl,
+    // Security hotfix: WordPress preview links only when https and on the project's site host.
+    ...safeReviewLinks(r, r.project),
     pmDecision: r.pmDecision,
     pmComment: r.pmComment,
     pmReviewedAt: r.pmReviewedAt || null,
@@ -234,6 +235,7 @@ export async function pmPipelineRoutes(app) {
               select: {
                 name: true,
                 cmsType: true,
+                wpUrl: true,
                 client: { select: { agencyName: true } },
               },
             },
@@ -273,6 +275,7 @@ export async function pmPipelineRoutes(app) {
               select: {
                 name: true,
                 cmsType: true,
+                wpUrl: true,
                 client: { select: { agencyName: true } },
               },
             },
@@ -434,7 +437,7 @@ export async function pmPipelineRoutes(app) {
           where,
           include: {
             events: { orderBy: { createdAt: 'desc' } },
-            project: { select: { name: true, cmsType: true, client: { select: { agencyName: true } } } },
+            project: { select: { name: true, cmsType: true, wpUrl: true, client: { select: { agencyName: true } } } },
           },
           orderBy: [{ wpUpdatedAt: 'desc' }, { updatedAt: 'desc' }],
         });
@@ -716,7 +719,7 @@ export async function pmPipelineRoutes(app) {
 
         const reviewInclude = {
           events: { orderBy: { createdAt: 'desc' }, take: 50 },
-          project: { select: { name: true, cmsType: true, client: { select: { agencyName: true } } } },
+          project: { select: { name: true, cmsType: true, wpUrl: true, client: { select: { agencyName: true } } } },
         };
 
         const recordRenewFailed = async (message, code = 'WP_RENEW_FAILED') => {
@@ -749,11 +752,15 @@ export async function pmPipelineRoutes(app) {
             wpPostId: existing.wpPostId || null,
           });
           if (!healed) return null;
+          // Security hotfix: only https links on the project's site host are stored.
+          const pm = safeSiteLink(healed.pmPreviewUrl, project.wpUrl);
+          const client = safeSiteLink(healed.clientPreviewUrl, project.wpUrl);
+          if (!pm && !client) return null;
           return prisma.wpContentReview.update({
             where: { id: existing.id },
             data: {
-              ...(healed.pmPreviewUrl ? { pmPreviewUrl: healed.pmPreviewUrl } : {}),
-              ...(healed.clientPreviewUrl ? { clientPreviewUrl: healed.clientPreviewUrl } : {}),
+              ...(pm ? { pmPreviewUrl: pm } : {}),
+              ...(client ? { clientPreviewUrl: client } : {}),
               wpUpdatedAt: new Date(),
             },
             include: reviewInclude,
@@ -828,8 +835,7 @@ export async function pmPipelineRoutes(app) {
                 body: {
                   success: true,
                   healedFromSync: true,
-                  pmPreviewUrl: healedRow.pmPreviewUrl,
-                  clientPreviewUrl: healedRow.clientPreviewUrl,
+                  ...safeReviewLinks(healedRow, project),
                   pipeline: formatReview(healedRow),
                   message: isTimeout
                     ? 'WordPress did not finish rotating links in time; refreshed existing preview URLs from the site.'
@@ -867,8 +873,7 @@ export async function pmPipelineRoutes(app) {
                 body: {
                   success: true,
                   healedFromSync: true,
-                  pmPreviewUrl: healedRow.pmPreviewUrl,
-                  clientPreviewUrl: healedRow.clientPreviewUrl,
+                  ...safeReviewLinks(healedRow, project),
                   pipeline: formatReview(healedRow),
                   message: missingRoute
                     ? 'WordPress is missing the rotate endpoint; refreshed existing preview URLs. Update the Localwave Agent plugin to 1.9.8+ to rotate links.'
@@ -907,6 +912,9 @@ export async function pmPipelineRoutes(app) {
               clientPreviewUrl = healed.clientPreviewUrl;
             }
           }
+          // Security hotfix: only https links on the project's site host are stored or returned.
+          pmPreviewUrl = safeSiteLink(pmPreviewUrl, project.wpUrl);
+          clientPreviewUrl = safeSiteLink(clientPreviewUrl, project.wpUrl);
 
           if (!pmPreviewUrl && !clientPreviewUrl) {
             return recordRenewFailed(
@@ -949,8 +957,7 @@ export async function pmPipelineRoutes(app) {
             ok: true,
             body: {
               success: true,
-              pmPreviewUrl: updated.pmPreviewUrl,
-              clientPreviewUrl: updated.clientPreviewUrl,
+              ...safeReviewLinks(updated, project),
               pipeline: formatReview(updated),
             },
           };

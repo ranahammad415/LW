@@ -1,4 +1,5 @@
 import { prisma } from '../../lib/prisma.js';
+import { safeReviewLinks } from '../../lib/siteLinks.js';
 import { ensureCurrentCycle } from '../../lib/workCycle.js';
 import { reviewDisplayUpdatedAt } from '../../lib/pipelineFormat.js';
 
@@ -151,7 +152,8 @@ export async function clientDashboardRoutes(app) {
         },
         orderBy: [{ wpUpdatedAt: 'desc' }, { updatedAt: 'desc' }],
         include: {
-          project: { select: { id: true, name: true } },
+          // wpUrl/cmsType: preview links are returned only when https and on the site host (security hotfix)
+          project: { select: { id: true, name: true, wpUrl: true, cmsType: true } },
         },
         take: 10,
       });
@@ -232,7 +234,7 @@ export async function clientDashboardRoutes(app) {
           status: r.status,
           projectId: r.project?.id || '',
           projectName: r.project?.name || '',
-          clientPreviewUrl: r.clientPreviewUrl,
+          clientPreviewUrl: safeReviewLinks(r, r.project).clientPreviewUrl,
           updatedAt: reviewDisplayUpdatedAt(r)?.toISOString() || null,
         })),
         activeTasks: activeTasks.map((t) => ({

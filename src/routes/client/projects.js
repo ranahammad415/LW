@@ -1,4 +1,5 @@
 import { prisma } from '../../lib/prisma.js';
+import { safeReviewLinks } from '../../lib/siteLinks.js';
 import { notify } from '../../lib/notificationService.js';
 import {
   CLIENT_STATUS_LABELS,
@@ -855,7 +856,7 @@ export async function clientProjectsRoutes(app) {
 
       const project = await prisma.project.findUnique({
         where: { id: projectId },
-        select: { id: true, name: true, clientId: true },
+        select: { id: true, name: true, clientId: true, wpUrl: true, cmsType: true },
       });
       if (!project || !clientIds.includes(project.clientId)) {
         return reply.status(404).send({ message: 'Project not found' });
@@ -903,7 +904,7 @@ export async function clientProjectsRoutes(app) {
           pmMemberName: r.pmMemberName,
           pmMemberId: r.pmMemberId,
           // pmPreviewUrl is never sent to clients (token-only PM approval link).
-          clientPreviewUrl: r.clientPreviewUrl,
+          clientPreviewUrl: safeReviewLinks(r, project).clientPreviewUrl,
           pmDecision: r.pmDecision,
           pmComment: r.pmComment,
           pmReviewedAt: r.pmReviewedAt || null,
@@ -975,7 +976,7 @@ export async function clientProjectsRoutes(app) {
           where,
           include: {
             events: { orderBy: { createdAt: 'desc' } },
-            project: { select: { id: true, name: true } },
+            project: { select: { id: true, name: true, wpUrl: true, cmsType: true } },
           },
           orderBy: [{ wpUpdatedAt: 'desc' }, { updatedAt: 'desc' }],
         });
@@ -1008,7 +1009,7 @@ export async function clientProjectsRoutes(app) {
           pmMemberName: r.pmMemberName,
           pmMemberId: r.pmMemberId,
           // pmPreviewUrl is never sent to clients (token-only PM approval link).
-          clientPreviewUrl: r.clientPreviewUrl,
+          clientPreviewUrl: safeReviewLinks(r, r.project).clientPreviewUrl,
           pmDecision: r.pmDecision,
           pmComment: r.pmComment,
           pmReviewedAt: r.pmReviewedAt || null,

@@ -1,4 +1,5 @@
 import { prisma } from './prisma.js';
+import { safeSiteLink } from './siteLinks.js';
 import {
   commentsForStatus,
   parseWpDate,
@@ -151,10 +152,9 @@ export async function syncPipelineFromWp({ projectId, source } = {}) {
           pmMemberId: p.pmAssigned?.memberId ? String(p.pmAssigned.memberId).slice(0, 100) : null,
           // Don't wipe stored preview URLs when WP omits them (expired display
           // cache / legacy rows without token_plain) — match webhook semantics.
-          ...(p.pmPreviewUrl ? { pmPreviewUrl: String(p.pmPreviewUrl).slice(0, 1000) } : {}),
-          ...(p.clientPreviewUrl
-            ? { clientPreviewUrl: String(p.clientPreviewUrl).slice(0, 1000) }
-            : {}),
+          // Security hotfix: only https links on the project's site host are stored.
+          ...(safeSiteLink(p.pmPreviewUrl, project.wpUrl) ? { pmPreviewUrl: safeSiteLink(p.pmPreviewUrl, project.wpUrl) } : {}),
+          ...(safeSiteLink(p.clientPreviewUrl, project.wpUrl) ? { clientPreviewUrl: safeSiteLink(p.clientPreviewUrl, project.wpUrl) } : {}),
           pmDecision: clearPm ? null : (p.pmDecision ? String(p.pmDecision).slice(0, 50) : null),
           pmComment: p.pmComment ? String(p.pmComment).slice(0, 10000) : null,
           clientDecision: clearClient
@@ -206,10 +206,8 @@ export async function syncPipelineFromWp({ projectId, source } = {}) {
               postTitle: String(p.postTitle || 'Untitled').slice(0, 500),
               ...data,
               // On create, allow null preview URLs when WP has none yet.
-              pmPreviewUrl: p.pmPreviewUrl ? String(p.pmPreviewUrl).slice(0, 1000) : null,
-              clientPreviewUrl: p.clientPreviewUrl
-                ? String(p.clientPreviewUrl).slice(0, 1000)
-                : null,
+              pmPreviewUrl: safeSiteLink(p.pmPreviewUrl, project.wpUrl),
+              clientPreviewUrl: safeSiteLink(p.clientPreviewUrl, project.wpUrl),
               ...createAssignee,
             },
           });

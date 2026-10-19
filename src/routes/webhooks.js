@@ -292,7 +292,8 @@ export async function wpWebhookRoutes(app) {
 
     const project = await prisma.project.findFirst({
       where: { wpApiKey: apiKey, cmsType: 'WORDPRESS' }, // EmDash projects never accept WP webhooks (review C2)
-      select: { id: true, leadPmId: true, name: true },
+      // wpUrl: preview links are kept only when on the project's site host (security hotfix).
+      select: { id: true, leadPmId: true, name: true, wpUrl: true },
     });
     if (!project) {
       return reply.status(401).send({ message: 'Invalid API key' });

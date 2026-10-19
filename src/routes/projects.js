@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma.js';
+import { safeSiteLink } from '../lib/siteLinks.js';
 import { createProjectBodySchema } from '../schemas/projects.js';
 import { generateChat, isAiConfigured } from '../lib/ai.js';
 import { syncProjectPages } from '../lib/wpSync.js';
@@ -1034,7 +1035,8 @@ export async function projectRoutes(app) {
       return reply.send({
         draftId: json.draftId ?? null,
         parentId: json.parentId ?? postId,
-        editUrl: json.editUrl ?? null,
+        // Security hotfix: only an https link on the project's site host.
+        editUrl: safeSiteLink(json.editUrl, project.wpUrl),
         reused: !!json.reused,
       });
     }

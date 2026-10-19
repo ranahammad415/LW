@@ -15,6 +15,7 @@
  *   written; the event row carries cmsSeq.
  */
 import { prisma } from './prisma.js';
+import { safeSiteLink } from './siteLinks.js';
 import { maybeGenerateSummary } from './wpSync.js';
 import { notify, notifyTest } from './notificationService.js';
 import { publish as publishRealtime } from './realtimeBus.js';
@@ -35,6 +36,10 @@ import {
  * @returns {Promise<{skipped?: string, review?: object, testResponse?: object}>}
  */
 export async function applyReviewEvent({ project, event: n, log }) {
+  // Security hotfix: WordPress preview links are stored only when https and on the project's site host.
+  if (n?.source !== 'EMDASH') {
+    n = { ...n, pmPreviewUrl: safeSiteLink(n.pmPreviewUrl, project?.wpUrl), clientPreviewUrl: safeSiteLink(n.clientPreviewUrl, project?.wpUrl) };
+  }
   const isEmdash = n.source === 'EMDASH';
   const {
     wpPipelineId,
