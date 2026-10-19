@@ -1518,7 +1518,7 @@ export async function pmPipelineRoutes(app) {
   // POST /api/pm/pipeline/:projectId/:wpPipelineId/client-review — OWNER acting for the client (onBehalfOf)
   app.post(
     '/pipeline/:projectId/:wpPipelineId/client-review',
-    { onRequest: [app.verifyJwt, app.requireOwner] },
+    { onRequest: [app.verifyJwt, app.requireOwner, rejectAgentReviewer] },
     async (request, reply) => {
       const { projectId, wpPipelineId } = request.params;
       const row = await prisma.wpContentReview.findUnique({
@@ -1588,10 +1588,10 @@ export async function pmPipelineRoutes(app) {
     if (request.user.role === 'PM' && project.leadPmId !== request.user.id) return reply.status(403).send({ message: 'Access denied' });
     return handler({ request, reply, projectId, wpPipelineId, formatReview });
   };
-  app.post('/pipeline/:projectId/:wpPipelineId/schedule', { onRequest: [app.verifyJwt, requirePmOrOwner] }, (request, reply) =>
+  app.post('/pipeline/:projectId/:wpPipelineId/schedule', { onRequest: [app.verifyJwt, requirePmOrOwner, rejectAgentReviewer] }, (request, reply) =>
     emdashOnly(request, reply, emdashSchedule)
   );
-  app.post('/pipeline/:projectId/:wpPipelineId/unschedule', { onRequest: [app.verifyJwt, requirePmOrOwner] }, (request, reply) =>
+  app.post('/pipeline/:projectId/:wpPipelineId/unschedule', { onRequest: [app.verifyJwt, requirePmOrOwner, rejectAgentReviewer] }, (request, reply) =>
     emdashOnly(request, reply, emdashUnschedule)
   );
   app.post('/pipeline/:projectId/:wpPipelineId/preview-link', { onRequest: [app.verifyJwt, requirePmOrOwner] }, (request, reply) =>

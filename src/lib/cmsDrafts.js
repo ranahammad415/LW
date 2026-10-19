@@ -61,7 +61,7 @@ export function draftEditMarkers(prev, data, now = new Date()) {
 export async function loadDraftProject(projectId) {
   const project = await prisma.project.findUnique({
     where: { id: String(projectId) },
-    select: { id: true, name: true, clientId: true, leadPmId: true, cmsType: true, cmsCapabilities: true, cmsRepairNeededAt: true, cmsSiteId: true },
+    select: { id: true, name: true, clientId: true, leadPmId: true, cmsType: true, cmsCapabilities: true, cmsHealth: true, cmsRepairNeededAt: true, cmsSiteId: true },
   });
   if (!project) throw bad('Project not found', 'NOT_FOUND', 404);
   if (project.cmsType !== 'EMDASH') throw bad('Site drafts are available for EmDash sites only.');
@@ -216,11 +216,30 @@ export function pushContextFrom(siteInfo, user, project) {
 
 // ─────────────────────────────── body building ───────────────────────────────
 
-export function actorFor(user, draft) {
+/**
+ * The actor sent to the site. SEO Engine OS-21: an agent account (User.isAgent) or any API-token caller (`agent`) is
+ * always kind "agent" under its own OS user. Otherwise the v1.2.1 rule: AI-written, unedited content is pushed by an
+ * agent on behalf of the triggering human, everything else by the human.
+ */
+export function actorFor(user, draft, { agent = false } = {}) {
   const name = String(user?.name || 'Agency OS user').slice(0, 160);
+  if (agent || user?.isAgent === true) return { kind: 'agent', osUserId: String(user.id), name: name.slice(0, 200), role: user.role };
   // v1.2.1 §23(8): AI-written, unedited content is pushed by an agent on behalf of the triggering human.
   if (draft?.aiGenerated) return { kind: 'agent', osUserId: String(user.id), name: `Nova writer (for ${name})`.slice(0, 200), role: user.role };
   return { kind: 'human', osUserId: String(user.id), name, role: user.role };
+}
+
+/**
+ * OS-19: the site idempotency key for a caller's Idempotency-Key, derived deterministically (UUID-shaped, contract §7)
+ * from (user, draft, caller key, attempt), so a retry after an unknown outcome reuses the SAME site key and the site
+ * replays instead of writing twice. `attempt` separates the reviewAfter fallback push (a different body).
+ */
+export function siteKeyFromCallerKey({ userId, draftId, callerKey }, attempt = 0) {
+  const h = crypto.createHash('sha256').update(`aos-os19-v1\u0000${userId}\u0000${draftId}\u0000${callerKey}\u0000${attempt}`, 'utf8').digest();
+  h[6] = (h[6] & 0x0f) | 0x50; // version 5 (name-based)
+  h[8] = (h[8] & 0x3f) | 0x80; // RFC 4122 variant
+  const x = h.subarray(0, 16).toString('hex');
+  return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20, 32)}`;
 }
 
 /** Byline rule (decision 5): the requester's own mapped byline or the team byline; agents always the team byline. */
@@ -236,8 +255,8 @@ export function defaultBylines(ctx, actor) {
  * target { entryId } + baseRev, and slug/parent only when the user asked to change them (`changeUrl`, never-published
  * entries only; the site answers SLUG_CHANGE_FORBIDDEN otherwise).
  */
-export function buildDraftUpsertBody(draft, { user, ctx, collectionInfo, slugPolicy, baseRev, changeUrl = false, reviewAfter = null }) {
-  const actor = actorFor(user, draft);
+export function buildDraftUpsertBody(draft, { user, ctx, collectionInfo, slugPolicy, baseRev, changeUrl = false, reviewAfter = null, agent = false }) {
+  const actor = actorFor(user, draft, { agent });
   const creating = !draft.cmsEntryId;
   // contentKind portableText (v1.5.1 posts read with includeLayout) keeps its Portable Text in the `layout` column.
   const content =
@@ -349,6 +368,8 @@ export function pushErrorMessage(err, { creating = true } = {}) {
       const an = (w) => (/^[aeiou]/i.test(w) ? 'an' : 'a');
       return `The site's service user is ${d.role ? `${an(role)} ${role}` : role}; EmDash needs ${an(need)} ${need} to ${what}. Ask the site admin to raise its role (admin → Users). Nothing was written.`;
     }
+    case 'IDEMPOTENCY_MISMATCH':
+      return 'This Idempotency-Key was already used to push different content of this draft. Use a new key for new content. Nothing was written.';
     case 'AGENT_NOT_ALLOWED':
       return 'The site does not let agents do this. A person must do it in the site admin. Nothing was written.';
     case 'BYLINE_NOT_ALLOWED':
@@ -436,7 +457,9 @@ function errorRecord(err, { creating = false } = {}) {
 }
 
 /**
- * Push one OS draft. `opts`: { reviewAfter?: { note? }, baseRev? (user-chosen after a conflict), changeUrl?, slugPolicy? }.
+ * Push one OS draft. `opts`: { reviewAfter?: { note? }, baseRev? (user-chosen after a conflict), changeUrl?, slugPolicy?,
+ * agent? (OS-21: agent account / API token caller → actor kind "agent"), callerKey? (OS-19: the caller's
+ * Idempotency-Key → deterministic site key), includeContent? (OS-20: read the stored draft back after the save) }.
  * Returns { draft, result } or throws CmsBridgeError (local validation) / records the site's refusal on the draft.
  */
 export async function pushDraft({ draftId, user, opts = {}, log }) {
@@ -498,8 +521,10 @@ async function pushClaimedDraft({ draft, project, user, opts, log, previous = 'n
     }
   }
 
+  let attemptNo = 0;
   const attemptOnce = async (withReview) => {
-    const body = buildDraftUpsertBody(draft, { user, ctx, collectionInfo, slugPolicy, baseRev: opts.baseRev, changeUrl: !!opts.changeUrl, reviewAfter: withReview });
+    const attemptIndex = attemptNo++;
+    const body = buildDraftUpsertBody(draft, { user, ctx, collectionInfo, slugPolicy, baseRev: opts.baseRev, changeUrl: !!opts.changeUrl, reviewAfter: withReview, agent: !!opts.agent });
     const check = checkDraftBody(siteInfo, body, draft.collection);
     if (!check.ok) {
       throw bad('Fix the problems before pushing.', 'VALIDATION', 422, { errors: check.errors, warnings: check.warnings });
@@ -507,14 +532,26 @@ async function pushClaimedDraft({ draft, project, user, opts, log, previous = 'n
     // One key per user action. A retry of the SAME body after an unknown outcome (timeout) reuses the key, so the
     // site replays its stored response and never creates a second entry (§7).
     const bodySha = sha(JSON.stringify(body));
-    const last = await prisma.cmsDraftPush.findFirst({ where: { draftId: draft.id, route: 'draft-upsert' }, orderBy: { createdAt: 'desc' } });
-    const reuse = last && last.status === 'unknown' && last.summary?.bodySha === bodySha && Date.now() - new Date(last.createdAt).getTime() < 23 * 3600_000;
-    const idempotencyKey = reuse ? last.idempotencyKey : crypto.randomUUID();
-    const pushRow = reuse
-      ? last
-      : await prisma.cmsDraftPush.create({
-          data: { projectId: project.id, draftId: draft.id, route: 'draft-upsert', idempotencyKey, actorKind: body.actor.kind, actorUserId: user.id, status: 'pending', summary: { bodySha } },
-        });
+    let idempotencyKey;
+    let pushRow;
+    if (opts.callerKey) {
+      // OS-19: the caller's key decides the site key; a retry of the same call finds (and reuses) the same push row.
+      idempotencyKey = siteKeyFromCallerKey({ userId: user.id, draftId: draft.id, callerKey: opts.callerKey }, attemptIndex);
+      pushRow =
+        (await prisma.cmsDraftPush.findUnique({ where: { idempotencyKey } })) ||
+        (await prisma.cmsDraftPush.create({
+          data: { projectId: project.id, draftId: draft.id, route: 'draft-upsert', idempotencyKey, actorKind: body.actor.kind, actorUserId: user.id, status: 'pending', summary: { bodySha, callerKey: true } },
+        }));
+    } else {
+      const last = await prisma.cmsDraftPush.findFirst({ where: { draftId: draft.id, route: 'draft-upsert' }, orderBy: { createdAt: 'desc' } });
+      const reuse = last && last.status === 'unknown' && last.summary?.bodySha === bodySha && Date.now() - new Date(last.createdAt).getTime() < 23 * 3600_000;
+      idempotencyKey = reuse ? last.idempotencyKey : crypto.randomUUID();
+      pushRow = reuse
+        ? last
+        : await prisma.cmsDraftPush.create({
+            data: { projectId: project.id, draftId: draft.id, route: 'draft-upsert', idempotencyKey, actorKind: body.actor.kind, actorUserId: user.id, status: 'pending', summary: { bodySha } },
+          });
+    }
     try {
       const { conn } = await loadEmdashConnection(project.id);
       return { body, check, bodySha, pushRow, res: await emdashRoutes.draftUpsert(conn, body, { ...INTERACTIVE, idempotencyKey }) };
@@ -529,7 +566,7 @@ async function pushClaimedDraft({ draft, project, user, opts, log, previous = 'n
   // reviewAfter), or a draft read from the site and never edited. A review request, a URL change, an explicit baseRev
   // or a "replace the pending draft" read always go to the site.
   if (draft.cmsEntryId && !reviewAfter && !opts.changeUrl && !opts.baseRev) {
-    const probe = buildDraftUpsertBody(draft, { user, ctx, collectionInfo, slugPolicy, changeUrl: false, reviewAfter: null });
+    const probe = buildDraftUpsertBody(draft, { user, ctx, collectionInfo, slugPolicy, changeUrl: false, reviewAfter: null, agent: !!opts.agent });
     const csha = contentSha(probe);
     const replacesPending = Array.isArray(draft.lastPushWarnings) && draft.lastPushWarnings.some((w) => w?.code === 'REPLACES_PENDING_DRAFT');
     // e2e O18b: the claim already set lastPushStatus to 'pushing'; the status before the claim is `previous`.
@@ -625,6 +662,14 @@ async function pushClaimedDraft({ draft, project, user, opts, log, previous = 'n
     if (page) await prisma.contentMapNode.updateMany({ where: { id: draft.contentMapNodeId, wpPageId: null }, data: { wpPageId: page.id } }).catch(() => {});
   }
   log?.info?.({ projectId: project.id, draftId: draft.id, created: !!res.created, actor: body.actor.kind, replay: !!res.idempotentReplay }, 'EmDash draft pushed');
+  // OS-20: the stored draft content, read right after the save (entry-get includeLayout, variant draft). A failed read
+  // never fails the push: storedContent is null with a CONTENT_READ_FAILED warning.
+  let storedContent;
+  if (opts.includeContent) {
+    storedContent = await readStoredContent(project, res.entryId || updated.cmsEntryId, log);
+    if (!storedContent.ok) warnings.push({ code: 'CONTENT_READ_FAILED', path: '$', message: storedContent.message });
+    storedContent = storedContent.ok ? storedContent.content : null;
+  }
   return {
     draft: updated,
     result: {
@@ -641,9 +686,34 @@ async function pushClaimedDraft({ draft, project, user, opts, log, previous = 'n
       draftRevisionId: stored.draftRevisionId,
       draftHash: stored.draftHash,
       hashBasis: stored.hashBasis,
+      ...(opts.includeContent ? { storedContent } : {}),
     },
     pushRowId: pushRow.id,
   };
+}
+
+/**
+ * OS-20: entry-get { includeLayout: true, variant: "draft" } right after a save → the editable content exactly as the
+ * site returns it: `format` plus `layout` / `portableText` / `body.markdown`, with the read's `rev`, `draftHash`,
+ * `hashBasis`, `omitted` and `valid`. Needs the site's layoutRead capability.
+ */
+export async function readStoredContent(project, entryId, log) {
+  if (!entryId) return { ok: false, message: 'The stored draft could not be read back: the site returned no entry id.' };
+  if (!hasLayoutRead(project)) return { ok: false, message: 'The stored draft could not be read back: this site does not offer the layout read (layoutRead).' };
+  try {
+    const { conn } = await loadEmdashConnection(project.id);
+    const res = await emdashRoutes.entryGetLayout(conn, String(entryId), 'draft', { retryDelays: [], timeoutMs: 15_000 });
+    const e = res?.editable;
+    if (!e || typeof e !== 'object') return { ok: false, message: 'The stored draft could not be read back: the site sent no editable content.' };
+    const pick = {};
+    for (const k of ['format', 'layout', 'portableText', 'body', 'rev', 'draftHash', 'hashBasis', 'omitted', 'valid']) {
+      if (Object.prototype.hasOwnProperty.call(e, k)) pick[k] = e[k];
+    }
+    return { ok: true, content: pick };
+  } catch (err) {
+    log?.warn?.({ projectId: project.id, code: err?.code }, 'EmDash stored draft read failed');
+    return { ok: false, message: `The draft was saved, but reading it back failed (${err?.code || 'error'}). Read it again with the draft or the page later.` };
+  }
 }
 
 /**

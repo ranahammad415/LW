@@ -9,7 +9,8 @@
  *   409 IDEMPOTENCY_IN_PROGRESS with Retry-After).
  * - Same key + same fingerprint after completion → the stored status code and body are replayed
  *   (header `Idempotent-Replayed: true`). Same key + different fingerprint → 409 IDEMPOTENCY_KEY_REUSED.
- * - 5xx responses release the key so the caller can retry; 2xx/4xx are stored. Keys live 7 days; a pending claim
+ * - 5xx responses release the key so the caller can retry; 2xx/4xx are stored. A route may also release it by setting
+ *   `request.idempotency.release = true` (OS-19: a draft push whose site outcome is unknown must run again). Keys live 7 days; a pending claim
  *   older than 2 minutes (crashed request) can be reclaimed.
  * The stored body is the response after the global redaction hook, and it is only ever replayed to the same user.
  */
@@ -116,7 +117,7 @@ export function idempotency(route) {
     if (!id) return payload;
     const statusCode = reply.statusCode;
     try {
-      if (statusCode >= 500) {
+      if (statusCode >= 500 || request.idempotency?.release === true) {
         await prisma.idempotencyKey.deleteMany({ where: { id, state: 'pending' } });
       } else {
         const body = typeof payload === 'string' ? payload : payload == null ? '' : Buffer.isBuffer(payload) ? payload.toString('utf8') : String(payload);

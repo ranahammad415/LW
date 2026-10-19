@@ -50,8 +50,26 @@ export const API_TOKEN_SCOPES = {
   'engine-review:outbox': ['GET /api/engine-review/outbox', 'POST /api/engine-review/outbox/:eventId/ack'],
   'bindings:read': ['GET /api/projects/:id/google-bindings'],
   'google:token': ['POST /api/engine/google/token'],
+  // SEO Engine OS-21: EmDash site drafts (never publish). Read = list / get / push context / pre-check.
+  'drafts:read': [
+    'GET /api/pm/projects/:projectId/cms-drafts',
+    'GET /api/pm/cms-drafts/:id',
+    'GET /api/pm/projects/:projectId/cms-push-context',
+    'POST /api/pm/cms-drafts/:id/check',
+  ],
+  // Write = create / PATCH / push / open a site page / image upload. Implies drafts:read.
+  'drafts:write': [
+    'POST /api/pm/projects/:projectId/cms-drafts',
+    'PATCH /api/pm/cms-drafts/:id',
+    'POST /api/pm/cms-drafts/:id/push',
+    'POST /api/pm/projects/:projectId/cms-drafts/from-entry',
+    'POST /api/pm/projects/:projectId/cms-media',
+  ],
 };
-export const EXPLICIT_SCOPES = new Set(['bindings:read', 'google:token']);
+/** Scopes that must be listed on the token: an empty scope list never grants them (OS-16, OS-21). */
+export const EXPLICIT_SCOPES = new Set(['bindings:read', 'google:token', 'drafts:read', 'drafts:write']);
+/** A listed scope that also satisfies another scope's routes. */
+export const SCOPE_IMPLIES = { 'drafts:write': ['drafts:read'] };
 export const API_TOKEN_SCOPE_NAMES = Object.keys(API_TOKEN_SCOPES);
 
 const ROUTE_TO_SCOPE = new Map();
@@ -61,6 +79,8 @@ for (const [scope, routes] of Object.entries(API_TOKEN_SCOPES)) {
 
 /** Never reachable with an API token, whatever its scopes. */
 const DENIED_PREFIXES = ['/api/auth/', '/api/admin/api-tokens'];
+/** Never reachable with an API token (method + route): deleting OS drafts and the paid AI writer stay human-only. */
+const DENIED_METHOD_ROUTES = new Set(['DELETE /api/pm/cms-drafts/:id', 'POST /api/pm/cms-drafts/:id/ai-write']);
 const DENIED_ROUTES = new Set([
   '/api/admin/change-password',
   '/api/admin/impersonate',
@@ -83,7 +103,23 @@ const PROJECT_RESOLVERS = {
   'POST /api/engine-review/outbox/:eventId/ack': () => 'filter',
   'GET /api/staff/clients/:clientId/knowledge/index': (req) => ({ clientId: req.params?.clientId }),
   'GET /api/staff/clients/:clientId/knowledge/versions': (req) => ({ clientId: req.params?.clientId }),
+  // OS-21 draft routes: the project in the path, or the draft's project.
+  'GET /api/pm/projects/:projectId/cms-drafts': (req) => ({ projectId: req.params?.projectId }),
+  'POST /api/pm/projects/:projectId/cms-drafts': (req) => ({ projectId: req.params?.projectId }),
+  'POST /api/pm/projects/:projectId/cms-drafts/from-entry': (req) => ({ projectId: req.params?.projectId }),
+  'GET /api/pm/projects/:projectId/cms-push-context': (req) => ({ projectId: req.params?.projectId }),
+  'POST /api/pm/projects/:projectId/cms-media': (req) => ({ projectId: req.params?.projectId }),
+  'GET /api/pm/cms-drafts/:id': (req) => projectIdForDraft(req.params?.id),
+  'PATCH /api/pm/cms-drafts/:id': (req) => projectIdForDraft(req.params?.id),
+  'POST /api/pm/cms-drafts/:id/push': (req) => projectIdForDraft(req.params?.id),
+  'POST /api/pm/cms-drafts/:id/check': (req) => projectIdForDraft(req.params?.id),
 };
+
+async function projectIdForDraft(draftId) {
+  if (!draftId || typeof draftId !== 'string') return null;
+  const d = await prisma.cmsDraft.findUnique({ where: { id: draftId }, select: { projectId: true } });
+  return { projectId: d?.projectId || null };
+}
 
 export function generateApiToken() {
   return API_TOKEN_PREFIX + randomBytes(32).toString('base64url');
@@ -111,16 +147,17 @@ function asList(value) {
 export function checkApiTokenRoute(token, method, url) {
   const m = method === 'HEAD' ? 'GET' : method;
   if (!url) return { ok: false, status: 403, message: 'API tokens cannot be used for this endpoint' };
-  if (DENIED_PREFIXES.some((p) => url.startsWith(p)) || DENIED_ROUTES.has(url)) {
+  const key = `${m} ${url}`;
+  if (DENIED_PREFIXES.some((p) => url.startsWith(p)) || DENIED_ROUTES.has(url) || DENIED_METHOD_ROUTES.has(key)) {
     return { ok: false, status: 403, message: 'API tokens cannot be used for this endpoint' };
   }
-  const key = `${m} ${url}`;
   const routeScope = ROUTE_TO_SCOPE.get(key) || null;
   const scopes = asList(token.scopes);
-  if (routeScope && EXPLICIT_SCOPES.has(routeScope) && !scopes.includes(routeScope)) {
+  const has = (scope) => scopes.includes(scope) || scopes.some((x) => (SCOPE_IMPLIES[x] || []).includes(scope));
+  if (routeScope && EXPLICIT_SCOPES.has(routeScope) && !has(routeScope)) {
     return { ok: false, status: 403, message: `This API token needs the ${routeScope} scope` };
   }
-  if (scopes.length > 0 && (!routeScope || !scopes.includes(routeScope))) {
+  if (scopes.length > 0 && (!routeScope || !has(routeScope))) {
     return { ok: false, status: 403, message: 'This API token is not allowed to use this endpoint' };
   }
   if (asList(token.projectIds).length > 0 && !PROJECT_RESOLVERS[key]) {

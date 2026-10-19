@@ -383,7 +383,8 @@ function compact(obj) {
 /** OS actor for a signed call (contract common.json#/$defs/osActor). */
 export function osActor(user) {
   return {
-    kind: 'human',
+    // SEO Engine OS-01/OS-21: an agent account is never presented as a person (routes that publish refuse agents anyway).
+    kind: user?.isAgent === true ? 'agent' : 'human',
     osUserId: String(user?.id || ''),
     name: String(user?.name || 'Agency OS user').slice(0, 200),
     ...(user?.role ? { role: user.role } : {}),

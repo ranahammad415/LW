@@ -5,6 +5,8 @@
 import { prisma } from '../../lib/prisma.js';
 import { generateChat, isAiConfigured } from '../../lib/ai.js';
 import { CmsBridgeError } from '../../lib/siteAdapters/emdash.js';
+import { idempotency } from '../../lib/idempotency.js';
+import { isAgentOrToken } from '../../lib/apiTokens.js';
 import {
   DRAFT_STAFF_ROLES,
   AI_DRAFT_LIMITS,
@@ -179,6 +181,11 @@ async function loadDraftFor(request, reply, draftId) {
 
 export async function pmCmsDraftRoutes(app) {
   const staff = { onRequest: [app.verifyJwt, requireStaff] };
+  // SEO Engine OS-19: Idempotency-Key on create / PATCH / push (same middleware and semantics as OS-05).
+  const idemCreate = idempotency('POST /api/pm/projects/:projectId/cms-drafts');
+  const idemPatch = idempotency('PATCH /api/pm/cms-drafts/:id');
+  const idemPush = idempotency('POST /api/pm/cms-drafts/:id/push');
+  const withIdem = (idem) => ({ ...staff, preHandler: idem.preHandler, onSend: idem.onSend });
 
   // Editor context: collections, parents, block schemas, bylines (mine/team), terms, media limits (live site-info).
   app.get('/projects/:projectId/cms-push-context', staff, async (request, reply) => {
@@ -210,7 +217,7 @@ export async function pmCmsDraftRoutes(app) {
     }
   });
 
-  app.post('/projects/:projectId/cms-drafts', staff, async (request, reply) => {
+  app.post('/projects/:projectId/cms-drafts', withIdem(idemCreate), async (request, reply) => {
     try {
       const project = await loadDraftProject(request.params.projectId);
       const b = request.body || {};
@@ -257,14 +264,15 @@ export async function pmCmsDraftRoutes(app) {
     }
   });
 
-  app.patch('/cms-drafts/:id', staff, async (request, reply) => {
+  app.patch('/cms-drafts/:id', withIdem(idemPatch), async (request, reply) => {
     try {
       const ctx = await loadDraftFor(request, reply, request.params.id);
       if (!ctx) return;
       if (!ctx.canWrite) return reply.status(403).send({ message: 'You cannot edit this draft.' });
       const data = sanitizeEdit(request.body || {});
-      // A person editing the content makes it human-written again (actor kind "human" on the next push).
-      if (Object.keys(data).some((k) => CONTENT_FIELDS.has(k))) data.aiGenerated = false;
+      // A person editing the content makes it human-written again (actor kind "human" on the next push). An agent /
+      // API-token edit leaves the flag alone (its own pushes are "agent" anyway, OS-21).
+      if (!isAgentOrToken(request) && Object.keys(data).some((k) => CONTENT_FIELDS.has(k))) data.aiGenerated = false;
       if (ctx.draft.cmsEntryId && data.collection && data.collection !== ctx.draft.collection) {
         return reply.status(400).send({ message: 'The collection cannot change after the first push.' });
       }
@@ -304,6 +312,7 @@ export async function pmCmsDraftRoutes(app) {
         collectionInfo,
         slugPolicy: pctx.capabilities.draftPushFromOs ? 'exact' : 'best-effort',
         changeUrl: !!request.body?.changeUrl,
+        agent: isAgentOrToken(request),
       });
       return reply.send(checkDraftBody(info, body, ctx.draft.collection));
     } catch (err) {
@@ -312,9 +321,11 @@ export async function pmCmsDraftRoutes(app) {
   });
 
   // Push: one user action = one idempotency key. Never auto-retried on CONFLICT_REV / ENTRY_LOCKED.
-  app.post('/cms-drafts/:id/push', staff, async (request, reply) => {
+  app.post('/cms-drafts/:id/push', withIdem(idemPush), async (request, reply) => {
     try {
       const b = request.body || {};
+      const agent = isAgentOrToken(request);
+      const callerKey = request.idempotency?.id ? String(request.headers['idempotency-key']) : null;
       const out = await pushDraft({
         draftId: request.params.id,
         user: request.user,
@@ -323,9 +334,16 @@ export async function pmCmsDraftRoutes(app) {
           baseRev: b.baseRev ? String(b.baseRev).slice(0, 64) : undefined,
           changeUrl: !!b.changeUrl,
           slugPolicy: b.slugPolicy === 'best-effort' ? 'best-effort' : undefined,
+          agent,
+          callerKey,
+          // OS-20: agents and API tokens always get the stored content back; people on request.
+          includeContent: agent || b.includeContent === true,
         },
         log: request.log,
       });
+      // OS-19: an unknown site outcome (timeout / 5xx) is not a final answer: release the caller's key so the same
+      // call runs again, and reuses the same site key (the site then replays instead of writing twice).
+      if (out.result.retryable && request.idempotency?.id) request.idempotency.release = true;
       return reply.status(out.result.ok ? 200 : 409).send({ draft: formatDraft(out.draft, { canWrite: true, openReview: await openReviewForEntry(out.draft.projectId, out.draft.cmsEntryId) }), result: out.result });
     } catch (err) {
       return sendError(reply, err, request.log);
