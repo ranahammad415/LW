@@ -54,6 +54,8 @@ model User {
   lastLoginIp      String?   @db.VarChar(45)
   isActive         Boolean   @default(true)
   tokenVersion     Int       @default(0)
+  /// Server-side only: marks an agentic worker / Engine service account. Never sent to clients (lib/redactSecrets.js).
+  isAgent          Boolean   @default(false)
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @default(now()) @updatedAt
 
@@ -101,6 +103,7 @@ model User {
   backlinkCartItems           BacklinkCartItem[]       @relation("BacklinkCartAddedBy")
   backlinkOrdersRequested     BacklinkOrder[]          @relation("BacklinkOrderRequester")
   backlinkOrderEvents         BacklinkOrderEvent[]     @relation("BacklinkOrderEventActor")
+  apiTokens                   ApiToken[]               @relation("ApiTokenUser")
 
   @@map("user")
 }
@@ -136,6 +139,33 @@ model PasswordResetToken {
   @@index([userId])
   @@index([expiresAt])
   @@map("password_reset_token")
+}
+
+/// Per-user API token (lwk_ bearer). Only the sha256 of the token is stored; the plaintext is shown once.
+/// Resolves to its user with that user's normal role (lib/apiTokens.js). OWNER issues and revokes.
+model ApiToken {
+  id               String    @id @default(uuid())
+  userId           String
+  name             String    @db.VarChar(100)
+  tokenHash        String    @unique @db.VarChar(64)
+  /// First characters of the token ("lwk_xxxx") so the OWNER can recognise it. Not a secret.
+  tokenPrefix      String    @db.VarChar(16)
+  /// Route groups (lib/apiTokens.js API_TOKEN_SCOPES). Null/empty = the user's normal permissions.
+  scopes           Json?
+  /// Project id allowlist. Null/empty = every project the user can already reach.
+  projectIds       Json?
+  /// User.tokenVersion at issue time; a bump (password reset/change) invalidates the token.
+  userTokenVersion Int       @default(0)
+  expiresAt        DateTime
+  lastUsedAt       DateTime?
+  revokedAt        DateTime?
+  revokedById      String?   @db.VarChar(191)
+  createdById      String?   @db.VarChar(191)
+  createdAt        DateTime  @default(now())
+  user             User      @relation("ApiTokenUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("apitoken")
 }
 
 model SystemAlert {

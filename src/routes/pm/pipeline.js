@@ -1,3 +1,4 @@
+import { rejectAgentReviewer } from '../../lib/agentPolicy.js';
 import { safeReviewLinks, safeSiteLink } from '../../lib/siteLinks.js';
 import { prisma } from '../../lib/prisma.js';
 import { notify } from '../../lib/notificationService.js';
@@ -452,7 +453,7 @@ export async function pmPipelineRoutes(app) {
   // POST /api/pm/pipeline/:projectId/:wpPipelineId/review
   app.post(
     '/pipeline/:projectId/:wpPipelineId/review',
-    { onRequest: [app.verifyJwt, requirePmOrOwner] },
+    { onRequest: [app.verifyJwt, requirePmOrOwner, rejectAgentReviewer] },
     async (request, reply) => {
       try {
         const { projectId, wpPipelineId } = request.params;
@@ -531,7 +532,7 @@ export async function pmPipelineRoutes(app) {
   // POST /api/pm/pipeline/:projectId/:wpPipelineId/publish
   app.post(
     '/pipeline/:projectId/:wpPipelineId/publish',
-    { onRequest: [app.verifyJwt, requirePmOrOwner] },
+    { onRequest: [app.verifyJwt, requirePmOrOwner, rejectAgentReviewer] },
     async (request, reply) => {
       try {
         const { projectId, wpPipelineId } = request.params;

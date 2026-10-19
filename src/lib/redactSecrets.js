@@ -16,6 +16,8 @@ const DROP_KEYS = new Set([
   'outboundKeyPendingEnc',
   'signingKeyEnc',
   'verifier',
+  // API token hashes (lib/apiTokens.js) never leave the API, not even to OWNER admin views.
+  'tokenHash',
 ]);
 export const REDACTED = '[REDACTED]';
 const MAX_DEPTH = 12;
@@ -31,6 +33,24 @@ function isPlainObject(v) {
  * from every response to a CLIENT user and from every /api/client/* response (also an OWNER acting through X-Client-Id).
  */
 export const CLIENT_DROP_KEYS = new Set(['pmPreviewUrl']);
+
+/**
+ * The agent flag (User.isAgent, SEO Engine OS-01) is server-side only: an agent must look exactly like a human
+ * worker everywhere except OWNER admin views. It is dropped from every response except OWNER requests to /api/admin/*.
+ */
+export const AGENT_FLAG_KEYS = new Set(['isAgent']);
+const CLIENT_AND_AGENT_DROP_KEYS = new Set([...CLIENT_DROP_KEYS, ...AGENT_FLAG_KEYS]);
+
+/** True when the request may see the agent flag: an OWNER (not acting as a client) on an /api/admin/* route. */
+export function isOwnerAdminAudience(request) {
+  return request?.user?.role === 'OWNER' && String(request?.url || '').startsWith('/api/admin/');
+}
+
+/** Extra keys to drop for this request's audience (used by the global preSerialization hook). */
+export function responseDropKeys(request) {
+  if (isClientAudience(request)) return CLIENT_AND_AGENT_DROP_KEYS;
+  return isOwnerAdminAudience(request) ? null : AGENT_FLAG_KEYS;
+}
 
 /** True when this response goes to a client audience. */
 export function isClientAudience(request) {

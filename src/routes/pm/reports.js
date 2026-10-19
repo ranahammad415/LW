@@ -1,3 +1,4 @@
+import { rejectAgentReviewer } from '../../lib/agentPolicy.js';
 import { z } from 'zod';
 import { mkdirSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
@@ -540,7 +541,7 @@ export async function pmReportRoutes(app) {
   app.patch(
     '/reports/:id/approve',
     {
-      onRequest: [app.verifyJwt, app.requirePM],
+      onRequest: [app.verifyJwt, app.requirePM, rejectAgentReviewer],
       schema: {
         params: {
           type: 'object',

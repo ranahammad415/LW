@@ -1,3 +1,4 @@
+import { rejectAgentReviewer } from '../../lib/agentPolicy.js';
 import { prisma } from '../../lib/prisma.js';
 import { notify } from '../../lib/notificationService.js';
 
@@ -61,7 +62,7 @@ export async function pmKeywordSuggestionRoutes(app) {
   app.patch(
     '/keyword-suggestions/:id/approve',
     {
-      onRequest: [app.verifyJwt, app.requirePM],
+      onRequest: [app.verifyJwt, app.requirePM, rejectAgentReviewer],
       schema: {
         params: {
           type: 'object',
@@ -145,7 +146,7 @@ export async function pmKeywordSuggestionRoutes(app) {
   app.patch(
     '/keyword-suggestions/:id/reject',
     {
-      onRequest: [app.verifyJwt, app.requirePM],
+      onRequest: [app.verifyJwt, app.requirePM, rejectAgentReviewer],
       schema: {
         params: {
           type: 'object',

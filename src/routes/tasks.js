@@ -10,6 +10,9 @@ import { notify } from '../lib/notificationService.js';
 import { extractMentionedUserIds } from '../lib/mentionParser.js';
 import { resolveUploadBaseUrl, validateUpload, sanitizeUploadFilename, MAX_UPLOAD_SIZE_BYTES } from '../lib/uploadUrl.js';
 import { resolveCycle, ensureCurrentCycle } from '../lib/workCycle.js';
+import { checkAgentStatusChange } from '../lib/agentPolicy.js';
+import { isWorkerApiToken, tokenProjectIds } from '../lib/apiTokens.js';
+import { pruneTasksForWorker, withTaskReadFields } from '../lib/taskReadFields.js';
 
 /**
  * Resolve a `workCycleId` where-clause from request query params.
@@ -89,9 +92,12 @@ export async function taskRoutes(app) {
       }
 
       const cycleWhere = await buildCycleWhere(request.query);
+      // Project-restricted API tokens only list tasks of their allowlisted projects.
+      const allowedProjects = tokenProjectIds(request);
+      const projectWhere = allowedProjects ? { projectId: { in: allowedProjects } } : {};
 
       const tasks = await prisma.task.findMany({
-        where: { ...where, ...cycleWhere, parentTaskId: null },
+        where: { ...where, ...cycleWhere, ...projectWhere, parentTaskId: null },
         orderBy: [{ status: 'asc' }, { dueDate: 'asc' }],
         include: {
           project: {
@@ -115,7 +121,9 @@ export async function taskRoutes(app) {
         },
       });
 
-      return reply.send(tasks);
+      // Worker API tokens never see sub-tasks they are not assigned to (OS-02).
+      const visible = isWorkerApiToken(request) ? pruneTasksForWorker(tasks, user.id) : tasks;
+      return reply.send(visible);
     }
   );
 
@@ -570,6 +578,13 @@ Return the id of the single most restrictive preset that still allows this task 
 
       if (!canUpdate) {
         return reply.status(403).send({ message: 'You cannot update this task' });
+      }
+
+      // OS-09: worker API tokens / worker agents only IN_PROGRESS|NEEDS_REVIEW on their own tasks; no agent or
+      // token ever sets COMPLETED|CANCELLED. Human JWT sessions are unchanged.
+      const agentDenied = checkAgentStatusChange(request, { status, isAssignee });
+      if (agentDenied) {
+        return reply.status(agentDenied.status).send({ message: agentDenied.message });
       }
 
       const updated = await prisma.task.update({

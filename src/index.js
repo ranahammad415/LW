@@ -79,6 +79,7 @@ import omniSearchRoutes from './routes/omniSearch/index.js';
 import { adminAiUsageRoutes } from './routes/admin/ai-usage.js';
 import { adminIntegrationsRoutes } from './routes/admin/integrations.js';
 import { adminAnalyticsRoutes } from './routes/admin/analytics.js';
+import { adminApiTokenRoutes } from './routes/admin/apiTokens.js';
 import { pmInputRequestRoutes } from './routes/pm/inputRequests.js';
 import { modalityRoutes } from './routes/modalityRoutes.js';
 import { publicIssuesRoutes } from './routes/publicIssues.js';
@@ -94,7 +95,8 @@ import { runGscSync } from './lib/gscSync.js';
 import { runNativeAnalyticsSync } from './lib/analytics/runNativeSync.js';
 import { initSentry } from './lib/sentry.js';
 import { redactedRequestSerializer } from './lib/logRedaction.js';
-import { redactResponseSecrets, isClientAudience, CLIENT_DROP_KEYS } from './lib/redactSecrets.js';
+import { redactResponseSecrets, responseDropKeys } from './lib/redactSecrets.js';
+import { registerApiTokenHooks } from './lib/apiTokens.js';
 import { runWeeklyClientDigest } from './lib/weeklyDigest.js';
 import { runScheduledTaskSync } from './lib/dataImport/scheduledSync.js';
 import { runInterviewSchedulerTick, isSchedulerEnabled, isLeader } from './lib/interviewScheduler.js';
@@ -135,7 +137,10 @@ app.setSerializerCompiler(() => (data) => JSON.stringify(data));
 // Response schemas do not filter fields (plain JSON.stringify above): never let a plugin key or CMS credential
 // secret leave the API, whatever a route includes (e2e O21, see lib/redactSecrets.js).
 // Client audiences never get the PM preview link (token-only capability that can approve the PM stage).
-app.addHook('preSerialization', async (request, _reply, payload) => redactResponseSecrets(payload, 0, isClientAudience(request) ? CLIENT_DROP_KEYS : null));
+// The agent flag (User.isAgent) only reaches OWNER /api/admin/* responses (SEO Engine OS-01).
+app.addHook('preSerialization', async (request, _reply, payload) => redactResponseSecrets(payload, 0, responseDropKeys(request)));
+// API tokens (lwk_): project allowlist enforcement after auth + body parsing (lib/apiTokens.js).
+registerApiTokenHooks(app);
 
 // Security headers (register before CORS so preflight responses still include CORS headers).
 await app.register(helmet, {
@@ -210,6 +215,7 @@ app.register(adminInterviewRoutes, { prefix: '/api/admin' });
 app.register(adminAiUsageRoutes, { prefix: '/api/admin' });
 app.register(adminIntegrationsRoutes, { prefix: '/api/admin' });
 app.register(adminAnalyticsRoutes, { prefix: '/api/admin' });
+app.register(adminApiTokenRoutes, { prefix: '/api/admin' });
 app.register(projectRoutes, { prefix: '/api/projects' });
 app.register(projectCmsRoutes, { prefix: '/api/projects' });
 app.register(taskRoutes, { prefix: '/api/tasks' });

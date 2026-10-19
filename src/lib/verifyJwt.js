@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { prisma } from './prisma.js';
+import { AUTH_USER_SELECT, authenticateApiToken, looksLikeApiToken } from './apiTokens.js';
 
 const accessSecret = process.env.JWT_ACCESS_SECRET;
 if (!accessSecret || accessSecret.length < 32) {
@@ -7,32 +8,28 @@ if (!accessSecret || accessSecret.length < 32) {
 }
 
 /**
- * Fastify preHandler / onRequest hook: verifies JWT from Authorization header
- * and attaches user to request. Call after cookie is parsed if using cookies.
+ * Fastify preHandler / onRequest hook: verifies the Bearer credential and attaches the user to the request.
+ * - `lwk_...` → per-user API token (lib/apiTokens.js): same user, same role, optionally narrower scopes.
+ *   Sets request.authMethod = 'apiToken' and request.apiToken.
+ * - anything else → access JWT. Sets request.authMethod = 'jwt'.
  */
 export async function verifyJwt(request, reply) {
   const authHeader = request.headers.authorization;
-  const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
 
   if (!token) {
     return reply.status(401).send({ message: 'Missing or invalid authorization token' });
+  }
+
+  if (looksLikeApiToken(token)) {
+    return authenticateApiToken(request, reply, token);
   }
 
   try {
     const payload = jwt.verify(token, accessSecret);
     const user = await prisma.user.findUnique({
       where: { id: payload.sub },
-      select: {
-        id: true,
-        email: true,
-        role: true,
-        name: true,
-        avatarUrl: true,
-        phone: true,
-        timezone: true,
-        isActive: true,
-        tokenVersion: true,
-      },
+      select: AUTH_USER_SELECT,
     });
 
     if (!user || !user.isActive) {
@@ -46,6 +43,7 @@ export async function verifyJwt(request, reply) {
     }
 
     request.user = user;
+    request.authMethod = 'jwt';
   } catch (err) {
     if (err.name === 'TokenExpiredError') {
       return reply.status(401).send({ message: 'Access token expired' });
