@@ -79,6 +79,9 @@ import {
   draftAccess,
   parentFromPath,
   changedBy,
+  siteWarning,
+  storedDraftState,
+  pushErrorMessage,
 } from '../../../src/lib/cmsDrafts.js';
 import { CmsBridgeError } from '../../../src/lib/siteAdapters/emdash.js';
 import { probeImage } from '../../../src/lib/imageProbe.js';
@@ -659,7 +662,10 @@ describe('v1.5.4 §30.1: service role / scope refusals', () => {
     site.upsert = async () => {
       throw new CmsBridgeError({ status: 503, code: 'SERVICE_TOKEN_UNAVAILABLE', message: 'refused', details: {}, retryable: false });
     };
-    expect((await pushDraft({ draftId: 'd9', user: JANE })).result.error.message).toMatch(/best-effort URL/);
+    // An update never offers best effort (v1.5.7): only creates have a slug policy.
+    const upd = (await pushDraft({ draftId: "d9", user: JANE })).result.error;
+    expect(upd.message).toMatch(/cannot update this page/);
+    expect(upd.details.bestEffortAllowed).toBe(false);
   });
 });
 
@@ -728,5 +734,103 @@ describe('e2e O26: push context flags follow the heartbeat, not the cached site-
     expect(pushContextFrom(cachedOn, JANE, { ...PROJECT, cmsCapabilities: { draftPushFromOs: false, publishFromOs: false } }).capabilities).toMatchObject({ publishFromOs: false, draftPushFromOs: false });
     // no stored flag yet (e.g. right after pairing): the site-info value is used
     expect(pushContextFrom(cachedOn, JANE, { ...PROJECT, cmsCapabilities: {} }).capabilities.publishFromOs).toBe(true);
+  });
+});
+
+describe('v1.5.7 / v1.5.8: draftHash, hashBasis, CAS, SEO warnings, agent guard', () => {
+  const UPD = { id: 'd7', projectId: 'p1', contentMapNodeId: null, taskId: null, collection: 'pages', title: 'Hot Tub Repair for Most Brands', slug: 'hot-tub-repair', parent: 'spa-services', contentKind: 'layout', layout: [], cmsEntryId: '01JAB4M9ZQ7X3K2V8N5T6R1W0C', cmsRev: 'v1', lastPushStatus: 'ok', cmsEditedAt: new Date() };
+
+  it('stores rev / draftRevisionId / draftHash / hashBasis on the push row and forwards them in the result', async () => {
+    db.overrides['cmsDraft.findUnique'] = async () => UPD;
+    const want = ex('draft-upsert.response--draft-hash');
+    site.upsert = async () => want;
+    const out = await pushDraft({ draftId: 'd7', user: JANE });
+    expect(out.result).toMatchObject({
+      ok: true,
+      entryId: want.entryId,
+      entryNo: want.entryNo,
+      revision: want.revision,
+      rev: want.revision,
+      draftRevisionId: want.draftRevisionId,
+      draftHash: want.draftHash,
+      hashBasis: want.hashBasis,
+    });
+    const row = calls('cmsDraftPush.update').at(-1).args.data;
+    expect(row).toMatchObject({ status: 'ok', rev: want.revision, draftRevisionId: want.draftRevisionId, draftHash: want.draftHash, hashBasis: want.hashBasis });
+    expect(calls('cmsDraft.update').at(-1).args.data).toMatchObject({ cmsRev: want.revision, cmsDraftHash: want.draftHash });
+    // SEO_LIVE_REFUSED gets the OS wording and keeps its fields
+    const w = out.result.warnings.find((x) => x.code === 'SEO_LIVE_REFUSED');
+    expect(w.fields).toEqual(['seo.title']);
+    expect(w.message).toMatch(/This page is live .* SEO title .* not written\. Everything else was saved/);
+  });
+
+  it('storedDraftState: older sites (rev only), DRAFT_HASH_UNAVAILABLE (null hash → null basis), malformed hashes dropped', () => {
+    expect(storedDraftState({ rev: 'r1' })).toEqual({ rev: 'r1', draftRevisionId: null, draftHash: null, hashBasis: null });
+    expect(storedDraftState({ revision: 'r2', rev: 'r2', draftHash: null, hashBasis: null })).toMatchObject({ rev: 'r2', draftHash: null, hashBasis: null });
+    expect(storedDraftState({ rev: 'r3', draftHash: 'v1:xyz', hashBasis: { a: 1 } })).toMatchObject({ draftHash: null, hashBasis: null });
+  });
+
+  it('warnings: SEO_FIELD_IGNORED (canonical), DRAFT_HASH_UNAVAILABLE, NON_ATOMIC_UPDATE have clear messages; unknown codes pass through', () => {
+    expect(siteWarning({ code: 'SEO_FIELD_IGNORED', field: 'seo.canonical', message: 'x' }).message).toMatch(/canonical URL was not written/);
+    expect(siteWarning({ code: 'SEO_FIELD_IGNORED', field: 'seo.image', message: 'x' }).message).toMatch(/SEO image cannot be set from Agency OS/);
+    expect(siteWarning({ code: 'DRAFT_HASH_UNAVAILABLE', message: 'x' }).message).toMatch(/fingerprint/);
+    expect(siteWarning({ code: 'NON_ATOMIC_UPDATE', message: 'x' }).message).toMatch(/conflict protection/);
+    expect(siteWarning({ code: 'SOMETHING_NEW', message: 'as sent', path: '$.x' })).toEqual({ code: 'SOMETHING_NEW', path: '$.x', message: 'as sent' });
+  });
+
+  it('CAS conflict (EmDash CONFLICT → 409 CONFLICT_REV) is recorded as a conflict, never retried', async () => {
+    db.overrides['cmsDraft.findUnique'] = async () => UPD;
+    const conflict = ex('error.response--conflict-rev').error;
+    site.upsert = async () => {
+      throw new CmsBridgeError({ status: 409, code: 'CONFLICT_REV', message: conflict.message, details: conflict.details });
+    };
+    const out = await pushDraft({ draftId: 'd7', user: JANE });
+    expect(out.result.error.code).toBe('CONFLICT_REV');
+    expect(site.bodies).toHaveLength(1);
+  });
+
+  it('503 SERVICE_TOKEN_UNAVAILABLE reason "cas": actionable message, no best effort, not retried', async () => {
+    db.overrides['cmsDraft.findUnique'] = async () => UPD;
+    const e = ex('error.response--service-token-cas').error;
+    site.upsert = async () => {
+      throw new CmsBridgeError({ status: 503, code: e.code, message: e.message, details: e.details, retryable: false });
+    };
+    const out = await pushDraft({ draftId: 'd7', user: JANE });
+    expect(site.bodies).toHaveLength(1);
+    expect(out.result.retryable).toBe(false);
+    expect(out.result.error).toMatchObject({ code: 'SERVICE_TOKEN_UNAVAILABLE', details: { reason: 'cas', bestEffortAllowed: false } });
+    expect(out.result.error.message).toMatch(/fix the service token/);
+  });
+
+  it('a create without a working token keeps the best-effort offer', async () => {
+    db.overrides['cmsDraft.findUnique'] = async () => ({ ...UPD, id: 'd8', cmsEntryId: null, cmsRev: null, lastPushStatus: 'never', layout: ex('draft-upsert.request--create-exact').layout });
+    site.upsert = async () => {
+      throw new CmsBridgeError({ status: 503, code: 'SERVICE_TOKEN_UNAVAILABLE', message: 'refused', details: {}, retryable: false });
+    };
+    const out = await pushDraft({ draftId: 'd8', user: JANE });
+    expect(out.result.error.details.bestEffortAllowed).toBe(true);
+    expect(out.result.error.message).toMatch(/best-effort URL/);
+  });
+
+  it('AGENT_NOT_ALLOWED (403): message, not retried; the host-level REST shape maps to the code', async () => {
+    const { errorFromResponse } = await import('../../../src/lib/siteAdapters/emdash.js');
+    const err = errorFromResponse(403, { success: false, error: { code: 'AGENT_NOT_ALLOWED', message: 'Agents cannot publish. Ask an editor.' } });
+    expect(err).toMatchObject({ code: 'AGENT_NOT_ALLOWED', status: 403, retryable: false });
+    expect(pushErrorMessage(err)).toMatch(/does not let agents/);
+  });
+
+  it('seo.canonical / seo.noIndex are sent only when the OS draft holds a value', () => {
+    const ctx = pushContextFrom(ex('site-info.response'), JANE, PROJECT);
+    const ci = ctx.collections.find((c) => c.name === 'pages');
+    const none = buildDraftUpsertBody({ ...UPD, seoTitle: 'T' }, { user: JANE, ctx, collectionInfo: ci, slugPolicy: 'exact' });
+    expect(none.seo).toEqual({ title: 'T' });
+    const both = buildDraftUpsertBody({ ...UPD, seoCanonical: '/spa-services/hot-tub-repair/', seoNoIndex: false }, { user: JANE, ctx, collectionInfo: ci, slugPolicy: 'exact' });
+    expect(both.seo).toEqual({ canonical: '/spa-services/hot-tub-repair/', noIndex: false });
+  });
+
+  it('push context exposes draftHash / atomicDraftUpdate and the site contract revision', () => {
+    const ctx = pushContextFrom(ex('site-info.response'), JANE, { ...PROJECT, cmsCapabilities: { draftHash: true, atomicDraftUpdate: false }, cmsHealth: { contractRevision: '1.5.8' } });
+    expect(ctx.capabilities).toMatchObject({ draftHash: true, atomicDraftUpdate: false });
+    expect(ctx.contractRevision).toBe('1.5.8');
   });
 });

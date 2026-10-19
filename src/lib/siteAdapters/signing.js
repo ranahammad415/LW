@@ -412,6 +412,8 @@ export const ERROR_CODES = Object.freeze({
   SERVICE_TOKEN_UNAVAILABLE: { status: 503, retryable: false },
   /** v1.5.4 §30.1: EmDash refused the service user's role for this write (token still usable; not retryable). */
   SERVICE_ROLE_INSUFFICIENT: { status: 403, retryable: false },
+  /** v1.5.7 §33.1: the site's agent guard refused an operation of an agent (MCP / listed agent user). Never retried. */
+  AGENT_NOT_ALLOWED: { status: 403, retryable: false },
   UPSTREAM_UNAVAILABLE: { status: 503, retryable: true },
 });
 

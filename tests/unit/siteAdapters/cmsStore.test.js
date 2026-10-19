@@ -489,3 +489,18 @@ describe('v1.5.6 §32.1 revokePrev rotation (Prisma store)', () => {
     expect(data.prevExpiresAt.toISOString()).toBe('2026-10-20T09:00:00.000Z');
   });
 });
+
+describe('v1.5.7 §33.6 content.unpublished names who unpublished', () => {
+  it('writes an "unpublished" snapshot with the person even when the content hash did not change', async () => {
+    db.calls = [];
+    db.overrides = {};
+    db.overrides['wpPage.findUnique'] = async () => ({ id: 'pg1', title: 'T', contentHash: 'h1', content: 'c', cmsEntryId: 'E1', cmsMigration: null });
+    const entry = { entryId: 'E1', entryNo: 5, collection: 'pages', slug: 's', path: '/s/', status: 'draft', title: 'T', contentHash: 'h1', updatedAt: '2026-10-19T09:00:00Z' };
+    await applyEmdashContentEvent({ id: 'p1', wpUrl: 'https://oasispoolspas.com' }, { type: 'content.unpublished', entry, actor: { kind: 'human', name: 'Site Editor' } });
+    const snap = db.calls.find((c) => c.key === 'wpPageSnapshot.create').args.data;
+    expect(snap).toMatchObject({ eventType: 'unpublished', wpUserName: 'Site Editor' });
+    db.calls = [];
+    await applyEmdashContentEvent({ id: 'p1', wpUrl: 'https://oasispoolspas.com' }, { type: 'content.unpublished', entry, actor: { kind: 'system' } });
+    expect(db.calls.find((c) => c.key === 'wpPageSnapshot.create').args.data).toMatchObject({ eventType: 'unpublished', wpUserName: 'System' });
+  });
+});

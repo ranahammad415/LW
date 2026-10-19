@@ -146,6 +146,16 @@ function retryAfterMs(res) {
 export function errorFromResponse(status, json) {
   const e = json && typeof json === 'object' && json.error && typeof json.error === 'object' ? json.error : null;
   const isContract = !!(json && json.ok === false && e && typeof e.code === 'string' && ERROR_CODES[e.code]);
+  if (!isContract && status === 403 && e?.code === 'AGENT_NOT_ALLOWED') {
+    // v1.5.7 §33.1: the site's agent-guard middleware answers REST calls in EmDash's shape, not the bridge envelope.
+    return new CmsBridgeError({
+      status: 403,
+      code: 'AGENT_NOT_ALLOWED',
+      message: String(e.message || 'Agents cannot do this on the site. Ask an editor.').slice(0, 500),
+      retryable: false,
+      details: {},
+    });
+  }
   if (!isContract) {
     const pluginMissing = status === 404;
     return new CmsBridgeError({

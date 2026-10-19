@@ -50,8 +50,21 @@ function sendError(reply, err, log) {
   return reply.status(500).send({ message: 'Request failed' });
 }
 
-const EDITABLE = ['collection', 'title', 'slug', 'parent', 'contentKind', 'layout', 'markdown', 'excerpt', 'seoTitle', 'seoDescription', 'bylines', 'taxonomies'];
-const CONTENT_FIELDS = new Set(['title', 'layout', 'markdown', 'excerpt', 'seoTitle', 'seoDescription']);
+const EDITABLE = ['collection', 'title', 'slug', 'parent', 'contentKind', 'layout', 'markdown', 'excerpt', 'seoTitle', 'seoDescription', 'seoCanonical', 'seoNoIndex', 'bylines', 'taxonomies'];
+const CONTENT_FIELDS = new Set(['title', 'layout', 'markdown', 'excerpt', 'seoTitle', 'seoDescription', 'seoCanonical', 'seoNoIndex']);
+
+/** v1.5.7 §33.5: a same-site path (/…, not //…) or an absolute http(s) URL; the site re-checks the origin. */
+export function cleanCanonical(v) {
+  if (v == null || v === '') return null;
+  const t = String(v).trim().slice(0, 500);
+  if (t.startsWith('/') && !t.startsWith('//')) return t;
+  try {
+    const u = new URL(t);
+    return (u.protocol === 'https:' || u.protocol === 'http:') && !u.username && !u.password ? u.toString() : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function sanitizeEdit(body) {
   const data = {};
@@ -90,6 +103,14 @@ function sanitizeEdit(body) {
       case 'seoDescription':
         data.seoDescription = v ? String(v).slice(0, 500) : null;
         break;
+      case 'seoCanonical': {
+        const c = cleanCanonical(v);
+        if (c !== undefined) data.seoCanonical = c;
+        break;
+      }
+      case 'seoNoIndex':
+        data.seoNoIndex = typeof v === 'boolean' ? v : null;
+        break;
       case 'bylines':
         data.bylines = Array.isArray(v) ? v.filter((x) => typeof x === 'string').slice(0, 10) : null;
         break;
@@ -119,6 +140,9 @@ function formatDraft(d, { canWrite = false, openReview = null } = {}) {
     excerpt: d.excerpt || '',
     seoTitle: d.seoTitle || '',
     seoDescription: d.seoDescription || '',
+    seoCanonical: d.seoCanonical || '',
+    seoNoIndex: typeof d.seoNoIndex === 'boolean' ? d.seoNoIndex : null,
+    draftHash: d.cmsDraftHash || null,
     bylines: d.bylines || [],
     taxonomies: d.taxonomies || {},
     aiGenerated: !!d.aiGenerated,

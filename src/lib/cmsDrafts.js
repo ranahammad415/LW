@@ -194,7 +194,11 @@ export function pushContextFrom(siteInfo, user, project) {
       seoGateOnPush: flag('seoGateOnPush'),
       // e2e O10: the editor copy says where publishing happens.
       publishFromOs: flag('publishFromOs'),
+      // v1.5.7 §33.3 / §33.4: atomic updates (false on a 1.5.7+ site = updates refused with reason "cas") and draftHash.
+      atomicDraftUpdate: flag('atomicDraftUpdate'),
+      draftHash: flag('draftHash'),
     },
+    contractRevision: typeof project?.cmsHealth?.contractRevision === 'string' ? project.cmsHealth.contractRevision : siteInfo?.contractRevision || null,
     collections: (siteInfo?.collections || []).map((c) => ({
       name: c.name,
       parentOptions: Array.isArray(c.parentOptions) ? c.parentOptions : [],
@@ -250,6 +254,9 @@ export function buildDraftUpsertBody(draft, { user, ctx, collectionInfo, slugPol
   const seo = {};
   if (draft.seoTitle) seo.title = String(draft.seoTitle).slice(0, 200);
   if (draft.seoDescription) seo.description = String(draft.seoDescription).slice(0, 500);
+  // v1.5.7 §33.5: canonical / noIndex are sent only when the OS draft holds a value (null = leave the site's value).
+  if (typeof draft.seoCanonical === 'string' && draft.seoCanonical.trim()) seo.canonical = draft.seoCanonical.trim().slice(0, 500);
+  if (typeof draft.seoNoIndex === 'boolean') seo.noIndex = draft.seoNoIndex;
   const taxonomies = draft.taxonomies && typeof draft.taxonomies === 'object' && Object.keys(draft.taxonomies).length ? draft.taxonomies : null;
   return {
     target: creating
@@ -298,7 +305,7 @@ export async function reviewAfterPm(project) {
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
 
 /** User-facing message for a refused push. */
-export function pushErrorMessage(err) {
+export function pushErrorMessage(err, { creating = true } = {}) {
   const d = err?.details || {};
   switch (err?.code) {
     case 'CONFLICT_REV':
@@ -326,6 +333,12 @@ export function pushErrorMessage(err) {
         }
         return 'The site\'s service token is missing a permission. Ask the site admin to give it content:read, content:write, media:write and mcp:tools:emdash-seo. Nothing was written.';
       }
+      // v1.5.7 §33.3: updates need the service token (the only path that checks baseRev and writes in one step).
+      if (d.reason === 'cas') {
+        return "The site can only update existing pages through its service token, which is missing or refused. Ask the site admin to fix the service token. Nothing was written.";
+      }
+      // Best effort only exists for creates (slugPolicy); an update needs the token whatever the URL.
+      if (!creating) return "The site's service token is missing or refused, so it cannot update this page. Ask the site admin to fix the service token. Nothing was written.";
       return 'The site cannot set the exact URL right now (its service token is missing or refused). Ask the site admin, or push with best-effort URL.';
     case 'SERVICE_ROLE_INSUFFICIENT': {
       // v1.5.4 §30.1: not retryable, and best-effort fails the same way; the token stays usable for other pushes.
@@ -336,6 +349,8 @@ export function pushErrorMessage(err) {
       const an = (w) => (/^[aeiou]/i.test(w) ? 'an' : 'a');
       return `The site's service user is ${d.role ? `${an(role)} ${role}` : role}; EmDash needs ${an(need)} ${need} to ${what}. Ask the site admin to raise its role (admin → Users). Nothing was written.`;
     }
+    case 'AGENT_NOT_ALLOWED':
+      return 'The site does not let agents do this. A person must do it in the site admin. Nothing was written.';
     case 'BYLINE_NOT_ALLOWED':
       return 'That byline is not allowed: use your own mapped byline or the team byline.';
     case 'UNKNOWN_BLOCK':
@@ -363,7 +378,39 @@ export function changedBy(u) {
   return { name, kind, viaOs };
 }
 
-function errorRecord(err) {
+/**
+ * v1.5.7 §33.3–§33.5 push warnings, with OS wording (the site's code, path and fields are kept). Unknown codes pass
+ * through as sent.
+ */
+const SEO_FIELD_LABEL = { 'seo.title': 'SEO title', 'seo.description': 'SEO description', 'seo.canonical': 'canonical URL', 'seo.noIndex': 'noindex', 'seo.image': 'SEO image' };
+export function siteWarning(w) {
+  if (!w || typeof w !== 'object') return null;
+  const code = String(w.code || 'WARNING').slice(0, 64);
+  const fields = Array.isArray(w.fields) ? w.fields.filter((x) => typeof x === 'string').slice(0, 10).map((x) => x.slice(0, 64)) : null;
+  const field = typeof w.field === 'string' ? w.field.slice(0, 64) : null;
+  const names = (fields || (field ? [field] : [])).map((x) => SEO_FIELD_LABEL[x] || x);
+  const out = { code, ...(typeof w.path === 'string' ? { path: w.path.slice(0, 200) } : {}), ...(fields ? { fields } : {}), ...(field ? { field } : {}) };
+  switch (code) {
+    case 'SEO_LIVE_REFUSED':
+      return { ...out, message: `This page is live and its SEO settings have no drafts, so ${names.length ? names.join(', ') : 'the SEO change'} would have changed the live page at once: not written. Everything else was saved. A person must change it in the site admin.` };
+    case 'SEO_FIELD_IGNORED':
+      return {
+        ...out,
+        message:
+          (field || fields?.[0]) === 'seo.canonical'
+            ? 'The canonical URL was not written: it must be a path on this site (/…) or a full URL on the site\'s own address.'
+            : `${names.length ? names.join(', ') : 'An SEO field'} cannot be set from Agency OS and was not written.`,
+      };
+    case 'DRAFT_HASH_UNAVAILABLE':
+      return { ...out, message: 'The draft was saved, but the site could not compute its fingerprint (draftHash) this time. Push again or check the page before asking for approval.' };
+    case 'NON_ATOMIC_UPDATE':
+      return { ...out, message: 'Saved without the site\'s conflict protection (the site allows non-atomic updates): an edit made in the site admin at the same moment could have been overwritten. Check the page on the site.' };
+    default:
+      return { ...out, message: String(w.message || code).slice(0, 500) };
+  }
+}
+
+function errorRecord(err, { creating = false } = {}) {
   const d = err?.details && typeof err.details === 'object' ? err.details : {};
   const details = {};
   if (err.code === 'CONFLICT_REV') {
@@ -377,11 +424,15 @@ function errorRecord(err) {
   if (err.code === 'SERVICE_ROLE_INSUFFICIENT') {
     Object.assign(details, { requiredRole: d.requiredRole ?? null, role: d.role ?? null, operation: d.operation ?? null, collection: d.collection ?? null, entryId: d.entryId ?? null });
   }
-  if (err.code === 'SERVICE_TOKEN_UNAVAILABLE') Object.assign(details, { reason: d.reason ?? null, scope: typeof d.scope === 'string' ? d.scope.slice(0, 64) : null });
+  if (err.code === 'SERVICE_TOKEN_UNAVAILABLE') {
+    // Best effort only helps a CREATE whose token is missing or refused: never for updates (v1.5.7 reason "cas": an
+    // update without the token cannot be a compare-and-set), a missing scope or a role problem.
+    Object.assign(details, { reason: d.reason ?? null, scope: typeof d.scope === 'string' ? d.scope.slice(0, 64) : null, bestEffortAllowed: creating && !d.reason });
+  }
   if (err.code === 'PARENT_NOT_FOUND') Object.assign(details, { allowed: Array.isArray(d.allowed) ? d.allowed : null });
   if (err.code === 'CONTRACT_LOCKED') Object.assign(details, { contractVersion: d.contractVersion ?? null, violations: Array.isArray(d.violations) ? d.violations.slice(0, 50) : [] });
   if (Array.isArray(d.errors)) details.errors = d.errors.slice(0, 100);
-  return { code: err.code, message: pushErrorMessage(err), details };
+  return { code: err.code, message: pushErrorMessage(err, { creating }), details };
 }
 
 /**
@@ -492,7 +543,8 @@ async function pushClaimedDraft({ draft, project, user, opts, log, previous = 'n
       const unchangedWarning = { code: 'UNCHANGED', path: '$', message: 'Nothing changed since the page was last read or pushed: the site was not called.' };
       const updated = await prisma.cmsDraft.update({ where: { id: draft.id }, data: { lastPushStatus: previous === 'never' ? 'never' : previous } });
       log?.info?.({ projectId: project.id, draftId: draft.id }, 'EmDash draft push skipped (unchanged)');
-      return { draft: updated, result: { ok: true, unchanged: true, created: false, warnings: [...extraWarnings, unchangedWarning], seoCheck: null, review: false } };
+      // No site call: entryId / revision / draftHash are the stored values of the last read or push (null when unknown).
+      return { draft: updated, result: { ok: true, unchanged: true, created: false, warnings: [...extraWarnings, unchangedWarning], seoCheck: null, review: false, entryId: draft.cmsEntryId || null, entryNo: draft.cmsEntryNo ?? null, revision: draft.cmsRev || null, rev: draft.cmsRev || null, draftRevisionId: null, draftHash: draft.cmsDraftHash || null, hashBasis: null } };
     }
   }
 
@@ -507,7 +559,7 @@ async function pushClaimedDraft({ draft, project, user, opts, log, previous = 'n
   if (attempt.err) {
     const err = attempt.err;
     const unknownOutcome = err.retryable === true || err.code === 'UPSTREAM_UNAVAILABLE';
-    const rec = errorRecord(err);
+    const rec = errorRecord(err, { creating: !body.target?.entryId });
     // v1.5.4 §30.4: "open existing page" (site admin edit link / OS page) when we mirror the holder and it is not trashed.
     if (err.code === 'SLUG_TAKEN' && rec.details.existingEntryId && !rec.details.existingEntryTrashed) {
       const holder = await prisma.wpPage.findFirst({ where: { projectId: project.id, cmsEntryId: rec.details.existingEntryId }, select: { id: true, url: true, cmsEditUrl: true } }).catch(() => null);
@@ -523,13 +575,15 @@ async function pushClaimedDraft({ draft, project, user, opts, log, previous = 'n
     return { draft: updated, result: { ok: false, error: rec, retryable: unknownOutcome, warnings: check.warnings } };
   }
 
-  const warnings = [...check.warnings, ...(Array.isArray(res.warnings) ? res.warnings.slice(0, 50) : [])];
+  const warnings = [...check.warnings, ...(Array.isArray(res.warnings) ? res.warnings.slice(0, 50).map(siteWarning).filter(Boolean) : [])];
+  const stored = storedDraftState(res);
   const updated = await prisma.cmsDraft.update({
     where: { id: draft.id },
     data: {
       cmsEntryId: res.entryId ? String(res.entryId).slice(0, 64) : draft.cmsEntryId,
       cmsEntryNo: Number.isInteger(res.entryNo) ? res.entryNo : draft.cmsEntryNo,
-      cmsRev: res.rev ? String(res.rev).slice(0, 64) : draft.cmsRev,
+      cmsRev: stored.rev || draft.cmsRev,
+      cmsDraftHash: stored.draftHash,
       cmsEditUrl: res.editUrl ? String(res.editUrl).slice(0, 1000) : draft.cmsEditUrl,
       cmsPath: res.path ? String(res.path).slice(0, 500) : draft.cmsPath,
       ...(res.slug ? { slug: String(res.slug).slice(0, 200) } : {}),
@@ -547,7 +601,15 @@ async function pushClaimedDraft({ draft, project, user, opts, log, previous = 'n
   });
   await prisma.cmsDraftPush.update({
     where: { id: pushRow.id },
-    data: { status: 'ok', errorCode: null, summary: { bodySha, contentSha: contentSha(body), created: !!res.created, entryId: res.entryId || null, rev: res.rev || null, replay: !!res.idempotentReplay, warnings: warnings.length } },
+    data: {
+      status: 'ok',
+      errorCode: null,
+      summary: { bodySha, contentSha: contentSha(body), created: !!res.created, entryId: res.entryId || null, rev: stored.rev, replay: !!res.idempotentReplay, warnings: warnings.length },
+      rev: stored.rev,
+      draftRevisionId: stored.draftRevisionId,
+      draftHash: stored.draftHash,
+      hashBasis: stored.hashBasis ?? undefined,
+    },
   });
   // reviewAfter: the site answers with the Review; mirror it now (the pipeline_submitted event notifies once).
   if (res.review) await mirrorEmdashReview(project.id, res.review, { log }).catch(() => {});
@@ -563,7 +625,42 @@ async function pushClaimedDraft({ draft, project, user, opts, log, previous = 'n
     if (page) await prisma.contentMapNode.updateMany({ where: { id: draft.contentMapNodeId, wpPageId: null }, data: { wpPageId: page.id } }).catch(() => {});
   }
   log?.info?.({ projectId: project.id, draftId: draft.id, created: !!res.created, actor: body.actor.kind, replay: !!res.idempotentReplay }, 'EmDash draft pushed');
-  return { draft: updated, result: { ok: true, created: !!res.created, warnings, seoCheck: res.seoCheck ?? null, review: !!res.review } };
+  return {
+    draft: updated,
+    result: {
+      ok: true,
+      created: !!res.created,
+      warnings,
+      seoCheck: res.seoCheck ?? null,
+      review: !!res.review,
+      // v1.5.7 §33.4 / v1.5.8 §34.2, forwarded as the site sent them (null when absent: older site or DRAFT_HASH_UNAVAILABLE).
+      entryId: res.entryId ? String(res.entryId).slice(0, 64) : null,
+      entryNo: Number.isInteger(res.entryNo) ? res.entryNo : null,
+      revision: stored.rev,
+      rev: stored.rev,
+      draftRevisionId: stored.draftRevisionId,
+      draftHash: stored.draftHash,
+      hashBasis: stored.hashBasis,
+    },
+    pushRowId: pushRow.id,
+  };
+}
+
+/**
+ * v1.5.7 §33.4 / v1.5.8 §34.2: what the site stored, from a draft-upsert 200. `revision` = `rev` (1.5.7 sends both;
+ * older sites only `rev`). draftHash must look like "v1:<64 hex>"; hashBasis is kept as sent (an object), else null.
+ */
+export function storedDraftState(res) {
+  const r = res || {};
+  const rev = r.revision ?? r.rev;
+  const hash = typeof r.draftHash === 'string' && /^v1:[0-9a-f]{64}$/.test(r.draftHash) ? r.draftHash : null;
+  const basis = r.hashBasis && typeof r.hashBasis === 'object' && !Array.isArray(r.hashBasis) ? r.hashBasis : null;
+  return {
+    rev: rev != null && rev !== '' ? String(rev).slice(0, 64) : null,
+    draftRevisionId: r.draftRevisionId ? String(r.draftRevisionId).slice(0, 64) : null,
+    draftHash: hash,
+    hashBasis: hash ? basis : null,
+  };
 }
 
 // ─────────────────────────────── v1.5.1: edit an existing site entry ───────────────────────────────
@@ -622,6 +719,10 @@ export async function createDraftFromEntry({ projectId, wpPageId, variant = 'dra
     excerpt: built.draft.excerpt ?? null,
     seoTitle: entry.seo?.title ? String(entry.seo.title).slice(0, 200) : null,
     seoDescription: entry.seo?.description ? String(entry.seo.description).slice(0, 500) : null,
+    // v1.5.7: keep the stored canonical / noindex so the round trip sends the same values (unchanged = no warning).
+    seoCanonical: typeof entry.seo?.canonical === 'string' && entry.seo.canonical ? String(entry.seo.canonical).slice(0, 500) : null,
+    seoNoIndex: typeof entry.seo?.noIndex === 'boolean' ? entry.seo.noIndex : null,
+    cmsDraftHash: typeof e.draftHash === 'string' && /^v1:[0-9a-f]{64}$/.test(e.draftHash) ? e.draftHash : null,
     aiGenerated: false,
     cmsEntryId: page.cmsEntryId,
     cmsEntryNo: Number.isInteger(entry.entryNo) ? entry.entryNo : null,

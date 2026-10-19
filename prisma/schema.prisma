@@ -1448,6 +1448,11 @@ model CmsDraft {
   excerpt           String?   @db.Text
   seoTitle          String?   @db.VarChar(500)
   seoDescription    String?   @db.VarChar(1000)
+  /// v1.5.7 §33.5: canonical (same-site path or same-origin URL) and noindex; sent only when set (null = leave the site's value).
+  seoCanonical      String?   @db.VarChar(500)
+  seoNoIndex        Boolean?
+  /// v1.5.7 §33.4: draftHash of the stored draft after the last successful push (or the entry-get read).
+  cmsDraftHash      String?   @db.VarChar(80)
   /// [bylineSlug] (from site-info.bylines; only the requester's mapped byline or the team byline)
   bylines           Json?
   /// true once a person changed the bylines in the OS since the last push / open: updates send bylines only then.
@@ -1504,6 +1509,12 @@ model CmsDraftPush {
   errorCode      String?   @db.VarChar(64)
   summary        Json?
   confirmedAt    DateTime?
+  /// v1.5.7 §33.4 / v1.5.8 §34.2: what the site stored (draft-upsert 200): bridge rev, draft revision id, draftHash,
+  /// hashBasis (everything draftHash covers except the content value). Null for older sites or DRAFT_HASH_UNAVAILABLE.
+  rev             String?  @db.VarChar(64)
+  draftRevisionId String?  @db.VarChar(64)
+  draftHash       String?  @db.VarChar(80)
+  hashBasis       Json?
   createdAt      DateTime  @default(now())
 
   draft CmsDraft? @relation(fields: [draftId], references: [id], onDelete: SetNull)

@@ -653,7 +653,8 @@ export async function applyEmdashContentEvent(project, ev) {
   const actor = ev.actor || {};
   const who = {
     wpUserId: actor.osUserId || actor.id ? String(actor.osUserId || actor.id).slice(0, 255) : null,
-    wpUserName: actor.name ? String(actor.name).slice(0, 255) : null,
+    // v1.5.7 §33.6: content.unpublished carries the person (kind human) when known, else a system actor.
+    wpUserName: actor.name ? String(actor.name).slice(0, 255) : actor.kind === 'system' ? 'System' : null,
   };
 
   if (ev.type === 'content.deleted') {
@@ -717,7 +718,9 @@ export async function applyEmdashContentEvent(project, ev) {
     where: { id: existing.id },
     data: { ...data, ...(content !== undefined ? { content } : {}), syncedAt: now },
   });
-  if (existing.contentHash !== data.contentHash) {
+  // v1.5.7 §33.6: an unpublish is always recorded with who did it (the content hash does not change).
+  const unpublished = ev.type === 'content.unpublished';
+  if (existing.contentHash !== data.contentHash || unpublished) {
     await prisma.wpPageSnapshot.create({
       data: {
         wpPageId: existing.id,
@@ -727,7 +730,7 @@ export async function applyEmdashContentEvent(project, ev) {
         seoTitle: data.seoTitle,
         seoDescription: data.seoDescription,
         contentHash: data.contentHash,
-        eventType: 'updated',
+        eventType: unpublished ? 'unpublished' : 'updated',
         contentExcerpt: data.excerpt,
         ...who,
         isElementor: false,
