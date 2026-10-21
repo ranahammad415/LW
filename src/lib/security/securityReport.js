@@ -52,6 +52,37 @@ function trendSvg(points, { withScores }) {
   return `<svg width="${points.length * (w + 2)}" height="${h}" role="img" aria-label="Daily state">${bars}</svg>`;
 }
 
+const ITEM_STATE = { ok: 'resolved', warn: 'needs attention', fail: 'needs action', unknown: 'not measured' };
+
+/**
+ * The month's transitions grouped per check (pure, O-R2-5). `opened`: the check turned fail / warn this month with
+ * client wording; `resolved`: it went fail / warn → ok this month and is ok at its last change.
+ */
+export function collapseItems(transitions, byId = new Map()) {
+  const per = new Map();
+  for (const t of [...(transitions || [])].sort((a, b) => new Date(a.at) - new Date(b.at))) {
+    let i = per.get(t.checkId);
+    if (!i) {
+      i = { checkId: t.checkId, firstAt: null, lastState: null, lastAt: null, changes: 0, clientSummary: null, opened: false, resolved: false, resolvedAt: null, resolvedSummary: null };
+      per.set(t.checkId, i);
+    }
+    i.changes += 1;
+    i.lastState = t.toState;
+    i.lastAt = t.at;
+    if (t.clientSummary && (t.toState === 'fail' || t.toState === 'warn')) {
+      i.opened = true;
+      if (!i.firstAt) i.firstAt = t.at;
+      i.clientSummary = t.clientSummary;
+    }
+    if (t.toState === 'ok' && (t.fromState === 'fail' || t.fromState === 'warn') && byId.get(t.checkId)?.clientSummary) {
+      i.resolvedAt = t.at;
+      i.resolvedSummary = byId.get(t.checkId).clientSummary;
+    }
+  }
+  for (const i of per.values()) i.resolved = !!i.resolvedAt && i.lastState === 'ok';
+  return [...per.values()];
+}
+
 function okDaysFor(points, checkId) {
   return points.filter((p) => p.checks && p.checks[checkId] === 'ok').length;
 }
@@ -89,10 +120,12 @@ export function renderSecurityReport(data, { planNote = null, agencyName = 'Your
     return { label: d.label || 'Your backup destination', lastOkAt: d.files?.lastOkAt || d.db?.lastOkAt || null, oks, fails };
   });
 
-  // 8. Items (client wording only)
-  const opened = transitions.filter((t) => t.clientSummary && (t.toState === 'fail' || t.toState === 'warn'));
-  const closed = transitions.filter((t) => t.toState === 'ok' && (t.fromState === 'fail' || t.fromState === 'warn') && byId.get(t.checkId)?.clientSummary);
-  const carried = (checks || []).filter((c) => c.clientSummary && (c.state === 'fail' || c.state === 'warn'));
+  // 7. Items (client wording only), one row per check (O-R2-5): first seen this month, last state, number of changes.
+  const items = collapseItems(transitions, byId);
+  const opened = items.filter((i) => i.opened);
+  const closed = items.filter((i) => i.resolved);
+  const disabled = new Set(Array.isArray(status?.disabled) ? status.disabled : []);
+  const carried = (checks || []).filter((c) => c.clientSummary && (c.state === 'fail' || c.state === 'warn') && !disabled.has(c.checkId));
 
   const summary = [
     `In ${month} your website was ${endState === 'ok' ? 'protected and backed up at the end of the month' : endState === 'unknown' ? 'not fully measured at the end of the month' : 'being worked on at the end of the month'}.`,
@@ -149,8 +182,8 @@ ${admin && points.length ? `<p class="small muted">Score ${esc(points[0].score)}
     parts.push(`<h2>4. Accounts</h2><table>${rows(accounts)}</table>`);
     parts.push(`<h2>5. Software</h2><table>${rows(software)}</table>`);
     parts.push(`<h2>6. Email domain</h2><table>${rows(email)}</table>`);
-    parts.push(`<h2>7. Items this month</h2><p><strong>Needed attention</strong></p>${li(opened, (t) => `${esc(t.clientSummary)} <span class="muted small">(${esc(fmtDay(t.at))})</span>${admin ? ` <span class="small">[${esc(t.checkId)}]</span>` : ''}`)}
-<p><strong>Resolved</strong></p>${li(closed, (t) => `${esc(byId.get(t.checkId)?.clientSummary || '')} <span class="muted small">(${esc(fmtDay(t.at))})</span>`)}
+    parts.push(`<h2>7. Items this month</h2><p><strong>Needed attention</strong></p>${li(opened, (i) => `${esc(i.clientSummary)} <span class="muted small">(first seen ${esc(fmtDay(i.firstAt))}; ${esc(ITEM_STATE[i.lastState] || 'not measured')} at month end${i.changes > 1 ? `; changed ${esc(i.changes)} times` : ''})</span>${admin ? ` <span class="small">[${esc(i.checkId)}]</span>` : ''}`)}
+<p><strong>Resolved</strong></p>${li(closed, (i) => `${esc(i.resolvedSummary)} <span class="muted small">(${esc(fmtDay(i.resolvedAt))})</span>`)}
 <p><strong>Still open</strong></p>${li(carried, (c) => `${esc(c.clientSummary)}${c.pmNote ? ` · The agency: ${esc(c.pmNote)}` : ''}${c.pmNoteEta ? ` · expected by ${esc(fmtDay(c.pmNoteEta))}` : ''}`)}`);
     parts.push(`<h2>8. Next month</h2><p>${planNote ? esc(planNote) : 'The agency keeps watching your website every day and will tell you if anything needs your attention.'}</p>`);
     if (admin) {

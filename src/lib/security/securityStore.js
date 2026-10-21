@@ -9,7 +9,7 @@
  */
 import { prisma } from '../prisma.js';
 import { J } from './jsonNull.js';
-import { sanitizeSecurityEventData, sanitizeStatus, sanitizeHistory, sanitizeBackups, sanitizeRun, isoOrNull } from '../siteAdapters/security.js';
+import { sanitizeSecurityEventData, sanitizeStatus, sanitizeHistory, sanitizeBackups, sanitizeRun, isoOrNull, ackEndedBy } from '../siteAdapters/security.js';
 
 const toDate = (v) => (v ? new Date(v) : null);
 const utcDay = (d = new Date()) => new Date(d).toISOString().slice(0, 10);
@@ -53,14 +53,17 @@ export async function recordTransition(projectId, t, origin) {
  * Apply one check change to the current-state row. Only moves forward in time: a change older than the stored
  * lastChangedAt never rolls the state back. Evidence: kept while not ok, cleared when the check is ok.
  */
-export async function applyCheckChange(projectId, change, { category = null, evidence, remediation, keepEvidence = false } = {}) {
+export async function applyCheckChange(projectId, change, { category = null, evidence, remediation, keepEvidence = false, siteChanged = false } = {}) {
   const at = change.at ? new Date(change.at) : new Date();
   const existing = await prisma.securityCheckState.findUnique({ where: { projectId_checkId: { projectId, checkId: change.checkId } } });
   if (existing?.lastChangedAt && new Date(existing.lastChangedAt).getTime() > at.getTime()) return { applied: false, previous: existing.state };
   const nonOk = change.to !== 'ok';
+  // §37.5: any state change ends a site acknowledgement (a new problem needs a new one). `siteChanged`: the event
+  // itself is a state change on the site (check_failed, a status_changed entry), also when the OS never saw the
+  // state in between (fail → ok → fail merged away: stored fail, incoming fail). O-R2-1.
+  const endsAck = !!existing?.acknowledged && (existing.state !== change.to || (siteChanged && ackEndedBy(existing.acknowledged, at.toISOString())));
   const data = {
-    // §37.5: any state change ends a site acknowledgement (a new problem needs a new one).
-    ...(existing && existing.state !== change.to ? { acknowledged: null } : {}),
+    ...(existing && (existing.state !== change.to || endsAck) ? { acknowledged: null } : {}),
     severity: change.severity,
     state: change.to,
     since: existing && existing.state === change.to && existing.since ? existing.since : at,
@@ -85,7 +88,18 @@ export async function applyCheckChange(projectId, change, { category = null, evi
       }),
     });
   }
-  return { applied: true, previous: existing?.state ?? null };
+  if (endsAck) await endMirrorAck(projectId, change.checkId);
+  return { applied: true, previous: existing?.state ?? null, ackEnded: endsAck };
+}
+
+/** The settings mirror's copy of an acknowledgement ends with it (display only; alerts read the check state). */
+async function endMirrorAck(projectId, checkId) {
+  try {
+    const { endMirrorAcknowledgement } = await import('./securityConfig.js');
+    await endMirrorAcknowledgement(projectId, checkId);
+  } catch {
+    // display only: the next security-config-get replaces the mirror anyway
+  }
 }
 
 async function upsertSiteStatus(projectId, data) {
@@ -113,7 +127,7 @@ export async function applySecurityEvent(project, ev, { log } = {}) {
       for (const c of data.changes) {
         const t = { checkId: c.id, from: c.from, to: c.to, at: c.at || evAt, severity: c.severity, summary: c.summary, clientSummary: c.clientSummary };
         const isNew = await recordTransition(projectId, t, 'event');
-        await applyCheckChange(projectId, t);
+        await applyCheckChange(projectId, t, { siteChanged: true });
         if (isNew) raised.push(t);
       }
       const st = await prisma.securitySiteStatus.findUnique({ where: { projectId } });
@@ -129,9 +143,12 @@ export async function applySecurityEvent(project, ev, { log } = {}) {
     }
     case 'security.check_failed': {
       const prev = await prisma.securityCheckState.findUnique({ where: { projectId_checkId: { projectId, checkId: data.id } } });
-      const t = { checkId: data.id, from: prev?.state ?? null, to: 'fail', at: data.at || evAt, severity: data.severity, summary: data.summary, clientSummary: data.clientSummary };
+      // O-R2-6: the event's own previous state when a site sends it; else the stored one (an ok the OS never saw
+      // stays fail → fail, known-issues).
+      const t = { checkId: data.id, from: data.from ?? prev?.state ?? null, to: 'fail', at: data.at || evAt, severity: data.severity, summary: data.summary, clientSummary: data.clientSummary };
       const isNew = await recordTransition(projectId, t, 'event');
-      await applyCheckChange(projectId, t, { evidence: data.evidence, remediation: data.remediation });
+      // A check_failed is a state change on the site: it ends an older acknowledgement before the alert decision.
+      await applyCheckChange(projectId, t, { evidence: data.evidence, remediation: data.remediation, siteChanged: true });
       if (isNew) raised.push(t);
       break;
     }
@@ -272,7 +289,9 @@ export async function recordStatusPull(projectId, rawStatus, { now = new Date() 
       clientSummary: c.clientSummary,
       remediation: c.remediation,
       refs: c.refs,
-      acknowledged: c.acknowledged,
+      // A transition stored by this pull that happened after the acknowledgement ends it (§37.5, O-R2-1), whatever
+      // `active` the site computed when it answered.
+      acknowledged: ackEndedBy(c.acknowledged, changed ? at : c.lastChangedAt || c.since) ? null : c.acknowledged,
       ...(status.detail === 'full'
         ? nonOk && c.evidence !== undefined
           ? { evidence: c.evidence, evidenceAt: now }

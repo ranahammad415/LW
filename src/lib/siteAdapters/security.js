@@ -285,6 +285,8 @@ export function sanitizeSecurityEventData(type, raw) {
           evidence: boundEvidence(d.evidence, SECURITY_LIMITS.evidenceBytes),
           remediation: safeText(d.remediation, SECURITY_LIMITS.remediation),
           at: isoOrNull(d.at),
+          // Not in the 1.6.x schema: used when a site sends the previous state (O-R2-6), else the OS's stored state.
+          from: SECURITY_STATES.includes(d.from) ? d.from : SECURITY_STATES.includes(d.before) ? d.before : null,
         },
       };
     }
@@ -487,6 +489,18 @@ export function sanitizeAck(a) {
     note: safeText(a.note, SECURITY_CONFIG_LIMITS.note),
     active: a.active !== false,
   };
+}
+
+/**
+ * §37.5: an acknowledgement ends as soon as the check's state changes after it was given (fail → ok → fail, warn →
+ * fail). True when a state change of the check at `changeAt` happened after the acknowledgement's `at` (O-R2-1).
+ */
+export function ackEndedBy(ack, changeAt) {
+  if (!ack) return false;
+  const ackAt = Date.parse(ack.at);
+  const at = Date.parse(changeAt);
+  if (!Number.isFinite(at)) return false;
+  return !Number.isFinite(ackAt) || ackAt < at;
 }
 
 /** True while the acknowledgement mutes OS alerts for a check now in state `state` (§37.5). */

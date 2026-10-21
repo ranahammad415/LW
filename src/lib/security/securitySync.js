@@ -24,6 +24,18 @@ const DEFAULT_RETRY_AFTER_SEC = 60;
 /** A destination is "missed" this long after its nextExpectedAt without a newer success (plan §5.2 graceMin). */
 export const BACKUP_MISSED_GRACE_MS = 60 * 60 * 1000;
 
+/**
+ * One rule for "this archive's backup was missed" (server-side missed detection and the client backup tile, O-R2-3):
+ * nextExpectedAt + 60 min has passed and there is no success since nextExpectedAt.
+ */
+export function backupOverdue(archive, now = Date.now()) {
+  if (!archive?.nextExpectedAt) return false;
+  const t = now instanceof Date ? now.getTime() : now;
+  const due = Date.parse(archive.nextExpectedAt);
+  const last = archive.lastOkAt ? Date.parse(archive.lastOkAt) : 0;
+  return Number.isFinite(due) && due + BACKUP_MISSED_GRACE_MS < t && last < due;
+}
+
 export function retryAfterSecOf(err) {
   const n = Number(err?.details?.retryAfterSec);
   return Number.isFinite(n) && n > 0 ? Math.min(Math.ceil(n), 3600) : DEFAULT_RETRY_AFTER_SEC;
@@ -43,10 +55,7 @@ export async function detectMissedBackups(project, backups, { now = new Date(), 
   const { checkBackupFailures } = await import('./securityAlerts.js');
   const targets = [];
   const add = (id, owner, type, label, archive) => {
-    if (!archive?.nextExpectedAt) return;
-    const due = Date.parse(archive.nextExpectedAt);
-    const last = archive.lastOkAt ? Date.parse(archive.lastOkAt) : 0;
-    if (Number.isFinite(due) && due + BACKUP_MISSED_GRACE_MS < now.getTime() && last < due) targets.push({ id, owner, type, label, expectedAt: archive.nextExpectedAt });
+    if (backupOverdue(archive, now)) targets.push({ id, owner, type, label, expectedAt: archive.nextExpectedAt });
   };
   add('agency-db', 'agency', null, 'the agency database backup', backups.agency?.db);
   add('agency-files', 'agency', null, 'the agency files backup', backups.agency?.files);

@@ -61,7 +61,7 @@ afterAll(() => app.close());
 
 const EMDASH = { id: 'p1', clientId: 'c1', leadPmId: 'pm1', cmsType: 'EMDASH', cmsCapabilities: { security: true, backups: true } };
 const CHECK_ROWS = [
-  { clientSummary: 'A backup is late.', state: 'warn', severity: 'critical', since: new Date('2026-11-03T08:00:00Z'), pmNote: 'On it', pmNoteEta: null },
+  { checkId: 'backup.primary_fresh', clientSummary: 'A backup is late.', state: 'warn', severity: 'critical', since: new Date('2026-11-03T08:00:00Z'), pmNote: 'On it', pmNoteEta: null },
 ];
 
 beforeEach(() => {
@@ -91,7 +91,8 @@ describe('client security route', () => {
     db.overrides['securitySiteStatus.findUnique'] = async () => ({ overallState: 'warn', score: 93, backups: { agency: { db: { lastOkAt: '2026-11-03T08:30:40Z' }, files: { lastOkAt: '2026-11-02T05:31:02Z', lastError: 'NETWORK' } }, client: [{ destinationId: 'dst_1', type: 'sftp', label: 'Office NAS', db: { lastOkAt: null } }] }, scansLastFullAt: new Date(), statusAt: new Date() });
     db.overrides['securityCheckState.findMany'] = async (a) => {
       // the query itself only selects client-safe columns
-      expect(Object.keys(a.select).sort()).toEqual(['clientSummary', 'pmNote', 'pmNoteEta', 'severity', 'since', 'state']);
+      // checkId only to leave disabled checks out (O-R2-4); it never reaches the response (FORBIDDEN below)
+      expect(Object.keys(a.select).sort()).toEqual(['checkId', 'clientSummary', 'pmNote', 'pmNoteEta', 'severity', 'since', 'state']);
       return CHECK_ROWS;
     };
     const res = await app.inject({ method: 'GET', url: '/api/client/projects/p1/security' });

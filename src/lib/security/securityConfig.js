@@ -24,6 +24,7 @@ import {
   SECURITY_FREQUENCIES,
   SECURITY_SEVERITIES,
   SECURITY_RECIPIENTS_MODES,
+  ackEndedBy,
 } from '../siteAdapters/security.js';
 import { J } from './jsonNull.js';
 
@@ -55,7 +56,33 @@ async function saveMirror(projectId, config, { pendingScans } = {}) {
   for (const c of config.checks) {
     await prisma.securityCheckState.updateMany({ where: { projectId, checkId: c.id }, data: J({ acknowledged: c.acknowledged && c.acknowledged.active ? c.acknowledged : null }) });
   }
+  await syncDisabled(projectId, config);
   return { ...config, pendingScans: keep };
+}
+
+/** Disabled check ids of a mirrored config (§37.3 rule 5: not run, not scored). */
+export function disabledIdsOf(config) {
+  return (Array.isArray(config?.checks) ? config.checks : []).filter((c) => c && c.enabled === false).map((c) => c.id);
+}
+
+/**
+ * Keep SecuritySiteStatus.disabled (the list every view reads, O-R2-4) in step with the settings mirror, so a check
+ * disabled from the OS shows as disabled at once, not only after the next security-status pull.
+ */
+async function syncDisabled(projectId, config) {
+  await prisma.securitySiteStatus.updateMany({ where: { projectId }, data: { disabled: disabledIdsOf(config) } }).catch(() => {});
+}
+
+/** The mirror's copy of an acknowledgement ends when its check changes state (§37.5, O-R2-1). */
+export async function endMirrorAcknowledgement(projectId, checkId) {
+  const mirror = await loadMirror(projectId);
+  const cfg = mirror?.config;
+  const c = Array.isArray(cfg?.checks) ? cfg.checks.find((x) => x.id === checkId) : null;
+  if (!c?.acknowledged || c.acknowledged.active === false) return false;
+  c.acknowledged = { ...c.acknowledged, active: false };
+  // CAS on the rev we read: a concurrent config_changed wins (the next pull refreshes the copy anyway).
+  const upd = await prisma.securityConfigMirror.updateMany({ where: { projectId, rev: mirror.rev }, data: { config: cfg } });
+  return upd.count > 0;
 }
 
 /** security-config-get → mirror. Returns the sanitized config (null when the site sent nothing usable). */
@@ -106,8 +133,11 @@ export async function applySecurityConfigEvent(project, ev, { log, schedulePull 
   const d = res.data;
   const mirror = await loadMirror(project.id);
   if (ev.type === 'security.acknowledged') {
-    const ack = { at: d.at, until: d.until, state: d.state, by: d.by, source: d.source, note: d.note, active: Date.parse(d.until) > Date.now() };
-    await prisma.securityCheckState.updateMany({ where: { projectId: project.id, checkId: d.checkId }, data: { acknowledged: ack } });
+    // An acknowledgement that arrives after a later state change of its check has already ended (§37.5, O-R2-1).
+    const state = await prisma.securityCheckState.findUnique({ where: { projectId_checkId: { projectId: project.id, checkId: d.checkId } }, select: { lastChangedAt: true } });
+    const ended = !!state?.lastChangedAt && ackEndedBy({ at: d.at }, new Date(state.lastChangedAt).toISOString());
+    const ack = { at: d.at, until: d.until, state: d.state, by: d.by, source: d.source, note: d.note, active: !ended && Date.parse(d.until) > Date.now() };
+    await prisma.securityCheckState.updateMany({ where: { projectId: project.id, checkId: d.checkId }, data: { acknowledged: ended ? null : ack } });
     if (mirror?.config && Array.isArray(mirror.config.checks)) {
       const cfg = mirror.config;
       const c = cfg.checks.find((x) => x.id === d.checkId);
@@ -140,6 +170,7 @@ export async function applySecurityConfigEvent(project, ev, { log, schedulePull 
     data: { rev: d.rev, config: cfg, lastChangedAt: new Date(d.at) },
   });
   if (upd.count === 0) schedulePull(project.id, log);
+  else if (d.changes.some((ch) => ch.field === 'enabled')) await syncDisabled(project.id, cfg);
   return 'applied';
 }
 
@@ -152,14 +183,30 @@ export async function completePendingScan(projectId, scanId) {
   return true;
 }
 
-/** Display name for a siteActor: our own user for osUserId, else "site admin" (§37.2). */
-export async function actorLabel(by) {
-  if (!by) return null;
-  if (by.osUserId) {
-    const u = await prisma.user.findUnique({ where: { id: by.osUserId }, select: { name: true } }).catch(() => null);
-    return u?.name || 'Agency OS user';
-  }
-  return by.source === 'admin-panel' || by.role === 'admin' ? 'site admin' : 'the site';
+/**
+ * Display name for a siteActor (§37.2 / §37.5 "acknowledged by <its user>"), pure: `names` maps OS user ids to names.
+ * Our own user for osUserId; else "site admin" for a site-admin change; else the role ("Agency OS PM").
+ * `source` is the change / acknowledgement source (os | site-admin) when the caller has it.
+ */
+export function actorName(by, source = null, names = new Map()) {
+  if (!by && !source) return null;
+  if (by?.osUserId && names.get(by.osUserId)) return names.get(by.osUserId);
+  if (source === 'site-admin' || by?.source === 'admin-panel' || by?.role === 'admin') return 'site admin';
+  if (by?.osUserId || source === 'os') return by?.role ? `Agency OS ${by.role}` : 'Agency OS user';
+  return by?.role ? `site ${by.role}` : 'the site';
+}
+
+/** Names of the OS users behind a list of siteActors (one query). */
+export async function osUserNames(actors) {
+  const ids = [...new Set(actors.map((a) => a?.osUserId).filter(Boolean))].slice(0, 200);
+  if (!ids.length) return new Map();
+  const rows = await prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } }).catch(() => []);
+  return new Map((rows || []).map((u) => [u.id, u.name]));
+}
+
+export async function actorLabel(by, source = null) {
+  if (!by && !source) return null;
+  return actorName(by, source, await osUserNames([by]));
 }
 
 /** Mirror + labels for the staff Security tab. */
@@ -169,19 +216,13 @@ export async function configView(projectId) {
   const cfg = mirror.config;
   const now = Date.now();
   const pendingScans = (Array.isArray(cfg.pendingScans) ? cfg.pendingScans : []).filter((s) => now - Date.parse(s.at) < PENDING_SCAN_TTL_MS);
-  const labelCache = new Map();
-  const label = async (by) => {
-    const k = JSON.stringify(by || null);
-    if (!labelCache.has(k)) labelCache.set(k, await actorLabel(by));
-    return labelCache.get(k);
-  };
-  const checks = [];
-  for (const c of cfg.checks) checks.push({ ...c, acknowledged: c.acknowledged ? { ...c.acknowledged, byName: await label(c.acknowledged.by) } : null });
+  const names = await osUserNames([...cfg.checks.map((c) => c.acknowledged?.by), cfg.lastChange?.by]);
+  const checks = cfg.checks.map((c) => ({ ...c, acknowledged: c.acknowledged ? { ...c.acknowledged, byName: actorName(c.acknowledged.by, c.acknowledged.source, names) } : null }));
   return {
     ...cfg,
     checks,
     pendingScans,
-    lastChange: cfg.lastChange ? { ...cfg.lastChange, byName: await label(cfg.lastChange.by) } : null,
+    lastChange: cfg.lastChange ? { ...cfg.lastChange, byName: actorName(cfg.lastChange.by, cfg.lastChange.source, names) } : null,
     stale: mirror.stale === true,
     fetchedAt: mirror.fetchedAt,
   };
@@ -364,7 +405,7 @@ export async function ackSecurityCheck(projectId, user, { checkId, until, note }
     const d = sanitizeSecurityEventData('security.acknowledged', res?.acknowledged).data;
     if (d) await applySecurityConfigEvent({ id: projectId }, { type: 'security.acknowledged', data: res.acknowledged });
     await audit(projectId, 'ack', key, user, 'ok', { checkId, rev: Number.isInteger(res?.rev) ? res.rev : null });
-    return { rev: Number.isInteger(res?.rev) ? res.rev : null, acknowledged: d ? { ...d, byName: await actorLabel(d.by) } : null };
+    return { rev: Number.isInteger(res?.rev) ? res.rev : null, acknowledged: d ? { ...d, byName: await actorLabel(d.by, d.source) } : null };
   } catch (err) {
     await audit(projectId, 'ack', key, user, err?.code || 'ERROR', { checkId });
     if (err instanceof CmsBridgeError && err.code === 'VALIDATION' && err.details?.reason === 'ack_too_long') {

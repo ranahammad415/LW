@@ -146,7 +146,7 @@ describe('mirror', () => {
     expect(await applySecurityEvent(PROJECT, ackEv)).toBe('applied');
     const upd = db.calls.filter((c) => c.key === 'securityCheckState.updateMany').pop();
     expect(upd.args).toMatchObject({ where: { projectId: 'p1', checkId: ackEv.data.checkId }, data: { acknowledged: { state: ackEv.data.state, until: new Date(ackEv.data.until).toISOString() } } });
-    db.overrides['user.findUnique'] = async () => ({ name: 'Olivia Owner' });
+    db.overrides['user.findMany'] = async () => [{ id: OWNER.id, name: 'Olivia Owner' }];
     const view = await configView('p1');
     const c = view.checks.find((x) => x.id === ackEv.data.checkId);
     expect(c.acknowledged.byName).toBeTruthy();
@@ -217,7 +217,7 @@ describe('writes', () => {
     await expect(ackSecurityCheck('p1', OWNER, { checkId: 'data.db_integrity', note: 'Restoring', until: new Date(now + 10 * 86400_000).toISOString() })).rejects.toMatchObject({ details: { reason: 'ack_too_long', maxDays: 7 } });
     expect(site.routes).toEqual([]);
     site.handler = () => ex('security-ack.response');
-    db.overrides['user.findUnique'] = async () => ({ name: 'Olivia Owner' });
+    db.overrides['user.findMany'] = async () => [{ id: OWNER.id, name: 'Olivia Owner' }];
     const out = await ackSecurityCheck('p1', OWNER, { checkId: 'data.db_integrity', note: 'Restoring' });
     expect(site.routes[0].body).toMatchObject({ checkId: 'data.db_integrity', note: 'Restoring', actor: { kind: 'human', role: 'OWNER' } });
     expect(site.routes[0].body.until).toBeUndefined(); // site default (7 days)

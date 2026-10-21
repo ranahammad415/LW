@@ -9,7 +9,9 @@
  * STAFF (OWNER, PM for their projects): fleet rows and the per-site drill-down with everything the OS stores.
  */
 import { prisma } from '../prisma.js';
-import { hasSecurity, hasBackups, hasSecurityConfig } from './securitySync.js';
+import { hasSecurity, hasBackups, hasSecurityConfig, backupOverdue } from './securitySync.js';
+import { actorName, osUserNames } from './securityConfig.js';
+import { ackMutes } from '../siteAdapters/security.js';
 
 export const CLIENT_SENTENCES = Object.freeze({
   ok: 'Your site is protected and backed up.',
@@ -32,10 +34,21 @@ function oldest(...vals) {
   return new Date(Math.min(...t)).toISOString();
 }
 
+/** Check ids the site does not run or score any more (security-status.disabled[], kept in step by the mirror). */
+export function disabledSet(status) {
+  return new Set(Array.isArray(status?.disabled) ? status.disabled.filter((x) => typeof x === 'string') : []);
+}
+
+/** Backup tile "ok": no last error and not overdue (the same rule as the server-side missed detection, O-R2-3). */
+function archivesOk(dbArchive, filesArchive, now) {
+  return !dbArchive?.lastError && !filesArchive?.lastError && !backupOverdue(dbArchive, now) && !backupOverdue(filesArchive, now);
+}
+
 /** Pure: stored rows → the client view. Exported for the "no non-client fields" tests. */
-export function buildClientSecurityView({ status, checks }) {
+export function buildClientSecurityView({ status, checks }, { now = Date.now() } = {}) {
+  const disabled = disabledSet(status);
   const items = (checks || [])
-    .filter((c) => c.clientSummary && (c.state === 'fail' || c.state === 'warn'))
+    .filter((c) => c.clientSummary && (c.state === 'fail' || c.state === 'warn') && !disabled.has(c.checkId))
     .sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 9) - (SEVERITY_ORDER[b.severity] ?? 9))
     .slice(0, 50)
     .map((c) => ({
@@ -50,12 +63,12 @@ export function buildClientSecurityView({ status, checks }) {
   if (overall === 'warn') sentence = items.length > 1 ? CLIENT_SENTENCES.warn_many : CLIENT_SENTENCES.warn_one;
   const b = status?.backups && typeof status.backups === 'object' ? status.backups : null;
   const agency = b?.agency
-    ? { lastOkAt: oldest(b.agency.db?.lastOkAt, b.agency.files?.lastOkAt) || latest(b.agency.db?.lastOkAt, b.agency.files?.lastOkAt), ok: !b.agency.db?.lastError && !b.agency.files?.lastError }
+    ? { lastOkAt: oldest(b.agency.db?.lastOkAt, b.agency.files?.lastOkAt) || latest(b.agency.db?.lastOkAt, b.agency.files?.lastOkAt), ok: archivesOk(b.agency.db, b.agency.files, now) }
     : null;
   const destinations = (b?.client || []).slice(0, 20).map((d) => ({
     label: d.label ? String(d.label) : 'Your backup destination',
     lastOkAt: oldest(d.db?.lastOkAt, d.files?.lastOkAt) || latest(d.db?.lastOkAt, d.files?.lastOkAt),
-    ok: !d.db?.lastError && !d.files?.lastError,
+    ok: archivesOk(d.db, d.files, now),
   }));
   return {
     available: true,
@@ -74,10 +87,10 @@ export function buildClientSecurityView({ status, checks }) {
 export async function clientSecurityView(project) {
   if (!hasSecurity(project)) return { available: false };
   const [status, checks] = await Promise.all([
-    prisma.securitySiteStatus.findUnique({ where: { projectId: project.id }, select: { overallState: true, backups: true, scansLastFullAt: true, statusAt: true, lastPullAt: true } }),
+    prisma.securitySiteStatus.findUnique({ where: { projectId: project.id }, select: { overallState: true, backups: true, scansLastFullAt: true, statusAt: true, lastPullAt: true, disabled: true } }),
     prisma.securityCheckState.findMany({
       where: { projectId: project.id, state: { in: ['fail', 'warn'] }, clientSummary: { not: null } },
-      select: { clientSummary: true, state: true, severity: true, since: true, pmNote: true, pmNoteEta: true },
+      select: { checkId: true, clientSummary: true, state: true, severity: true, since: true, pmNote: true, pmNoteEta: true },
     }),
   ]);
   return buildClientSecurityView({ status, checks });
@@ -131,13 +144,16 @@ export async function fleetView(user, { now = Date.now() } = {}) {
     take: 500,
   });
   const ids = projects.map((p) => p.id);
+  // Per check (not groupBy) so disabled checks (not run, not scored) are left out of the counts (O-R2-4).
   const failing = ids.length
-    ? await prisma.securityCheckState.groupBy({ by: ['projectId', 'state'], where: { projectId: { in: ids }, state: { in: ['fail', 'warn'] } }, _count: { _all: true } })
+    ? await prisma.securityCheckState.findMany({ where: { projectId: { in: ids }, state: { in: ['fail', 'warn'] } }, select: { projectId: true, checkId: true, state: true }, take: 20000 })
     : [];
+  const disabledByProject = new Map(projects.map((p) => [p.id, disabledSet(p.securitySiteStatus)]));
   const counts = new Map();
   for (const g of failing) {
+    if (disabledByProject.get(g.projectId)?.has(g.checkId)) continue;
     const c = counts.get(g.projectId) || { fail: 0, warn: 0 };
-    c[g.state] = g._count._all;
+    c[g.state] += 1;
     counts.set(g.projectId, c);
   }
   return projects
@@ -187,6 +203,21 @@ export async function siteSecurityView(project, { days = 90 } = {}) {
   const noteAuthors = [...new Set(checks.map((c) => c.pmNoteById).filter(Boolean))];
   const users = noteAuthors.length ? await prisma.user.findMany({ where: { id: { in: noteAuthors } }, select: { id: true, name: true } }) : [];
   const names = new Map(users.map((u) => [u.id, u.name]));
+  // "Acknowledged by <its user>" (§37.5, O-R2-2): the OS user behind the acknowledgement's actor.
+  const ackNames = await osUserNames(checks.map((c) => c.acknowledged?.by));
+  const disabled = disabledSet(status);
+  const now = Date.now();
+  const ackView = (c) => {
+    const a = c.acknowledged && typeof c.acknowledged === 'object' ? c.acknowledged : null;
+    if (!a) return null;
+    return { ...a, active: ackMutes(a, c.state, now) && !disabled.has(c.checkId), byName: actorName(a.by, a.source, ackNames) };
+  };
+  // Counts from the stored checks without the disabled ones (the site's counts can predate a disable from the OS).
+  const counts = checks.length ? { ok: 0, warn: 0, fail: 0, unknown: 0, disabled: 0 } : status?.counts ?? null;
+  if (checks.length) for (const c of checks) {
+    if (disabled.has(c.checkId)) counts.disabled += 1;
+    else counts[c.state] = (counts[c.state] || 0) + 1;
+  }
   return {
     available: hasSecurity(project) || hasBackups(project),
     capabilities: { security: hasSecurity(project), backups: hasBackups(project), securityConfig: hasSecurityConfig(project), logs: false },
@@ -194,7 +225,7 @@ export async function siteSecurityView(project, { days = 90 } = {}) {
       ? {
           overall: status.overallState,
           score: status.score,
-          counts: status.counts,
+          counts,
           since: iso(status.overallSince),
           categories: status.categories,
           catalogueVersion: status.catalogueVersion,
@@ -230,7 +261,8 @@ export async function siteSecurityView(project, { days = 90 } = {}) {
       evidence: c.evidence,
       evidenceAt: iso(c.evidenceAt),
       refs: c.refs,
-      acknowledged: c.acknowledged,
+      disabled: disabled.has(c.checkId),
+      acknowledged: ackView(c),
       note: c.pmNote ? { text: c.pmNote, eta: iso(c.pmNoteEta), by: names.get(c.pmNoteById) || null, at: iso(c.pmNoteAt) } : null,
     })),
     trend: points.map((p) => ({ date: p.date, state: p.overallState, score: p.score, counts: p.counts, checks: p.checks })),
