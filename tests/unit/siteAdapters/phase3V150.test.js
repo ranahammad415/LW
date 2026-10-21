@@ -350,6 +350,33 @@ describe('leads (§26.1)', () => {
     expect(parseErasedReason('retention')).toEqual({ reason: 'retention', siteErase: null });
   });
 
+  it('retention: every project holding leads (also one switched away from EmDash or disconnected), by lead age', async () => {
+    const now = new Date('2026-10-21T10:00:00Z');
+    const leadQueries = [];
+    db.overrides['cmsLead.findMany'] = async (a) => {
+      if (a.distinct) {
+        expect(a.where).toEqual({ erasedAt: null });
+        return [{ projectId: 'emdash' }, { projectId: 'now-wordpress' }];
+      }
+      if (a.where?.erasedReason) return []; // pending site erases
+      leadQueries.push(a.where);
+      return [{ leadId: `old-${a.where.projectId}` }];
+    };
+    db.overrides['project.findMany'] = async (a) => {
+      expect(a.where).toEqual({ id: { in: ['emdash', 'now-wordpress'] } }); // no cmsType filter
+      return [{ id: 'emdash', cmsLeadRetentionMonths: 24 }, { id: 'now-wordpress', cmsLeadRetentionMonths: 6 }];
+    };
+    db.overrides['cmsLead.findUnique'] = async () => ({ id: 'row', erasedAt: null, photos: [] });
+    const { leadHousekeeping } = await import('../../../src/lib/cmsLeads.js');
+    const out = await leadHousekeeping({ now });
+    expect(out.erased).toBe(2);
+    expect(leadQueries.map((w) => [w.projectId, w.receivedAt.lt.toISOString().slice(0, 10)])).toEqual([
+      ['emdash', '2024-10-21'],
+      ['now-wordpress', '2026-04-21'],
+    ]);
+    expect(calls('cmsLead.update').map((c) => c.args.data.erasedReason)).toEqual(['retention', 'retention']);
+  });
+
   it('a lead.erased from the site on a tombstone with a pending site erase clears the pending mark', async () => {
     db.overrides['cmsLead.findUnique'] = async () => ({ id: 'l1', erasedAt: new Date(), erasedReason: 'site_pending:subject_request', photos: [] });
     expect(await eraseLocalLead('p1', 'L', 'site')).toBe(true);

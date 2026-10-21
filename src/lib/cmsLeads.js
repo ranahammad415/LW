@@ -371,16 +371,24 @@ export async function retryPendingSiteErases({ now = new Date(), limit = 20, log
   return out;
 }
 
-/** Leader-only: erase leads past the project's retention, retry owed site erases and copy pending photos. Bounded per run. */
+/**
+ * Leader-only: erase leads past their project's retention, retry owed site erases and copy pending photos. Bounded
+ * per run. Retention covers every project that still holds un-erased leads, whatever its current cmsType or
+ * connection (a project switched away from EmDash or disconnected keeps its leads until they age out).
+ */
 export async function leadHousekeeping({ now = new Date(), log } = {}) {
   let erased = 0;
-  const projects = await prisma.project.findMany({ where: { cmsType: 'EMDASH' }, select: { id: true, cmsLeadRetentionMonths: true }, take: 500 });
-  for (const p of projects) {
-    const months = Number.isInteger(p.cmsLeadRetentionMonths) && p.cmsLeadRetentionMonths > 0 ? p.cmsLeadRetentionMonths : 24;
+  const withLeads = await prisma.cmsLead.findMany({ where: { erasedAt: null }, distinct: ['projectId'], select: { projectId: true }, take: 500 });
+  const ids = withLeads.map((r) => r.projectId);
+  const projects = ids.length ? await prisma.project.findMany({ where: { id: { in: ids } }, select: { id: true, cmsLeadRetentionMonths: true } }) : [];
+  const months = new Map(projects.map((p) => [p.id, p.cmsLeadRetentionMonths]));
+  for (const projectId of ids) {
+    const m = months.get(projectId);
+    const keep = Number.isInteger(m) && m > 0 ? m : 24;
     const cutoff = new Date(now);
-    cutoff.setUTCMonth(cutoff.getUTCMonth() - months);
-    const old = await prisma.cmsLead.findMany({ where: { projectId: p.id, erasedAt: null, receivedAt: { lt: cutoff } }, select: { leadId: true }, take: 200 });
-    for (const l of old) if (await eraseLocalLead(p.id, l.leadId, 'retention')) erased += 1;
+    cutoff.setUTCMonth(cutoff.getUTCMonth() - keep);
+    const old = await prisma.cmsLead.findMany({ where: { projectId, erasedAt: null, receivedAt: { lt: cutoff } }, select: { leadId: true }, take: 200 });
+    for (const l of old) if (await eraseLocalLead(projectId, l.leadId, 'retention')) erased += 1;
   }
   const siteErases = await retryPendingSiteErases({ now, log }).catch(() => ({ tried: 0, done: 0, failed: 0 }));
   const copied = await copyLeadPhotos(null, { now }).catch(() => 0);
