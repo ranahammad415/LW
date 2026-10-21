@@ -17,7 +17,7 @@ import {
 } from './siteAdapters/emdash.js';
 import { prepareDraftPush, checkMediaItems, checkLayout, draftFromEntryGet, MEDIA_LIMITS, MEDIA_TYPES, DRAFT_LIMITS } from './siteAdapters/push.js';
 import { probeImage } from './imageProbe.js';
-import { guardedFetch } from './siteAdapters/netGuard.js';
+import { guardedFetch, blockedIpLiteral } from './siteAdapters/netGuard.js';
 import { changedBy } from './siteAdapters/reopen.js';
 import { ensureProjectAccess } from './ensureProjectAccess.js';
 
@@ -823,6 +823,9 @@ export async function fetchImageFromUrl(url, { maxBytes, fetchImpl = guardedFetc
   }
   if (u.protocol !== 'https:') throw bad('Image URLs must use https.');
   if (u.username || u.password) throw bad('Image URLs must not contain credentials.');
+  // Node skips the connect-time lookup for IP literals: refuse private ones here with a clear message (guardedFetch
+  // refuses them too).
+  if (blockedIpLiteral(u)) throw bad('Image URLs must point to a public address.');
   const cap = Number.isInteger(maxBytes) && maxBytes > 0 ? maxBytes : MEDIA_LIMITS.maxBytes;
   const tooLarge = () => bad(`The image is larger than ${Math.round(cap / 1024)} KiB. Use a web-ready file (WebP or JPEG).`, 'MEDIA_TOO_LARGE');
   let res;

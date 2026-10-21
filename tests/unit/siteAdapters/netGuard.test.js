@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import http from 'node:http';
-import { isPrivateIp, guardedLookup, guardedFetch, validateSiteUrl } from '../../../src/lib/siteAdapters/netGuard.js';
+import { isPrivateIp, guardedLookup, guardedFetch, validateSiteUrl, ipLiteralOf, blockedIpLiteral } from '../../../src/lib/siteAdapters/netGuard.js';
 import { siteRequest } from '../../../src/lib/siteAdapters/emdash.js';
 import { computeSignature, signResponse, errorBody } from '../../../src/lib/siteAdapters/signing.js';
 
@@ -53,6 +53,35 @@ describe('guardedLookup (connect time, DNS rebinding)', () => {
     process.env.EMDASH_BRIDGE_ALLOW_INSECURE_DEV = 'true';
     expect((await lookupErr())?.code).toBe('EAI_BLOCKED');
     await expect(guardedFetch('http://localhost:1/x', { method: 'POST', body: '{}' })).rejects.toThrow(/https/);
+  });
+});
+
+describe('IP-literal hosts (Node skips lookup for them)', () => {
+  it('the URL parser normalizes decimal / hex / octal / short IPv4 forms to dotted', () => {
+    for (const s of ['https://2130706433/', 'https://0x7f000001/', 'https://0177.0.0.1/', 'https://127.1/']) {
+      expect(ipLiteralOf(new URL(s).hostname)).toBe('127.0.0.1');
+    }
+    expect(ipLiteralOf(new URL('https://[::1]/').hostname)).toBe('::1');
+    expect(ipLiteralOf('example.com')).toBeNull();
+  });
+
+  it.each([
+    'https://127.0.0.1/x', 'https://[::1]/x', 'https://169.254.169.254/latest/meta-data/', 'https://10.1.2.3/x',
+    'https://0x7f000001/x', 'https://2130706433/x', 'https://[::ffff:127.0.0.1]/x', 'https://192.168.1.1:8443/x',
+  ])('guardedFetch refuses %s before connecting', async (url) => {
+    process.env.NODE_ENV = 'production';
+    await expect(guardedFetch(url, { method: 'GET' })).rejects.toMatchObject({ code: 'EAI_BLOCKED' });
+  });
+
+  it('a public IP literal passes the check; the dev opt-in still allows loopback', () => {
+    process.env.NODE_ENV = 'production';
+    expect(blockedIpLiteral(new URL('https://93.184.216.34/x'))).toBeNull();
+    expect(blockedIpLiteral(new URL('https://[2606:4700::1111]/x'))).toBeNull();
+    expect(blockedIpLiteral(new URL('https://example.com/x'))).toBeNull(); // host names go through guardedLookup
+    expect(blockedIpLiteral(new URL('https://127.0.0.1/x'))).toMatchObject({ code: 'EAI_BLOCKED' });
+    process.env.NODE_ENV = 'test';
+    process.env.EMDASH_BRIDGE_ALLOW_INSECURE_DEV = 'true';
+    expect(blockedIpLiteral(new URL('https://127.0.0.1/x'))).toBeNull();
   });
 });
 

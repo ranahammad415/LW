@@ -127,6 +127,26 @@ export function guardedLookup(hostname, options, callback) {
 }
 
 /**
+ * The IP literal a URL host is (brackets stripped), or null for a host name. The WHATWG URL parser already normalizes
+ * IPv4 shorthand (decimal `2130706433`, hex `0x7f000001`, octal `0177.0.0.1`, `127.1`) to dotted form, so those
+ * arrive here as `127.0.0.1`.
+ */
+export function ipLiteralOf(hostname) {
+  const h = String(hostname || '').replace(/^\[|\]$/g, '');
+  return net.isIP(h) ? h : null;
+}
+
+/**
+ * Node never calls `lookup` for an IP-literal host, so `guardedLookup` alone lets `https://127.0.0.1/` through. Check
+ * the literal directly (same rule and the same dev opt-in as the lookup). Returns an Error to reject with, or null.
+ */
+export function blockedIpLiteral(u) {
+  const ip = ipLiteralOf(u.hostname);
+  if (!ip || allowPrivate() || !isPrivateIp(ip)) return null;
+  return Object.assign(new Error(`Refusing to connect to a private address (${ip})`), { code: 'EAI_BLOCKED' });
+}
+
+/**
  * Minimal fetch-compatible POST (method/headers/body/signal) with the guarded lookup and no
  * redirect following. Resolves to a WHATWG Response. `init.maxBytes` caps the response body (default 8 MiB); a larger
  * body rejects with an Error whose code is RESPONSE_TOO_LARGE.
@@ -146,6 +166,11 @@ export function guardedFetch(url, init = {}) {
     const mod = u.protocol === 'https:' ? https : u.protocol === 'http:' && LOCAL_HOSTS.has(u.hostname) && allowPrivate() ? http : null;
     if (!mod) {
       reject(new Error('Only https site URLs are allowed'));
+      return;
+    }
+    const blocked = blockedIpLiteral(u);
+    if (blocked) {
+      reject(blocked);
       return;
     }
     const body = init.body == null ? null : Buffer.from(init.body);

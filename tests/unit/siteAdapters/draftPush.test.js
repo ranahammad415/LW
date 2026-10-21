@@ -311,6 +311,25 @@ describe('media (direct upload only; ≤ 1 MiB; no re-encoding; sha256 dedupe)',
     const ok = async () => new Response(pngBytes(), { status: 200 });
     expect((await fetchImageFromUrl('https://x.example/img/a%20b.png', { maxBytes: 1000, fetchImpl: ok })).filename).toBe('a b.png');
   });
+
+  it('private IP-literal URLs are refused before any fetch (Node skips the guarded lookup for them)', async () => {
+    const prevEnv = process.env.EMDASH_BRIDGE_ALLOW_INSECURE_DEV;
+    delete process.env.EMDASH_BRIDGE_ALLOW_INSECURE_DEV;
+    try {
+      let fetched = 0;
+      const never = async () => {
+        fetched += 1;
+        return new Response(pngBytes(), { status: 200 });
+      };
+      for (const url of ['https://127.0.0.1/a.png', 'https://[::1]/a.png', 'https://169.254.169.254/a.png', 'https://10.0.0.5/a.png', 'https://0x7f000001/a.png', 'https://2130706433/a.png']) {
+        await expect(fetchImageFromUrl(url, { maxBytes: 1000, fetchImpl: never })).rejects.toMatchObject({ code: 'VALIDATION' });
+      }
+      expect(fetched).toBe(0);
+      expect((await fetchImageFromUrl('https://93.184.216.34/a.png', { maxBytes: 1000, fetchImpl: never })).filename).toBe('a.png');
+    } finally {
+      if (prevEnv !== undefined) process.env.EMDASH_BRIDGE_ALLOW_INSECURE_DEV = prevEnv;
+    }
+  });
 });
 
 describe('AI writer helpers (AiUsageLog caps; markdown or approved blocks, never HTML)', () => {
