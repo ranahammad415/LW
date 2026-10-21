@@ -435,6 +435,19 @@ try {
     }
   });
 
+  // Monthly security report (plan §5.7): 1st of the month 06:00, last month's HTML report per EmDash site with security
+  // or backups. Leader only; an existing report (e.g. one a PM generated with a plan note) is never overwritten. No AI.
+  cron.schedule('0 6 1 * *', async () => {
+    if (!isLeader()) return;
+    try {
+      const { generateMonthlySecurityReports } = await import('./lib/security/securityReport.js');
+      const out = await generateMonthlySecurityReports({ log: app.log });
+      app.log.info(out, 'Monthly security reports generated');
+    } catch (err) {
+      app.log.error({ err }, 'Monthly security reports failed');
+    }
+  });
+
   // SEO Engine retention (OS-05 / OS-14): hourly purge of expired Idempotency-Key rows. Leader only
   // (NODE_APP_INSTANCE 0 / unset); the deletes are plain conditional deleteMany calls, so a double run is harmless.
   cron.schedule('23 * * * *', async () => {

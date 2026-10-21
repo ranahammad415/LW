@@ -13,6 +13,8 @@ import { isCheckId, isoOrNull } from '../../lib/siteAdapters/security.js';
 import { pullSecurity, hasSecurityConfig } from '../../lib/security/securitySync.js';
 import { fleetView, siteSecurityView } from '../../lib/security/securityViews.js';
 import { configView, pullSecurityConfig, setSecurityConfig, runSecurityScan, ackSecurityCheck } from '../../lib/security/securityConfig.js';
+import { generateSecurityReport, listSecurityReports, isReportMonth } from '../../lib/security/securityReport.js';
+import { HTML_REPORT_VIEW_CSP } from '../../lib/htmlReportUpload.js';
 
 export const SECURITY_ROLES = ['OWNER', 'PM'];
 
@@ -112,6 +114,54 @@ export async function pmSecurityRoutes(app) {
           : { pmNote: null, pmNoteEta: null, pmNoteById: request.user.id, pmNoteAt: new Date() },
       });
       return reply.send({ ok: true, note: text ? { text, eta, by: request.user.name || null } : null });
+    } catch (err) {
+      return sendError(reply, err, request.log);
+    }
+  });
+
+  // ---- Monthly security report (plan §5.7): HTML, client + admin editions, no PDF ----
+
+  app.get('/security/projects/:projectId/reports', read, async (request, reply) => {
+    try {
+      const project = await projectFor(request, reply);
+      if (!project) return;
+      return reply.send({ reports: await listSecurityReports(project.id) });
+    } catch (err) {
+      return sendError(reply, err, request.log);
+    }
+  });
+
+  app.post('/security/projects/:projectId/reports', write, async (request, reply) => {
+    try {
+      const project = await projectFor(request, reply);
+      if (!project) return;
+      const month = String(request.body?.month || '');
+      if (!isReportMonth(month)) return reply.status(400).send({ message: 'month must be YYYY-MM' });
+      const planNote = request.body?.planNote == null ? null : String(request.body.planNote);
+      if (planNote && planNote.length > 2000) return reply.status(400).send({ message: 'The plan note is at most 2000 characters.' });
+      const report = await generateSecurityReport(project.id, month, { userId: request.user.id, planNote });
+      return reply.send({ report });
+    } catch (err) {
+      if (err?.statusCode) return reply.status(err.statusCode).send({ message: err.message });
+      return sendError(reply, err, request.log);
+    }
+  });
+
+  app.get('/security/projects/:projectId/reports/:month', read, async (request, reply) => {
+    try {
+      const project = await projectFor(request, reply);
+      if (!project) return;
+      const month = String(request.params.month);
+      if (!isReportMonth(month)) return reply.status(400).send({ message: 'month must be YYYY-MM' });
+      const row = await prisma.securityMonthlyReport.findUnique({ where: { projectId_month: { projectId: project.id, month } }, select: { clientHtml: true, adminHtml: true } });
+      if (!row) return reply.status(404).send({ message: 'Report not found' });
+      const html = request.query?.edition === 'client' ? row.clientHtml : row.adminHtml;
+      return reply
+        .header('Content-Type', 'text/html; charset=utf-8')
+        .header('Content-Security-Policy', HTML_REPORT_VIEW_CSP)
+        .header('cache-control', 'private, no-store')
+        .header('x-content-type-options', 'nosniff')
+        .send(html);
     } catch (err) {
       return sendError(reply, err, request.log);
     }
