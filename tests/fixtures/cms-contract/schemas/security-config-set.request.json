@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/security-config-set.request.json",
+  "title": "security-config-set (v1.6.1)",
+  "description": "Compare-and-set on baseRev (else 409 CONFLICT_REV with details.config). Unknown check id: 422 UNKNOWN_CHECK, nothing applied. A field the catalogue does not let change is rejected (rejected[]); the other fields are applied.",
+  "type": "object",
+  "properties": {
+    "baseRev": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.]{1,64}$",
+            "maxLength": 80,
+            "description": "<category>.<name>, e.g. edge.hsts; ids are never reused for a different meaning"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "clientVisible": {
+            "type": "boolean"
+          },
+          "severityOverride": {
+            "anyOf": [
+              {
+                "$ref": "common.json#/$defs/securitySeverity",
+                "description": "null = back to the default"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "schedule": {
+            "anyOf": [
+              {
+                "enum": [
+                  "15m",
+                  "1h",
+                  "6h",
+                  "1d",
+                  "1w",
+                  "build",
+                  "manual"
+                ],
+                "description": "null = back to the default"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "snoozedUntil": {
+            "anyOf": [
+              {
+                "$ref": "common.json#/$defs/dateTime",
+                "description": "acknowledge until (same rules as security-ack); null = end the acknowledgement"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500,
+                "description": "plain text written by a person, redacted; agency-only (never shown to the client)"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "anyOf": [
+          {
+            "required": [
+              "enabled"
+            ]
+          },
+          {
+            "required": [
+              "clientVisible"
+            ]
+          },
+          {
+            "required": [
+              "severityOverride"
+            ]
+          },
+          {
+            "required": [
+              "schedule"
+            ]
+          },
+          {
+            "required": [
+              "snoozedUntil"
+            ]
+          },
+          {
+            "required": [
+              "note"
+            ]
+          }
+        ]
+      },
+      "maxItems": 50
+    },
+    "alerts": {
+      "type": "object",
+      "properties": {
+        "emailOnCritical": {
+          "type": "boolean"
+        },
+        "dedupeHours": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 168
+        },
+        "recipientsMode": {
+          "enum": [
+            "site",
+            "os"
+          ]
+        }
+      },
+      "required": [],
+      "anyOf": [
+        {
+          "required": [
+            "emailOnCritical"
+          ]
+        },
+        {
+          "required": [
+            "dedupeHours"
+          ]
+        },
+        {
+          "required": [
+            "recipientsMode"
+          ]
+        }
+      ]
+    },
+    "actor": {
+      "$ref": "common.json#/$defs/osActor"
+    }
+  },
+  "required": [
+    "baseRev",
+    "actor"
+  ],
+  "anyOf": [
+    {
+      "required": [
+        "changes"
+      ],
+      "properties": {
+        "changes": {
+          "minItems": 1
+        }
+      }
+    },
+    {
+      "required": [
+        "alerts"
+      ]
+    }
+  ]
+}

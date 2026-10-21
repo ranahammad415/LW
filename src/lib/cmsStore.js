@@ -603,6 +603,11 @@ export const prismaCmsStore = {
     return applySeoEvent(project.id, ev, { siteRevision: project?.cmsHealth?.contractRevision ?? null });
   },
 
+  async applySecurityEvent(project, ev, log) {
+    const { applySecurityEvent } = await import('./security/securityStore.js');
+    return applySecurityEvent(project, ev, { log });
+  },
+
   async suggestionQuote(projectId, cmsSuggestionId) {
     const row = await prisma.cmsReviewSuggestion.findUnique({
       where: { projectId_cmsSuggestionId: { projectId, cmsSuggestionId: String(cmsSuggestionId).slice(0, 64) } },

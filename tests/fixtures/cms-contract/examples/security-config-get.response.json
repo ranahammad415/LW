@@ -1,0 +1,187 @@
+{
+  "ok": true,
+  "config": {
+    "schemaVersion": 1,
+    "catalogueVersion": "1.0.0",
+    "rev": 1,
+    "generatedAt": "2026-11-03T08:30:00Z",
+    "checks": [
+      {
+        "id": "edge.hsts",
+        "title": "HSTS header",
+        "category": "edge",
+        "source": "plugin",
+        "enabled": true,
+        "clientVisible": true,
+        "defaultSeverity": "high",
+        "severity": "high",
+        "severityOverride": null,
+        "defaultSchedule": "1h",
+        "schedule": null,
+        "frequency": "1h",
+        "snoozedUntil": null,
+        "note": null,
+        "acknowledged": null,
+        "adjustable": {
+          "enabled": true,
+          "clientVisible": true,
+          "severity": [
+            "high",
+            "medium",
+            "low"
+          ],
+          "schedule": [
+            "1h",
+            "6h",
+            "1d"
+          ],
+          "snooze": false
+        }
+      },
+      {
+        "id": "edge.csp_mode",
+        "title": "Content Security Policy mode",
+        "category": "edge",
+        "source": "plugin",
+        "enabled": true,
+        "clientVisible": false,
+        "defaultSeverity": "medium",
+        "severity": "medium",
+        "severityOverride": null,
+        "defaultSchedule": "1h",
+        "schedule": null,
+        "frequency": "1h",
+        "snoozedUntil": null,
+        "note": "Report-only by design until the O-2 switch date.",
+        "acknowledged": null,
+        "adjustable": {
+          "enabled": true,
+          "clientVisible": false,
+          "severity": [
+            "high",
+            "medium",
+            "low"
+          ],
+          "schedule": [
+            "1h",
+            "6h",
+            "1d",
+            "1w"
+          ],
+          "snooze": true
+        }
+      },
+      {
+        "id": "host.file_perms",
+        "title": "File permissions on the host",
+        "category": "host",
+        "source": "worker",
+        "enabled": true,
+        "clientVisible": false,
+        "defaultSeverity": "high",
+        "severity": "high",
+        "severityOverride": null,
+        "defaultSchedule": "1d",
+        "schedule": null,
+        "frequency": "1d",
+        "snoozedUntil": null,
+        "note": null,
+        "acknowledged": null,
+        "adjustable": {
+          "enabled": true,
+          "clientVisible": false,
+          "severity": [
+            "high",
+            "medium",
+            "low"
+          ],
+          "schedule": [],
+          "snooze": false
+        }
+      },
+      {
+        "id": "data.db_integrity",
+        "title": "Database integrity",
+        "category": "data",
+        "source": "plugin",
+        "enabled": true,
+        "clientVisible": true,
+        "defaultSeverity": "critical",
+        "severity": "critical",
+        "severityOverride": null,
+        "defaultSchedule": "1d",
+        "schedule": null,
+        "frequency": "1d",
+        "snoozedUntil": null,
+        "note": null,
+        "acknowledged": null,
+        "adjustable": {
+          "enabled": true,
+          "clientVisible": true,
+          "severity": [],
+          "schedule": [],
+          "snooze": true
+        }
+      },
+      {
+        "id": "email.dkim",
+        "title": "DKIM record",
+        "category": "email",
+        "source": "plugin",
+        "enabled": true,
+        "clientVisible": false,
+        "defaultSeverity": "medium",
+        "severity": "medium",
+        "severityOverride": null,
+        "defaultSchedule": "1d",
+        "schedule": null,
+        "frequency": "1d",
+        "snoozedUntil": null,
+        "note": null,
+        "acknowledged": null,
+        "adjustable": {
+          "enabled": true,
+          "clientVisible": false,
+          "severity": [
+            "high",
+            "medium",
+            "low"
+          ],
+          "schedule": [
+            "1d",
+            "1w"
+          ],
+          "snooze": true
+        }
+      }
+    ],
+    "alerts": {
+      "emailOnCritical": true,
+      "dedupeHours": 24,
+      "recipientsMode": "site",
+      "siteRecipients": 2
+    },
+    "worker": {
+      "configured": true,
+      "lastSeenAt": "2026-11-03T05:30:00Z"
+    },
+    "lastChange": {
+      "rev": 1,
+      "at": "2026-11-01T08:30:00Z",
+      "source": "site-admin",
+      "by": {
+        "kind": "human",
+        "id": "01JB8ADM1N0000000000000001",
+        "name": null,
+        "role": "admin",
+        "osUserId": null,
+        "source": "admin-panel"
+      }
+    },
+    "limits": {
+      "ackDefaultDays": 7,
+      "ackMaxDays": 30,
+      "ackCriticalMaxDays": 7
+    }
+  }
+}

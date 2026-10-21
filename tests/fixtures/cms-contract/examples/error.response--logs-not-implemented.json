@@ -1,0 +1,11 @@
+{
+  "ok": false,
+  "error": {
+    "code": "NOT_IMPLEMENTED",
+    "message": "logs-pull is reserved for a later phase of the contract",
+    "retryable": false,
+    "details": {
+      "route": "logs-pull"
+    }
+  }
+}

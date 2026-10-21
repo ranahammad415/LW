@@ -167,6 +167,27 @@ const templates = [
     inAppMessage: 'Re-pair needed: {{projectName}}',
     variables: ['projectName', 'reason', 'actionUrl'] },
 
+  // Security platform (migration 20261103_security_platform seeds the same rows with INSERT IGNORE and role flags:
+  // security_alert / security_digest email owners + PMs; security_backup_failed emails client managers + viewers).
+  { slug: 'security_alert', name: 'Security Alert', description: 'A website security check failed (critical/high: on-call + owner) or a backup destination failed twice', category: 'security',
+    subject: 'Security alert ({{severity}}): {{projectName}}',
+    bodyHtml: '<p><strong>{{title}}</strong> on <strong>{{projectName}}</strong>.</p><p>{{details}}</p><p>Open the project Security tab for the evidence and the fix.</p>',
+    bodyText: '{{title}} on {{projectName}}. {{details}} Open the project Security tab for the evidence and the fix.',
+    inAppMessage: 'Security ({{severity}}): {{title}} on {{projectName}}',
+    variables: ['projectName', 'title', 'details', 'severity', 'actionUrl'] },
+  { slug: 'security_digest', name: 'Security Daily Digest', description: "Daily list of medium/low security failures and warnings on the PM's sites", category: 'security',
+    subject: 'Security digest: {{projectName}} ({{count}} items)',
+    bodyHtml: '<p>Security items that need attention on <strong>{{projectName}}</strong> in the last 24 hours:</p><p>{{items}}</p>',
+    bodyText: 'Security items on {{projectName}} in the last 24 hours: {{items}}',
+    inAppMessage: 'Security digest: {{count}} items on {{projectName}}',
+    variables: ['projectName', 'count', 'items', 'actionUrl'] },
+  { slug: 'security_backup_failed', name: 'Website Backup Problem', description: 'A backup to one of your own backup destinations failed 3 times in a row (client notice, plain language)', category: 'security',
+    subject: 'Backups to {{destination}} are not working',
+    bodyHtml: "<p>The last {{failures}} backups of <strong>{{projectName}}</strong> to <strong>{{destination}}</strong> did not complete. Your agency has been told and is looking into it. The agency's own backups are separate.</p>",
+    bodyText: 'The last {{failures}} backups of {{projectName}} to {{destination}} did not complete. Your agency has been told and is looking into it.',
+    inAppMessage: 'Backups of {{projectName}} to {{destination}} are not working',
+    variables: ['projectName', 'destination', 'failures', 'actionUrl'] },
+
   // ── Content Map Category ──
   { slug: 'content_map_submitted', name: 'Content Map Submitted', description: 'When a content map is submitted for client review', category: 'content_map',
     subject: '[Review Needed] Content map ready — {{projectName}}',

@@ -1,0 +1,15 @@
+{
+  "ok": true,
+  "scanId": "01M6G8F2T0PCNAM6K0SF2Y38WR",
+  "queued": true,
+  "alreadyQueued": false,
+  "checkIds": [
+    "email.spf"
+  ],
+  "skipped": [
+    {
+      "id": "email.dkim",
+      "reason": "disabled"
+    }
+  ]
+}

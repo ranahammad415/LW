@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/backup-status.request.json",
+  "title": "backup-status (v1.6.0)",
+  "description": "",
+  "type": "object",
+  "properties": {},
+  "required": []
+}

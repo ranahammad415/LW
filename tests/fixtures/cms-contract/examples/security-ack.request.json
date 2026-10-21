@@ -1,0 +1,11 @@
+{
+  "checkId": "data.db_integrity",
+  "until": "2026-11-06T08:30:00Z",
+  "note": "Restoring from last night's backup; integrity check re-runs after the restore.",
+  "actor": {
+    "kind": "human",
+    "osUserId": "0f1e2d3c-4b5a-4968-8776-655443322110",
+    "name": "Sam Owner",
+    "role": "OWNER"
+  }
+}

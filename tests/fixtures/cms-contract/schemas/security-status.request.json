@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/security-status.request.json",
+  "title": "security-status (v1.6.0)",
+  "description": "detail summary (default): non-ok checks without evidence; full: every enabled check with evidence. since: also list state changes after that time.",
+  "type": "object",
+  "properties": {
+    "detail": {
+      "enum": [
+        "summary",
+        "full"
+      ]
+    },
+    "since": {
+      "$ref": "common.json#/$defs/dateTime"
+    }
+  },
+  "required": []
+}

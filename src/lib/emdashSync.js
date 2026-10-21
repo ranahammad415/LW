@@ -358,6 +358,9 @@ export async function syncAllEmdashProjects() {
       const { pullSiteReports, hasReports } = await import('./cmsReports.js');
       const p = await prisma.project.findUnique({ where: { id }, select: { cmsCapabilities: true } });
       if (hasReports(p)) await pullSiteReports(id).catch(() => {});
+      // v1.6.0 §36.1: daily security-status {detail: full} + security-history + backup-status (+ v1.6.1 settings).
+      const { pullSecurityForProject } = await import('./security/securitySync.js');
+      await pullSecurityForProject(id).catch(() => {});
     } catch (err) {
       results.push({ projectId: id, error: err.message });
     }
@@ -546,6 +549,9 @@ export function startEmdashSyncInterval(logger) {
       // v1.5.0 §26.1: lead retention + pending photo copies (7-day window), leader only.
       const { leadHousekeeping } = await import('./cmsLeads.js');
       await leadHousekeeping({ log: logger });
+      // Security platform retention (plan §5.4, admin setting, default 400 days): batched deletes, leader only.
+      const { purgeSecurityHistory } = await import('./security/securityStore.js');
+      await purgeSecurityHistory();
     } catch (err) {
       logger.error({ err }, 'EmDash hourly maintenance failed');
     }

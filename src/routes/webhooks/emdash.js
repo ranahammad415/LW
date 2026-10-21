@@ -35,6 +35,7 @@ import { CmsKeyConfigError } from '../../lib/cmsKeyCrypto.js';
 import { credentialToRings, normalizeReviewEvent } from '../../lib/siteAdapters/emdash.js';
 import { suggestionEventMessage, clientActorFromEvent } from '../../lib/siteAdapters/clientReview.js';
 import { validateLeadEvent } from '../../lib/siteAdapters/leads.js';
+import { validateSecurityEvent, isSecurityEventType } from '../../lib/siteAdapters/security.js';
 import { isMigrationActive } from '../../lib/cmsMigration.js';
 
 export const OS_VERSION = '2026.10.16';
@@ -99,6 +100,10 @@ export function validateEvent(ev) {
   } else if (ev.type.startsWith('lead.')) {
     const leadErr = validateLeadEvent(ev);
     if (leadErr) return leadErr;
+  } else if (isSecurityEventType(ev.type)) {
+    // v1.6.0 §36.4 / v1.6.1 §37.6: typed data, validated, bounded and redacted (lib/siteAdapters/security.js).
+    const secErr = validateSecurityEvent(ev);
+    if (secErr) return secErr;
   } else if (ev.type.startsWith('seo.')) {
     // v1.4.0 §25.4: no per-review seq; ordered by profile.updated_at. Reserved seo.* types are stored only.
     if (ev.type === 'seo.profile_changed' || ev.type === 'seo.contract_locked') {
@@ -654,6 +659,9 @@ export async function processEventBatch({ store, project, events, log }) {
         outcome = (await store.applyLeadEvent?.(project, ev)) || 'stored';
       } else if (ev.type.startsWith('seo.')) {
         outcome = (await store.applySeoEvent?.(project, ev)) || 'stored';
+      } else if (isSecurityEventType(ev.type)) {
+        // v1.6.0 §36 / v1.6.1 §37: security status, backups and settings (stored + alerts; never shown raw).
+        outcome = (await store.applySecurityEvent?.(project, ev, log)) || 'stored';
       } else if (ev.type.startsWith('content.')) {
         const e = ev.entry;
         const stored = updated.has(e.entryId) ? updated.get(e.entryId) : await store.getEntryUpdatedAt(project.id, e.entryId, e.entryNo);

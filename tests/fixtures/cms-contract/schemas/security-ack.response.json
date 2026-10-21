@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/security-ack.response.json",
+  "title": "security-ack response (v1.6.1)",
+  "description": "",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
+    "rev": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "acknowledged": {
+      "$ref": "common.json#/$defs/securityAcknowledgedData"
+    }
+  },
+  "required": [
+    "ok",
+    "rev",
+    "acknowledged"
+  ]
+}

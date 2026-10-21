@@ -1,0 +1,13 @@
+{
+  "checkIds": [
+    "email.spf",
+    "email.dkim"
+  ],
+  "reason": "Verify the DNS fix from ticket 4812",
+  "actor": {
+    "kind": "human",
+    "osUserId": "7b2e4c1a-3f5d-4e8a-9c0b-1d2e3f4a5b6c",
+    "name": "Jane PM",
+    "role": "PM"
+  }
+}

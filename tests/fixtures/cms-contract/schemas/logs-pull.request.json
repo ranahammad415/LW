@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/logs-pull.request.json",
+  "title": "logs-pull (v1.6.0, schema only)",
+  "description": "Answered 501 NOT_IMPLEMENTED until capabilities.logs is true (Phase 3).",
+  "type": "object",
+  "properties": {
+    "sinceCursor": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 500
+    },
+    "kinds": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "request",
+          "auth",
+          "admin",
+          "content",
+          "agent",
+          "bridge",
+          "email",
+          "backup",
+          "sentinel",
+          "ops"
+        ]
+      },
+      "uniqueItems": true,
+      "maxItems": 10
+    },
+    "minLevel": {
+      "enum": [
+        "info",
+        "warn",
+        "error"
+      ]
+    }
+  },
+  "required": [
+    "sinceCursor"
+  ]
+}

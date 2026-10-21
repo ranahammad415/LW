@@ -1,0 +1,10 @@
+{
+  "sinceCursor": 48200,
+  "limit": 500,
+  "kinds": [
+    "auth",
+    "admin",
+    "agent"
+  ],
+  "minLevel": "warn"
+}

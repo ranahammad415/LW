@@ -73,6 +73,9 @@ import { pmContentMapRoutes } from './routes/pm/contentMap.js';
 import { pmCmsDraftRoutes } from './routes/pm/cmsDrafts.js';
 import { pmSeoProfileRoutes } from './routes/pm/seoProfiles.js';
 import { pmCmsLeadsReportsRoutes } from './routes/pm/cmsLeadsReports.js';
+import { pmSecurityRoutes } from './routes/pm/security.js';
+import { clientSecurityRoutes } from './routes/client/security.js';
+import { adminSecuritySettingsRoutes } from './routes/admin/securitySettings.js';
 import { pmDigestRoutes } from './routes/pm/digest.js';
 import { pmClientDashboardRoutes } from './routes/pm/clientDashboard.js';
 import { wpWebhookRoutes } from './routes/webhooks.js';
@@ -271,6 +274,10 @@ app.register(pmContentMapRoutes, { prefix: '/api/pm' });
 app.register(pmCmsDraftRoutes, { prefix: '/api/pm' });
 app.register(pmSeoProfileRoutes, { prefix: '/api/pm' });
 app.register(pmCmsLeadsReportsRoutes, { prefix: '/api/pm' });
+// Security platform (EmDash contract v1.6.0 / v1.6.1): staff views + settings, client traffic light, agency on-call.
+app.register(pmSecurityRoutes, { prefix: '/api/pm' });
+app.register(clientSecurityRoutes, { prefix: '/api/client' });
+app.register(adminSecuritySettingsRoutes, { prefix: '/api/admin' });
 app.register(pmDigestRoutes, { prefix: '/api/pm' });
 app.register(pmClientDashboardRoutes, { prefix: '/api/pm' });
 app.register(pmInputRequestRoutes, { prefix: '/api/pm' });
@@ -415,6 +422,18 @@ try {
     });
     app.log.info({ leader: isLeader() }, 'Interview scheduler enabled');
   }
+
+  // Security platform (EmDash contract v1.6.0, plan §5.6): daily digest of medium/low failures and warnings to each
+  // project's PM at 08:00 UTC. Leader only; one digest per project per day (SecurityAlertLog claim) even if two run.
+  cron.schedule('0 8 * * *', async () => {
+    if (!isLeader()) return;
+    try {
+      const { runSecurityDigest } = await import('./lib/security/securityAlerts.js');
+      await runSecurityDigest({ log: app.log });
+    } catch (err) {
+      app.log.error({ err }, 'Security digest failed');
+    }
+  });
 
   // SEO Engine retention (OS-05 / OS-14): hourly purge of expired Idempotency-Key rows. Leader only
   // (NODE_APP_INSTANCE 0 / unset); the deletes are plain conditional deleteMany calls, so a double run is harmless.

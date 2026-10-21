@@ -1,0 +1,219 @@
+{
+  "ok": true,
+  "status": {
+    "schemaVersion": 1,
+    "siteId": "site_9f3c2a7b41d0",
+    "siteUrl": "https://oasispoolspas.com",
+    "generatedAt": "2026-11-03T08:35:12Z",
+    "catalogueVersion": "1.0.0",
+    "detail": "summary",
+    "sentinel": {
+      "version": "0.1.0",
+      "workerLastSeenAt": "2026-11-03T08:30:01Z"
+    },
+    "overall": {
+      "state": "warn",
+      "score": 93,
+      "counts": {
+        "ok": 24,
+        "warn": 2,
+        "fail": 0,
+        "unknown": 1
+      },
+      "since": "2026-11-01T06:00:00Z"
+    },
+    "categories": {
+      "edge": {
+        "state": "warn",
+        "score": 98
+      },
+      "host": {
+        "state": "ok",
+        "score": 100
+      },
+      "app": {
+        "state": "warn",
+        "score": 99
+      },
+      "cms": {
+        "state": "ok",
+        "score": 100
+      },
+      "data": {
+        "state": "ok",
+        "score": 100
+      },
+      "backups": {
+        "state": "warn",
+        "score": 88
+      },
+      "bridge": {
+        "state": "ok",
+        "score": 100
+      },
+      "agents": {
+        "state": "ok",
+        "score": 100
+      },
+      "supply": {
+        "state": "ok",
+        "score": 100
+      },
+      "email": {
+        "state": "ok",
+        "score": 100
+      }
+    },
+    "checks": [
+      {
+        "id": "edge.csp_mode",
+        "category": "edge",
+        "severity": "medium",
+        "state": "warn",
+        "reason": null,
+        "source": "plugin",
+        "frequency": "1h",
+        "checkedAt": "2026-11-03T08:30:00Z",
+        "ttlSec": 3600,
+        "since": "2026-10-20T10:00:00Z",
+        "firstSeenAt": "2026-10-20T10:00:00Z",
+        "lastChangedAt": "2026-10-20T10:00:00Z",
+        "summary": "CSP is report-only (not enforcing yet).",
+        "remediation": "Switch Content-Security-Policy-Report-Only to Content-Security-Policy in src/middleware.ts after 14 days without first-party violations (owner decision O-2).",
+        "autoFix": {
+          "available": false,
+          "applied": false
+        },
+        "refs": [
+          "T-08"
+        ]
+      },
+      {
+        "id": "backup.primary_fresh",
+        "category": "backups",
+        "severity": "critical",
+        "state": "warn",
+        "reason": null,
+        "source": "plugin",
+        "frequency": "1h",
+        "checkedAt": "2026-11-03T08:30:00Z",
+        "ttlSec": 3600,
+        "since": "2026-11-03T08:00:00Z",
+        "firstSeenAt": "2026-10-21T09:00:00Z",
+        "lastChangedAt": "2026-11-03T08:00:00Z",
+        "summary": "The last files archive is 27 h old (limit 26 h); the database archive is fresh.",
+        "clientSummary": "Yesterday's backup of your photos and files is late. The database is backed up. The agency is checking.",
+        "remediation": "Check the backup cron on the host (sentinel-worker.mjs backup-tick) and ~/oasis-data/backup.log.",
+        "autoFix": {
+          "available": false,
+          "applied": false
+        },
+        "refs": [
+          "T-19"
+        ]
+      },
+      {
+        "id": "app.quote_spam_rate",
+        "category": "app",
+        "severity": "medium",
+        "state": "unknown",
+        "reason": "not_instrumented",
+        "source": "plugin",
+        "frequency": "1h",
+        "checkedAt": "2026-11-03T08:30:00Z",
+        "ttlSec": 3600,
+        "since": "2026-11-01T06:00:00Z",
+        "summary": "No counters recorded yet: the quote form does not report to the site-sentinel counters.",
+        "remediation": "Have oasis-leads call the site-sentinel counters (plugins/site-sentinel/README.md, Counters).",
+        "autoFix": {
+          "available": false,
+          "applied": false
+        }
+      }
+    ],
+    "disabled": [
+      "edge.origin_direct_exposure"
+    ],
+    "backups": {
+      "agency": {
+        "db": {
+          "lastOkAt": "2026-11-03T08:30:40Z",
+          "bytes": 17825792,
+          "encrypted": false,
+          "lastError": null,
+          "nextExpectedAt": "2026-11-04T08:30:00Z"
+        },
+        "files": {
+          "lastOkAt": "2026-11-02T05:31:02Z",
+          "bytes": 212044800,
+          "encrypted": false,
+          "lastError": "NETWORK",
+          "nextExpectedAt": "2026-11-03T08:30:00Z"
+        },
+        "offsite": {
+          "destinationType": "s3",
+          "lastOkAt": "2026-11-03T08:31:30Z",
+          "nextExpectedAt": "2026-11-04T08:31:00Z"
+        }
+      },
+      "client": [
+        {
+          "destinationId": "dst_01JB0000000000000000000001",
+          "type": "sftp",
+          "label": "Office NAS",
+          "schedule": "daily 02:00 America/Chicago",
+          "db": {
+            "lastOkAt": "2026-11-03T07:00:12Z",
+            "bytes": 17825792,
+            "encrypted": true,
+            "lastError": null,
+            "nextExpectedAt": "2026-11-04T07:00:00Z"
+          },
+          "files": {
+            "lastOkAt": "2026-11-02T07:05:40Z",
+            "bytes": 212044800,
+            "encrypted": true,
+            "lastError": "TIMEOUT",
+            "nextExpectedAt": "2026-11-03T07:05:00Z"
+          },
+          "encrypted": true,
+          "retentionDays": 30,
+          "nextExpectedAt": "2026-11-04T07:00:00Z"
+        }
+      ],
+      "lastRestoreTest": {
+        "at": "2026-10-28T03:40:12Z",
+        "result": "ok"
+      }
+    },
+    "scans": {
+      "lastFullAt": "2026-11-03T03:45:00Z",
+      "lastBuild": {
+        "commit": "cd08cc1",
+        "at": "2026-11-01T14:02:00Z",
+        "npmAudit": {
+          "critical": 0,
+          "high": 0
+        }
+      }
+    },
+    "attestations": {
+      "keyEscrow": {
+        "at": "2026-10-28T15:00:00Z",
+        "by": {
+          "userId": "01JADMIN00000000000000000A",
+          "roleClass": "owner"
+        }
+      },
+      "agentReview": null
+    }
+  },
+  "changedSince": [
+    {
+      "id": "backup.primary_fresh",
+      "from": "ok",
+      "to": "warn",
+      "at": "2026-11-03T08:00:00Z"
+    }
+  ]
+}

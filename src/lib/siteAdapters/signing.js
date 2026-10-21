@@ -17,7 +17,7 @@ import crypto from 'node:crypto';
 export const CONTRACT_NAME = 'agency-os-bridge';
 export const CONTRACT_VERSION = 1;
 /** Errata level implemented by this OS (informational; X-AOS-Contract stays 1). */
-export const CONTRACT_REVISION = '1.5.8';
+export const CONTRACT_REVISION = '1.6.1';
 
 /**
  * True when the site's reported errata level (site-info / handshake `contractRevision`, e.g. "1.5.4") is at least
@@ -414,6 +414,8 @@ export const ERROR_CODES = Object.freeze({
   SERVICE_ROLE_INSUFFICIENT: { status: 403, retryable: false },
   /** v1.5.7 §33.1: the site's agent guard refused an operation of an agent (MCP / listed agent user). Never retried. */
   AGENT_NOT_ALLOWED: { status: 403, retryable: false },
+  /** v1.6.1 §37.3: a check id the site's catalogue does not have (security-config-set / -run / -ack); nothing applied. */
+  UNKNOWN_CHECK: { status: 422, retryable: false },
   UPSTREAM_UNAVAILABLE: { status: 503, retryable: true },
 });
 

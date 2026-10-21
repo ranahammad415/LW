@@ -680,6 +680,16 @@ model Project {
   cmsSeoProposals      CmsSeoProposal[]
   cmsLeads             CmsLead[]
   cmsSiteReports       CmsSiteReport[]
+  securitySiteStatus   SecuritySiteStatus?
+  securityChecks       SecurityCheckState[]
+  securityTransitions  SecurityTransition[]
+  securityDailyPoints  SecurityDailyPoint[]
+  securityBackupRuns   SecurityBackupRun[]
+  securityIncidents    SecurityIncident[]
+  securityAlertLogs    SecurityAlertLog[]
+  securityReports      SecurityMonthlyReport[]
+  securityConfig       SecurityConfigMirror?
+  securityConfigActions SecurityConfigAction[]
 
   @@map("project")
 }
@@ -1678,6 +1688,239 @@ model CmsSiteReport {
   @@map("cmssitereport")
 }
 
+// ============================================
+// Security platform (EmDash contract v1.6.0 §36, plan §5): the site is the source of truth; the OS stores what it
+// reads (security-status / security-history / backup-status) and what it receives (security.* / backup.* events).
+// ============================================
+
+/// Latest site-level security status per project (one row). Overall state/score are agency-only (clients never see scores).
+model SecuritySiteStatus {
+  id                String    @id @default(uuid())
+  projectId         String    @unique
+  overallState      String?   @db.VarChar(16)
+  score             Int?
+  counts            Json?
+  overallSince      DateTime?
+  categories        Json?
+  catalogueVersion  String?   @db.VarChar(16)
+  sentinelVersion   String?   @db.VarChar(32)
+  workerLastSeenAt  DateTime?
+  scansLastFullAt   DateTime?
+  lastBuild         Json?
+  disabled          Json?
+  /// When the site generated the last pulled status, or the time of the last status-changing event.
+  statusAt          DateTime?
+  /// Latest security.scan_completed {scanId, kind, at, counts, durationMs, checksRun, catalogueVersion, source}.
+  lastScan          Json?
+  /// Latest sanitized securityBackups (backup-status / security-status); null = no record (unknown, never ok).
+  backups           Json?
+  backupsReportedAt DateTime?
+  lastRestoreTest   Json?
+  lastPullAt        DateTime?
+  lastPullError     String?   @db.VarChar(40)
+  /// 429 RATE_LIMITED details.retryAfterSec: no background pull before this time.
+  retryAfterUntil   DateTime?
+  updatedAt         DateTime  @default(now()) @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("securitysitestatus")
+}
+
+/// Current state of one check on one site. Evidence is kept only while the check is not ok (latest snapshot).
+model SecurityCheckState {
+  id            String    @id @default(uuid())
+  projectId     String
+  checkId       String    @db.VarChar(80)
+  category      String    @db.VarChar(32)
+  severity      String    @db.VarChar(16)
+  state         String    @db.VarChar(16)
+  reason        String?   @db.VarChar(32)
+  source        String?   @db.VarChar(16)
+  frequency     String?   @db.VarChar(16)
+  checkedAt     DateTime?
+  since         DateTime?
+  firstSeenAt   DateTime?
+  lastChangedAt DateTime?
+  summary       String?   @db.VarChar(400)
+  /// Present only for client-visible checks (the site sends clientSummary only for them).
+  clientSummary String?   @db.VarChar(400)
+  remediation   String?   @db.Text
+  evidence      Json?
+  evidenceAt    DateTime?
+  refs          Json?
+  /// v1.6.1 §37.5: the site acknowledgement (agency-only; mutes OS alerts for the check while active). Never shown to clients.
+  acknowledged  Json?
+  /// OS-side "what the agency is doing" note + ETA (OWNER/PM); shown to the client with the item. Never sent to the site.
+  pmNote        String?   @db.VarChar(1000)
+  pmNoteEta     DateTime?
+  pmNoteById    String?   @db.VarChar(191)
+  pmNoteAt      DateTime?
+  updatedAt     DateTime  @default(now()) @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, checkId])
+  @@index([projectId, state])
+  @@map("securitycheckstate")
+}
+
+/// Every state transition of a check (security.status_changed / security.check_failed events, or a status pull).
+model SecurityTransition {
+  id            String   @id @default(uuid())
+  projectId     String
+  checkId       String   @db.VarChar(80)
+  fromState     String?  @db.VarChar(16)
+  toState       String   @db.VarChar(16)
+  at            DateTime
+  severity      String   @db.VarChar(16)
+  summary       String?  @db.VarChar(400)
+  clientSummary String?  @db.VarChar(400)
+  origin        String   @db.VarChar(16)
+  createdAt     DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, checkId, toState, at])
+  @@index([projectId, at])
+  @@index([at])
+  @@map("securitytransition")
+}
+
+/// One summary point per site per UTC day (security-history and the daily status pull).
+model SecurityDailyPoint {
+  id           String   @id @default(uuid())
+  projectId    String
+  date         String   @db.VarChar(10)
+  overallState String   @db.VarChar(16)
+  score        Int
+  counts       Json?
+  checks       Json?
+  updatedAt    DateTime @default(now()) @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, date])
+  @@index([date])
+  @@map("securitydailypoint")
+}
+
+/// Backup runs (backup-status runs[], backup.* events). The destination label is client text: render as text.
+model SecurityBackupRun {
+  id               String    @id @default(uuid())
+  projectId        String
+  runId            String    @db.VarChar(160)
+  kind             String?   @db.VarChar(8)
+  owner            String?   @db.VarChar(8)
+  destinationId    String?   @db.VarChar(64)
+  destinationType  String?   @db.VarChar(32)
+  destinationLabel String?   @db.VarChar(100)
+  startedAt        DateTime?
+  finishedAt       DateTime?
+  bytes            BigInt?
+  sha256           String?   @db.VarChar(64)
+  result           String    @db.VarChar(16)
+  errorCode        String?   @db.VarChar(16)
+  encrypted        Boolean?
+  verified         Boolean?
+  restoreTest      Json?
+  origin           String    @db.VarChar(16)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @default(now()) @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, runId])
+  @@index([projectId, destinationId, createdAt])
+  @@index([createdAt])
+  @@map("securitybackuprun")
+}
+
+/// security.incident (site → OS only; read-only in the OS).
+model SecurityIncident {
+  id         String    @id @default(uuid())
+  projectId  String
+  incidentId String    @db.VarChar(64)
+  phase      String    @db.VarChar(16)
+  severity   String    @db.VarChar(16)
+  summary    String    @db.VarChar(600)
+  openedAt   DateTime?
+  lastAt     DateTime
+  by         Json?
+  createdAt  DateTime  @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, incidentId])
+  @@map("securityincident")
+}
+
+/// Alert dedupe: one alert per key per 24 h across PM2 instances (compare-and-set on sentAt).
+model SecurityAlertLog {
+  id        String   @id @default(uuid())
+  projectId String
+  alertKey  String   @db.VarChar(191)
+  sentAt    DateTime
+  count     Int      @default(1)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, alertKey])
+  @@map("securityalertlog")
+}
+
+/// Monthly security report (plan §5.7): rendered HTML, client and admin editions (no PDF).
+model SecurityMonthlyReport {
+  id            String   @id @default(uuid())
+  projectId     String
+  month         String   @db.VarChar(7)
+  clientHtml    String   @db.LongText
+  adminHtml     String   @db.LongText
+  overallState  String?  @db.VarChar(16)
+  generatedAt   DateTime @default(now())
+  generatedById String?  @db.VarChar(191)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, month])
+  @@map("securitymonthlyreport")
+}
+
+/// Contract v1.6.1 (capability securityConfig): mirror of the site's security settings (security-config-get /
+/// security.config_changed). The site stays the source of truth; the OS edits through signed routes only.
+model SecurityConfigMirror {
+  id            String    @id @default(uuid())
+  projectId     String    @unique
+  rev           Int?
+  /// The sanitized securityConfig (checks[], alerts, worker, lastChange, limits, catalogueVersion) + pendingScans.
+  config        Json?
+  lastChangedAt DateTime?
+  /// A rev gap or a truncated config_changed was seen: the mirror is replaced by the next security-config-get.
+  stale         Boolean   @default(false)
+  fetchedAt     DateTime  @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("securityconfigmirror")
+}
+
+/// Audit of OS security actions (config set / run / ack): who, idempotency key, outcome. No site text.
+model SecurityConfigAction {
+  id             String   @id @default(uuid())
+  projectId      String
+  action         String   @db.VarChar(32)
+  idempotencyKey String   @db.VarChar(80)
+  userId         String   @db.VarChar(191)
+  status         String   @db.VarChar(40)
+  summary        Json?
+  createdAt      DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, createdAt])
+  @@map("securityconfigaction")
+}
+
 /// Owner-deleted pipeline ids. Sync and webhooks must not recreate these rows.
 model WpContentReviewTombstone {
   id           String   @id @default(uuid())
@@ -2095,6 +2338,10 @@ model AgencySetting {
   emailPrimaryColor String   @default("#6366f1") @db.VarChar(20)
   emailFooterText   String?  @db.VarChar(500)
   copyrightText     String?  @db.VarChar(255)
+  /// Security platform (contract v1.6.0, plan §5.6): agency on-call users for critical/high security alerts (JSON array of user ids).
+  securityOnCallUserIds Json?
+  /// Security platform: OS retention of status history / evidence / transitions / daily points, in days (plan §5.4).
+  securityRetentionDays Int     @default(400)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @default(now()) @updatedAt
 

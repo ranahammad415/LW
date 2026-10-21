@@ -48,6 +48,10 @@ export const MUTATION_ROUTES = new Set([
   'brief-upsert',
   // v1.5.0 §26
   'lead-erase',
+  // v1.6.1 §37 (human OWNER / PM only; the OS refuses agents and tokens before calling)
+  'security-config-set',
+  'security-run',
+  'security-ack',
 ]);
 
 export class CmsBridgeError extends Error {
@@ -337,6 +341,17 @@ export const emdashRoutes = {
   crawlLatest: (conn, q = {}, opts) => siteRequest(conn, 'crawl-latest', compact(q), opts),
   /** v1.5.0 §26.3 (capability migrationMap): WP post id → entry map, paged. */
   migrationMap: (conn, q = {}, opts) => siteRequest(conn, 'migration-map', compact({ limit: 500, ...q }), opts),
+  /** v1.6.0 §36 (capability security / backups): read-only, no idempotency key, 60/min per key on the site. */
+  securityStatus: (conn, q = {}, opts) => siteRequest(conn, 'security-status', compact({ detail: 'full', ...q }), opts),
+  securityHistory: (conn, q = {}, opts) => siteRequest(conn, 'security-history', compact({ days: 90, ...q }), opts),
+  backupStatus: (conn, opts) => siteRequest(conn, 'backup-status', {}, opts),
+  /** v1.6.0: schema only; the site answers 501 NOT_IMPLEMENTED until capability logs (Phase 3). */
+  logsPull: (conn, q = {}, opts) => siteRequest(conn, 'logs-pull', compact({ limit: 500, ...q }), opts),
+  /** v1.6.1 §37 (capability securityConfig). Writes are mutations (idempotency key kept across retries). */
+  securityConfigGet: (conn, opts) => siteRequest(conn, 'security-config-get', {}, opts),
+  securityConfigSet: (conn, body, opts) => siteRequest(conn, 'security-config-set', compact(body), opts),
+  securityRun: (conn, body, opts) => siteRequest(conn, 'security-run', compact(body), opts),
+  securityAck: (conn, body, opts) => siteRequest(conn, 'security-ack', compact(body), opts),
 };
 
 function siteCaps(project) {

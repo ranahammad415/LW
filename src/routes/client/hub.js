@@ -36,6 +36,7 @@ const CATEGORY_LABELS = {
   report:       { label: 'Reports',                 description: 'Monthly reports published to your portal' },
   client:       { label: 'Account activity',        description: 'Welcome emails, password resets, team member changes' },
   standup:      { label: 'Team standups',           description: 'Daily standup updates' },
+  security:     { label: 'Website security',        description: 'Problems with your own backup destinations' },
 };
 
 const patchNotificationPreferencesBodySchema = z.object({

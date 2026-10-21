@@ -1,0 +1,35 @@
+{
+  "ok": true,
+  "points": [
+    {
+      "date": "2026-11-01",
+      "overallState": "ok",
+      "score": 98,
+      "checks": {
+        "edge.hsts": "ok",
+        "edge.csp_mode": "warn",
+        "backup.primary_fresh": "ok"
+      }
+    },
+    {
+      "date": "2026-11-02",
+      "overallState": "ok",
+      "score": 98,
+      "checks": {
+        "edge.hsts": "ok",
+        "edge.csp_mode": "warn",
+        "backup.primary_fresh": "ok"
+      }
+    },
+    {
+      "date": "2026-11-03",
+      "overallState": "warn",
+      "score": 93,
+      "checks": {
+        "edge.hsts": "ok",
+        "edge.csp_mode": "warn",
+        "backup.primary_fresh": "warn"
+      }
+    }
+  ]
+}

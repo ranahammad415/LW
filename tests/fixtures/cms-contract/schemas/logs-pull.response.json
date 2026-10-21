@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/logs-pull.response.json",
+  "title": "logs-pull response (v1.6.0, schema only)",
+  "description": "<= 500 rows and <= 1 MiB; next = cursor to send as sinceCursor; dropped = rows lost to the ring-buffer caps since sinceCursor.",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/logRow"
+      },
+      "maxItems": 500
+    },
+    "next": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "dropped": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "oldestCursor": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "required": [
+    "ok",
+    "items",
+    "next",
+    "dropped",
+    "oldestCursor"
+  ]
+}

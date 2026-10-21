@@ -1,0 +1,79 @@
+{
+  "ok": false,
+  "error": {
+    "code": "CONFLICT_REV",
+    "message": "The security settings changed (rev 2, expected 1); reload and try again.",
+    "retryable": false,
+    "details": {
+      "currentRev": 2,
+      "config": {
+        "schemaVersion": 1,
+        "catalogueVersion": "1.0.0",
+        "rev": 2,
+        "generatedAt": "2026-11-03T08:30:00Z",
+        "checks": [
+          {
+            "id": "edge.hsts",
+            "title": "HSTS header",
+            "category": "edge",
+            "source": "plugin",
+            "enabled": true,
+            "clientVisible": true,
+            "defaultSeverity": "high",
+            "severity": "high",
+            "severityOverride": null,
+            "defaultSchedule": "1h",
+            "schedule": "6h",
+            "frequency": "6h",
+            "snoozedUntil": null,
+            "note": null,
+            "acknowledged": null,
+            "adjustable": {
+              "enabled": true,
+              "clientVisible": true,
+              "severity": [
+                "high",
+                "medium",
+                "low"
+              ],
+              "schedule": [
+                "1h",
+                "6h",
+                "1d"
+              ],
+              "snooze": false
+            }
+          }
+        ],
+        "alerts": {
+          "emailOnCritical": true,
+          "dedupeHours": 12,
+          "recipientsMode": "site",
+          "siteRecipients": 2
+        },
+        "worker": {
+          "configured": true,
+          "lastSeenAt": "2026-11-03T05:30:00Z"
+        },
+        "lastChange": {
+          "rev": 2,
+          "at": "2026-11-03T08:30:00Z",
+          "source": "os",
+          "by": {
+            "kind": "human",
+            "id": null,
+            "name": null,
+            "role": "PM",
+            "osUserId": "7b2e4c1a-3f5d-4e8a-9c0b-1d2e3f4a5b6c",
+            "source": "os"
+          }
+        },
+        "limits": {
+          "ackDefaultDays": 7,
+          "ackMaxDays": 30,
+          "ackCriticalMaxDays": 7
+        }
+      }
+    }
+  }
+}

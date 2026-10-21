@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/security-status.response.json",
+  "title": "security-status response (v1.6.0)",
+  "description": "",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
+    "status": {
+      "$ref": "common.json#/$defs/securityStatus"
+    },
+    "changedSince": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.]{1,64}$",
+            "maxLength": 80,
+            "description": "<category>.<name>, e.g. edge.hsts; ids are never reused for a different meaning"
+          },
+          "from": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ok",
+                  "warn",
+                  "fail",
+                  "unknown"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "to": {
+            "enum": [
+              "ok",
+              "warn",
+              "fail",
+              "unknown"
+            ]
+          },
+          "at": {
+            "$ref": "common.json#/$defs/dateTime"
+          }
+        },
+        "required": [
+          "id",
+          "from",
+          "to",
+          "at"
+        ]
+      },
+      "maxItems": 200
+    }
+  },
+  "required": [
+    "ok",
+    "status"
+  ]
+}

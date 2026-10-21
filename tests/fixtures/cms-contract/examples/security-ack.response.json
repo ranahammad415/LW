@@ -1,0 +1,26 @@
+{
+  "ok": true,
+  "rev": 3,
+  "acknowledged": {
+    "checkId": "data.db_integrity",
+    "severity": "critical",
+    "state": "fail",
+    "until": "2026-11-06T08:30:00Z",
+    "note": "Restoring from last night's backup; integrity check re-runs after the restore.",
+    "at": "2026-11-03T08:30:00Z",
+    "by": {
+      "kind": "human",
+      "id": null,
+      "name": null,
+      "role": "OWNER",
+      "osUserId": "0f1e2d3c-4b5a-4968-8776-655443322110",
+      "source": "os"
+    },
+    "source": "os",
+    "rev": 3,
+    "osRequest": {
+      "route": "security-ack",
+      "idempotencyKey": "9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a"
+    }
+  }
+}

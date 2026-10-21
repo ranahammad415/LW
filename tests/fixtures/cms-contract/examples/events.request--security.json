@@ -1,0 +1,246 @@
+{
+  "contract": 1,
+  "siteId": "site_9f3c2a7b41d0",
+  "sentAt": "2026-11-03T08:46:00Z",
+  "events": [
+    {
+      "eventId": "01JB2EV0000000000000000001",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "security.check_failed",
+      "at": "2026-11-03T08:30:05Z",
+      "cursor": 300,
+      "actor": {
+        "kind": "plugin",
+        "id": null,
+        "name": "site-sentinel",
+        "role": null,
+        "source": "plugin",
+        "plugin": "site-sentinel"
+      },
+      "data": {
+        "id": "data.db_integrity",
+        "severity": "critical",
+        "summary": "PRAGMA integrity_check reported 2 problems.",
+        "clientSummary": "A check of your site's database found a problem. The agency is restoring it from the last good backup.",
+        "evidence": {
+          "pragma": "integrity_check",
+          "ok": false,
+          "result": [
+            "row 12 missing from index idx_content_slug",
+            "wrong # of entries in index idx_content_slug"
+          ]
+        },
+        "remediation": "Take the site offline, copy ~/oasis-data, restore the last verified backup (docs/production-runbook.md, restore).",
+        "at": "2026-11-03T08:30:05Z"
+      }
+    },
+    {
+      "eventId": "01JB2EV0000000000000000002",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "security.status_changed",
+      "at": "2026-11-03T08:45:00Z",
+      "cursor": 301,
+      "actor": {
+        "kind": "plugin",
+        "id": null,
+        "name": "site-sentinel",
+        "role": null,
+        "source": "plugin",
+        "plugin": "site-sentinel"
+      },
+      "data": {
+        "before": {
+          "state": "warn",
+          "score": 93
+        },
+        "after": {
+          "state": "fail",
+          "score": 68
+        },
+        "changes": [
+          {
+            "id": "data.db_integrity",
+            "from": "ok",
+            "to": "fail",
+            "at": "2026-11-03T08:30:05Z",
+            "severity": "critical",
+            "summary": "PRAGMA integrity_check reported 2 problems.",
+            "clientSummary": "A check of your site's database found a problem. The agency is restoring it from the last good backup."
+          },
+          {
+            "id": "edge.hsts",
+            "from": "unknown",
+            "to": "ok",
+            "at": "2026-11-03T08:30:01Z",
+            "severity": "high",
+            "summary": "HSTS max-age=31536000 with includeSubDomains.",
+            "clientSummary": "Browsers always use a secure connection to your site."
+          }
+        ]
+      }
+    },
+    {
+      "eventId": "01JB2EV0000000000000000003",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "security.scan_completed",
+      "at": "2026-11-03T08:45:02Z",
+      "cursor": 302,
+      "actor": {
+        "kind": "plugin",
+        "id": null,
+        "name": "site-sentinel",
+        "role": null,
+        "source": "plugin",
+        "plugin": "site-sentinel"
+      },
+      "data": {
+        "scanId": "01JB2SCAN00000000000000001",
+        "kind": "scheduled",
+        "durationMs": 4210,
+        "counts": {
+          "ok": 23,
+          "warn": 2,
+          "fail": 1,
+          "unknown": 1
+        },
+        "checksRun": 27,
+        "catalogueVersion": "1.0.0"
+      }
+    },
+    {
+      "eventId": "01JB2EV0000000000000000004",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "security.incident",
+      "at": "2026-11-03T09:02:00Z",
+      "cursor": 303,
+      "actor": {
+        "kind": "plugin",
+        "id": null,
+        "name": "site-sentinel",
+        "role": null,
+        "source": "plugin",
+        "plugin": "site-sentinel"
+      },
+      "data": {
+        "incidentId": "01JB2INC000000000000000001",
+        "phase": "detected",
+        "severity": "critical",
+        "summary": "Database integrity check failed after the 03:00 host maintenance; site in maintenance mode.",
+        "openedAt": "2026-11-03T09:02:00Z",
+        "by": {
+          "userId": "01JADMIN00000000000000000A",
+          "roleClass": "owner"
+        }
+      }
+    },
+    {
+      "eventId": "01JB2EV0000000000000000005",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "backup.completed",
+      "at": "2026-11-03T08:30:40Z",
+      "cursor": 304,
+      "actor": {
+        "kind": "plugin",
+        "id": null,
+        "name": "oasis-backup",
+        "role": null,
+        "source": "plugin",
+        "plugin": "oasis-backup"
+      },
+      "data": {
+        "runId": "run_01JB0000000000000000000002",
+        "kind": "db",
+        "owner": "agency",
+        "destination": {
+          "id": "agency_r2",
+          "type": "s3",
+          "label": null
+        },
+        "bytes": 17825792,
+        "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+        "encrypted": false,
+        "verified": true,
+        "durationMs": 39000
+      }
+    },
+    {
+      "eventId": "01JB2EV0000000000000000006",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "backup.failed",
+      "at": "2026-11-03T07:30:00Z",
+      "cursor": 305,
+      "actor": {
+        "kind": "plugin",
+        "id": null,
+        "name": "oasis-backup",
+        "role": null,
+        "source": "plugin",
+        "plugin": "oasis-backup"
+      },
+      "data": {
+        "runId": "run_01JB0000000000000000000003",
+        "kind": "files",
+        "owner": "client",
+        "destination": {
+          "id": "dst_01JB0000000000000000000001",
+          "type": "sftp",
+          "label": "Office NAS"
+        },
+        "errorCode": "TIMEOUT",
+        "retryable": true,
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "01JB2EV0000000000000000007",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "backup.verified",
+      "at": "2026-11-01T03:41:00Z",
+      "cursor": 306,
+      "actor": {
+        "kind": "plugin",
+        "id": null,
+        "name": "oasis-backup",
+        "role": null,
+        "source": "plugin",
+        "plugin": "oasis-backup"
+      },
+      "data": {
+        "runId": "run_01JAZ000000000000000000009",
+        "restoreTest": {
+          "at": "2026-11-01T03:40:12Z",
+          "counts": {
+            "content": 214,
+            "media": 388,
+            "pluginStorage": 1904
+          },
+          "result": "ok"
+        }
+      }
+    },
+    {
+      "eventId": "01JB2EV0000000000000000008",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "backup.missed",
+      "at": "2026-11-03T08:00:00Z",
+      "cursor": 307,
+      "actor": {
+        "kind": "plugin",
+        "id": null,
+        "name": "oasis-backup",
+        "role": null,
+        "source": "plugin",
+        "plugin": "oasis-backup"
+      },
+      "data": {
+        "destination": {
+          "id": "dst_01JB0000000000000000000001",
+          "type": "sftp",
+          "label": "Office NAS"
+        },
+        "expectedAt": "2026-11-03T07:05:00Z",
+        "graceMin": 60
+      }
+    }
+  ]
+}

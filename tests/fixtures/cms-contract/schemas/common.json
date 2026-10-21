@@ -250,6 +250,11 @@
             "review-link",
             "admin-panel"
           ]
+        },
+        "plugin": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,63}$",
+          "description": "v1.6.0: with source plugin, the EmDash plugin id (site-sentinel, oasis-backup)"
         }
       },
       "required": [
@@ -1579,6 +1584,22 @@
         "draftHash": {
           "type": "boolean",
           "description": "v1.5.7 (§33.4): draft-upsert and entry-get editable return draftHash"
+        },
+        "security": {
+          "type": "boolean",
+          "description": "v1.6.0 (§36): security-status, security-history and security.* events (site-sentinel's in-process API is present)"
+        },
+        "backups": {
+          "type": "boolean",
+          "description": "v1.6.0 (§36): backup-status and backup.* events (a backup status record exists on the site)"
+        },
+        "logs": {
+          "type": "boolean",
+          "description": "v1.6.0 (§36): logs-pull (false until the Phase 3 log ring buffer ships; the route answers 501)"
+        },
+        "securityConfig": {
+          "type": "boolean",
+          "description": "v1.6.1 (§37): security-config-get / security-config-set / security-run / security-ack and the security.config_changed / security.acknowledged events (site-sentinel's API has the config methods)"
         }
       },
       "required": [
@@ -3553,7 +3574,7 @@
         },
         "data": {
           "type": "object",
-          "description": "Type-specific payload for site.* and reserved seo.* events"
+          "description": "Type-specific payload for site.* and reserved seo.* events; pipeline_cancelled { force }; v1.5.9 pipeline_reopened { from, reason, by, round, changed, changedTotal? } and pipeline_unscheduled { cause } (§35)"
         },
         "suggestion": {
           "$ref": "common.json#/$defs/suggestionChange"
@@ -3790,6 +3811,102 @@
           "if": {
             "properties": {
               "type": {
+                "const": "pipeline_reopened"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "enum": [
+                      "client_approved",
+                      "scheduled"
+                    ],
+                    "description": "The review status before the save (scheduled: the schedule was removed first, pipeline_unscheduled with data.cause content_changed)"
+                  },
+                  "reason": {
+                    "enum": [
+                      "content_changed"
+                    ]
+                  },
+                  "by": {
+                    "$ref": "common.json#/$defs/siteActor",
+                    "description": "Who saved the content change (same as the event actor)"
+                  },
+                  "round": {
+                    "type": "integer",
+                    "minimum": 2,
+                    "description": "The new round (the client decides it); = review.round"
+                  },
+                  "changed": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 300
+                    },
+                    "minItems": 1,
+                    "maxItems": 20,
+                    "description": "Content field paths that changed (§35.2), at most 20"
+                  },
+                  "changedTotal": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "How many content paths changed (> changed.length when the list was cut at 20)"
+                  }
+                },
+                "required": [
+                  "from",
+                  "reason",
+                  "by",
+                  "round",
+                  "changed"
+                ],
+                "description": "v1.5.9 (§35) pipeline_reopened: the approved review went back to pending_client_review"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "pipeline_unscheduled"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "type": "object",
+                "properties": {
+                  "cause": {
+                    "enum": [
+                      "content_changed"
+                    ],
+                    "description": "v1.5.9 (§35): content_changed = removed because the content changed after client approval (a pipeline_reopened follows)"
+                  }
+                },
+                "required": []
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
                 "enum": [
                   "seo.profile_changed",
                   "seo.contract_locked"
@@ -3921,6 +4038,366 @@
           "if": {
             "properties": {
               "type": {
+                "const": "security.status_changed"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "common.json#/$defs/securityStatusChangedData"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "snapshotText"
+                  ]
+                },
+                {
+                  "required": [
+                    "lead"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "security.check_failed"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "common.json#/$defs/securityCheckFailedData"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "snapshotText"
+                  ]
+                },
+                {
+                  "required": [
+                    "lead"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "security.scan_completed"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "common.json#/$defs/securityScanCompletedData"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "snapshotText"
+                  ]
+                },
+                {
+                  "required": [
+                    "lead"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "security.incident"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "common.json#/$defs/securityIncidentData"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "snapshotText"
+                  ]
+                },
+                {
+                  "required": [
+                    "lead"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "security.config_changed"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "common.json#/$defs/securityConfigChangedData"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "snapshotText"
+                  ]
+                },
+                {
+                  "required": [
+                    "lead"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "security.acknowledged"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "common.json#/$defs/securityAcknowledgedData"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "snapshotText"
+                  ]
+                },
+                {
+                  "required": [
+                    "lead"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "backup.completed"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "common.json#/$defs/backupCompletedData"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "snapshotText"
+                  ]
+                },
+                {
+                  "required": [
+                    "lead"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "backup.failed"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "common.json#/$defs/backupFailedData"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "snapshotText"
+                  ]
+                },
+                {
+                  "required": [
+                    "lead"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "backup.verified"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "common.json#/$defs/backupVerifiedData"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "snapshotText"
+                  ]
+                },
+                {
+                  "required": [
+                    "lead"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "backup.missed"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "common.json#/$defs/backupMissedData"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "snapshotText"
+                  ]
+                },
+                {
+                  "required": [
+                    "lead"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
                 "pattern": "^content\\."
               }
             }
@@ -4016,6 +4493,7 @@
             "PAYLOAD_TOO_LARGE",
             "UNKNOWN_BLOCK",
             "SCHEMA_INVALID",
+            "UNKNOWN_CHECK",
             "PUBLISH_BLOCKED",
             "CONTRACT_UNSUPPORTED",
             "RATE_LIMITED",
@@ -4216,6 +4694,2201 @@
         }
       ],
       "description": "Reduced entry for content.deleted (v1.0.1): the last summary the site saw; updatedAt = deletion time"
+    },
+    "securityState": {
+      "enum": [
+        "ok",
+        "warn",
+        "fail",
+        "unknown"
+      ]
+    },
+    "securitySeverity": {
+      "enum": [
+        "critical",
+        "high",
+        "medium",
+        "low"
+      ]
+    },
+    "securityIdentity": {
+      "type": "object",
+      "properties": {
+        "userId": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "roleClass": {
+          "enum": [
+            "owner",
+            "editor",
+            "agent",
+            "system"
+          ]
+        }
+      },
+      "required": [
+        "roleClass"
+      ],
+      "description": "v1.6.0 (§36.5): an opaque site user id and/or a role class; never a name or e-mail. The OS never resolves it to a person"
+    },
+    "securityCheck": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.]{1,64}$",
+          "maxLength": 80,
+          "description": "<category>.<name>, e.g. edge.hsts; ids are never reused for a different meaning"
+        },
+        "category": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,31}$"
+        },
+        "severity": {
+          "$ref": "common.json#/$defs/securitySeverity"
+        },
+        "state": {
+          "enum": [
+            "ok",
+            "warn",
+            "fail",
+            "unknown"
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "enum": [
+                "not_configured",
+                "not_run",
+                "stale",
+                "error",
+                "no_data",
+                "not_instrumented"
+              ],
+              "description": "why the state is unknown (absent / null otherwise)"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "enum": [
+            "plugin",
+            "worker",
+            "ci"
+          ]
+        },
+        "frequency": {
+          "enum": [
+            "15m",
+            "1h",
+            "6h",
+            "1d",
+            "1w",
+            "build",
+            "manual"
+          ]
+        },
+        "checkedAt": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ttlSec": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "since": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime",
+              "description": "when the current state began"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "firstSeenAt": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lastChangedAt": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "agency wording, plain text"
+        },
+        "clientSummary": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "plain-language client wording; present ONLY for checks the site marks client-visible"
+        },
+        "evidence": {
+          "type": "object",
+          "description": "what was observed, redacted (§36.5), <= 8192 bytes of UTF-8 JSON; omitted in detail=summary"
+        },
+        "remediation": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "autoFix": {
+          "type": "object",
+          "properties": {
+            "available": {
+              "type": "boolean"
+            },
+            "applied": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "available",
+            "applied"
+          ]
+        },
+        "refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 16
+          },
+          "maxItems": 10,
+          "description": "threat ids of the security plan (T-19, …)"
+        },
+        "acknowledged": {
+          "$ref": "common.json#/$defs/securityAcknowledgement",
+          "description": "v1.6.1 (§37.5): present while an acknowledgement is active (agency-only: never shown to the client)"
+        }
+      },
+      "required": [
+        "id",
+        "category",
+        "severity",
+        "state",
+        "checkedAt",
+        "summary"
+      ]
+    },
+    "securityBackups": {
+      "type": "object",
+      "properties": {
+        "agency": {
+          "type": "object",
+          "properties": {
+            "db": {
+              "type": "object",
+              "properties": {
+                "lastOkAt": {
+                  "anyOf": [
+                    {
+                      "$ref": "common.json#/$defs/dateTime"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "bytes": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "encrypted": {
+                  "type": "boolean"
+                },
+                "lastError": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "AUTH",
+                        "NETWORK",
+                        "QUOTA",
+                        "TIMEOUT",
+                        "INTEGRITY",
+                        "CONFIG",
+                        "INTERNAL"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "nextExpectedAt": {
+                  "anyOf": [
+                    {
+                      "$ref": "common.json#/$defs/dateTime",
+                      "description": "when the next successful archive is due; the OS raises backup.missed itself when it passes (plus grace)"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "lastOkAt"
+              ]
+            },
+            "files": {
+              "type": "object",
+              "properties": {
+                "lastOkAt": {
+                  "anyOf": [
+                    {
+                      "$ref": "common.json#/$defs/dateTime"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "bytes": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "encrypted": {
+                  "type": "boolean"
+                },
+                "lastError": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "AUTH",
+                        "NETWORK",
+                        "QUOTA",
+                        "TIMEOUT",
+                        "INTEGRITY",
+                        "CONFIG",
+                        "INTERNAL"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "nextExpectedAt": {
+                  "anyOf": [
+                    {
+                      "$ref": "common.json#/$defs/dateTime",
+                      "description": "when the next successful archive is due; the OS raises backup.missed itself when it passes (plus grace)"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "lastOkAt"
+              ]
+            },
+            "offsite": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "destinationType": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9_-]{1,32}$"
+                    },
+                    "lastOkAt": {
+                      "anyOf": [
+                        {
+                          "$ref": "common.json#/$defs/dateTime"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "nextExpectedAt": {
+                      "anyOf": [
+                        {
+                          "$ref": "common.json#/$defs/dateTime"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "destinationType",
+                    "lastOkAt"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "db",
+            "files"
+          ]
+        },
+        "client": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "destinationId": {
+                "$ref": "common.json#/$defs/id"
+              },
+              "type": {
+                "type": "string",
+                "pattern": "^[a-z0-9_-]{1,32}$"
+              },
+              "label": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 80,
+                    "description": "client-entered free text: untrusted, render as text"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "schedule": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "maxLength": 120
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "db": {
+                "type": "object",
+                "properties": {
+                  "lastOkAt": {
+                    "anyOf": [
+                      {
+                        "$ref": "common.json#/$defs/dateTime"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "bytes": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "encrypted": {
+                    "type": "boolean"
+                  },
+                  "lastError": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "AUTH",
+                          "NETWORK",
+                          "QUOTA",
+                          "TIMEOUT",
+                          "INTEGRITY",
+                          "CONFIG",
+                          "INTERNAL"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "nextExpectedAt": {
+                    "anyOf": [
+                      {
+                        "$ref": "common.json#/$defs/dateTime",
+                        "description": "when the next successful archive is due; the OS raises backup.missed itself when it passes (plus grace)"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "lastOkAt"
+                ]
+              },
+              "files": {
+                "type": "object",
+                "properties": {
+                  "lastOkAt": {
+                    "anyOf": [
+                      {
+                        "$ref": "common.json#/$defs/dateTime"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "bytes": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "encrypted": {
+                    "type": "boolean"
+                  },
+                  "lastError": {
+                    "anyOf": [
+                      {
+                        "enum": [
+                          "AUTH",
+                          "NETWORK",
+                          "QUOTA",
+                          "TIMEOUT",
+                          "INTEGRITY",
+                          "CONFIG",
+                          "INTERNAL"
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "nextExpectedAt": {
+                    "anyOf": [
+                      {
+                        "$ref": "common.json#/$defs/dateTime",
+                        "description": "when the next successful archive is due; the OS raises backup.missed itself when it passes (plus grace)"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "lastOkAt"
+                ]
+              },
+              "encrypted": {
+                "type": "boolean"
+              },
+              "retentionDays": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "nextExpectedAt": {
+                "anyOf": [
+                  {
+                    "$ref": "common.json#/$defs/dateTime"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "destinationId",
+              "type",
+              "db",
+              "files"
+            ]
+          },
+          "maxItems": 20
+        },
+        "lastRestoreTest": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "at": {
+                  "$ref": "common.json#/$defs/dateTime"
+                },
+                "result": {
+                  "enum": [
+                    "ok",
+                    "failed"
+                  ]
+                }
+              },
+              "required": [
+                "at",
+                "result"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "agency",
+        "client"
+      ],
+      "description": "v1.6.0: backup state as the backup plugin reported it. Never a credential, host or path"
+    },
+    "securityStatus": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "siteId": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/siteId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "siteUrl": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/url"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generatedAt": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "catalogueVersion": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "description": "version of the check catalogue the site runs: a check missing from checks[] is not run there, never ok"
+        },
+        "detail": {
+          "enum": [
+            "summary",
+            "full"
+          ]
+        },
+        "sentinel": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "workerLastSeenAt": {
+              "anyOf": [
+                {
+                  "$ref": "common.json#/$defs/dateTime"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "version"
+          ]
+        },
+        "overall": {
+          "type": "object",
+          "properties": {
+            "state": {
+              "enum": [
+                "ok",
+                "warn",
+                "fail",
+                "unknown"
+              ]
+            },
+            "score": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "counts": {
+              "type": "object",
+              "properties": {
+                "ok": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "warn": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "fail": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "unknown": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "ok",
+                "warn",
+                "fail",
+                "unknown"
+              ]
+            },
+            "since": {
+              "anyOf": [
+                {
+                  "$ref": "common.json#/$defs/dateTime"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "state",
+            "score",
+            "counts"
+          ]
+        },
+        "categories": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "enum": [
+                  "ok",
+                  "warn",
+                  "fail",
+                  "unknown"
+                ]
+              },
+              "score": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              }
+            },
+            "required": [
+              "state",
+              "score"
+            ]
+          }
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "common.json#/$defs/securityCheck"
+          },
+          "maxItems": 200,
+          "description": "detail=summary: non-ok checks only, without evidence"
+        },
+        "disabled": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.]{1,64}$",
+            "maxLength": 80,
+            "description": "<category>.<name>, e.g. edge.hsts; ids are never reused for a different meaning"
+          },
+          "maxItems": 200,
+          "description": "catalogue checks switched off on this site (not scored)"
+        },
+        "backups": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/securityBackups"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scans": {
+          "type": "object",
+          "properties": {
+            "lastFullAt": {
+              "anyOf": [
+                {
+                  "$ref": "common.json#/$defs/dateTime"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lastBuild": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "commit": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{7,40}$"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "at": {
+                      "anyOf": [
+                        {
+                          "$ref": "common.json#/$defs/dateTime"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "npmAudit": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "critical": {
+                              "type": "integer",
+                              "minimum": 0
+                            },
+                            "high": {
+                              "type": "integer",
+                              "minimum": 0
+                            }
+                          },
+                          "required": [
+                            "critical",
+                            "high"
+                          ]
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": []
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": []
+        },
+        "attestations": {
+          "type": "object",
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "at": {
+                    "$ref": "common.json#/$defs/dateTime"
+                  },
+                  "by": {
+                    "$ref": "common.json#/$defs/securityIdentity"
+                  }
+                },
+                "required": [
+                  "at"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "generatedAt",
+        "catalogueVersion",
+        "overall",
+        "categories",
+        "checks"
+      ],
+      "description": "v1.6.0 (§36.2): the site's security status model (security plan §4.4)"
+    },
+    "securityStatusChangedData": {
+      "type": "object",
+      "properties": {
+        "before": {
+          "type": "object",
+          "properties": {
+            "state": {
+              "enum": [
+                "ok",
+                "warn",
+                "fail",
+                "unknown"
+              ]
+            },
+            "score": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            }
+          },
+          "required": [
+            "state",
+            "score"
+          ]
+        },
+        "after": {
+          "type": "object",
+          "properties": {
+            "state": {
+              "enum": [
+                "ok",
+                "warn",
+                "fail",
+                "unknown"
+              ]
+            },
+            "score": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            }
+          },
+          "required": [
+            "state",
+            "score"
+          ]
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.]{1,64}$",
+                "maxLength": 80,
+                "description": "<category>.<name>, e.g. edge.hsts; ids are never reused for a different meaning"
+              },
+              "from": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "ok",
+                      "warn",
+                      "fail",
+                      "unknown"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "to": {
+                "enum": [
+                  "ok",
+                  "warn",
+                  "fail",
+                  "unknown"
+                ]
+              },
+              "at": {
+                "$ref": "common.json#/$defs/dateTime"
+              },
+              "severity": {
+                "$ref": "common.json#/$defs/securitySeverity"
+              },
+              "summary": {
+                "type": "string",
+                "maxLength": 300
+              },
+              "clientSummary": {
+                "type": "string",
+                "maxLength": 300
+              }
+            },
+            "required": [
+              "id",
+              "from",
+              "to",
+              "severity",
+              "summary"
+            ]
+          },
+          "minItems": 1,
+          "maxItems": 50
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "more than 50 checks changed; pull security-status for the rest"
+        }
+      },
+      "required": [
+        "before",
+        "after",
+        "changes"
+      ]
+    },
+    "securityCheckFailedData": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.]{1,64}$",
+          "maxLength": 80,
+          "description": "<category>.<name>, e.g. edge.hsts; ids are never reused for a different meaning"
+        },
+        "severity": {
+          "enum": [
+            "critical",
+            "high"
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "clientSummary": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "evidence": {
+          "type": "object",
+          "description": "redacted, <= 8192 bytes"
+        },
+        "remediation": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "at": {
+          "$ref": "common.json#/$defs/dateTime"
+        }
+      },
+      "required": [
+        "id",
+        "severity",
+        "summary",
+        "evidence",
+        "remediation"
+      ]
+    },
+    "securityScanCompletedData": {
+      "type": "object",
+      "properties": {
+        "scanId": {
+          "$ref": "common.json#/$defs/id"
+        },
+        "kind": {
+          "enum": [
+            "scheduled",
+            "manual",
+            "build"
+          ]
+        },
+        "durationMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "warn": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "fail": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "unknown": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "ok",
+            "warn",
+            "fail",
+            "unknown"
+          ]
+        },
+        "checksRun": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "catalogueVersion": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "logAnchor": {
+          "type": "object",
+          "properties": {
+            "cursor": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "hash": {
+              "$ref": "common.json#/$defs/sha256"
+            }
+          },
+          "required": [
+            "cursor",
+            "hash"
+          ]
+        },
+        "source": {
+          "enum": [
+            "schedule",
+            "site-admin",
+            "os"
+          ],
+          "description": "v1.6.1: what started the scan (os = security-run; the scanId is the one security-run returned)"
+        },
+        "partial": {
+          "type": "boolean",
+          "description": "v1.6.1: true when only some checks ran (security-run checkIds); counts still cover every enabled check"
+        }
+      },
+      "required": [
+        "scanId",
+        "kind",
+        "durationMs",
+        "counts"
+      ]
+    },
+    "securityIncidentData": {
+      "type": "object",
+      "properties": {
+        "incidentId": {
+          "$ref": "common.json#/$defs/id"
+        },
+        "phase": {
+          "enum": [
+            "detected",
+            "contained",
+            "preserved",
+            "eradicated",
+            "recovered",
+            "closed"
+          ]
+        },
+        "severity": {
+          "$ref": "common.json#/$defs/securitySeverity"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "written by a person on the site, redacted; plain text"
+        },
+        "openedAt": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "by": {
+          "$ref": "common.json#/$defs/securityIdentity"
+        }
+      },
+      "required": [
+        "incidentId",
+        "phase",
+        "severity",
+        "summary"
+      ]
+    },
+    "backupDestination": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "common.json#/$defs/id"
+        },
+        "type": {
+          "type": "string",
+          "pattern": "^[a-z0-9_-]{1,32}$"
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 80
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "type"
+      ]
+    },
+    "backupCompletedData": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "$ref": "common.json#/$defs/id"
+        },
+        "kind": {
+          "enum": [
+            "db",
+            "files"
+          ]
+        },
+        "owner": {
+          "enum": [
+            "agency",
+            "client"
+          ]
+        },
+        "destination": {
+          "$ref": "common.json#/$defs/backupDestination"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sha256": {
+          "$ref": "common.json#/$defs/sha256"
+        },
+        "encrypted": {
+          "type": "boolean"
+        },
+        "verified": {
+          "type": "boolean"
+        },
+        "durationMs": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "runId",
+        "kind",
+        "owner",
+        "destination",
+        "bytes",
+        "sha256",
+        "encrypted"
+      ]
+    },
+    "backupFailedData": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "$ref": "common.json#/$defs/id"
+        },
+        "kind": {
+          "enum": [
+            "db",
+            "files"
+          ]
+        },
+        "owner": {
+          "enum": [
+            "agency",
+            "client"
+          ]
+        },
+        "destination": {
+          "$ref": "common.json#/$defs/backupDestination"
+        },
+        "errorCode": {
+          "enum": [
+            "AUTH",
+            "NETWORK",
+            "QUOTA",
+            "TIMEOUT",
+            "INTEGRITY",
+            "CONFIG",
+            "INTERNAL"
+          ]
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "runId",
+        "kind",
+        "owner",
+        "destination",
+        "errorCode",
+        "retryable"
+      ]
+    },
+    "backupVerifiedData": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "$ref": "common.json#/$defs/id"
+        },
+        "restoreTest": {
+          "type": "object",
+          "properties": {
+            "at": {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            "counts": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "result": {
+              "enum": [
+                "ok",
+                "failed"
+              ]
+            }
+          },
+          "required": [
+            "at",
+            "result"
+          ]
+        }
+      },
+      "required": [
+        "runId",
+        "restoreTest"
+      ]
+    },
+    "backupMissedData": {
+      "type": "object",
+      "properties": {
+        "destination": {
+          "$ref": "common.json#/$defs/backupDestination"
+        },
+        "expectedAt": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "graceMin": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "destination",
+        "expectedAt",
+        "graceMin"
+      ]
+    },
+    "backupRun": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "$ref": "common.json#/$defs/id"
+        },
+        "kind": {
+          "enum": [
+            "db",
+            "files"
+          ]
+        },
+        "destinationId": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "owner": {
+          "enum": [
+            "agency",
+            "client"
+          ]
+        },
+        "startedAt": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "finishedAt": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "result": {
+          "enum": [
+            "ok",
+            "failed",
+            "running"
+          ]
+        },
+        "errorCode": {
+          "anyOf": [
+            {
+              "enum": [
+                "AUTH",
+                "NETWORK",
+                "QUOTA",
+                "TIMEOUT",
+                "INTEGRITY",
+                "CONFIG",
+                "INTERNAL"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "runId",
+        "kind",
+        "owner",
+        "startedAt",
+        "result"
+      ]
+    },
+    "logRow": {
+      "type": "object",
+      "properties": {
+        "cursor": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "at": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "kind": {
+          "enum": [
+            "request",
+            "auth",
+            "admin",
+            "content",
+            "agent",
+            "bridge",
+            "email",
+            "backup",
+            "sentinel",
+            "ops"
+          ]
+        },
+        "level": {
+          "enum": [
+            "info",
+            "warn",
+            "error"
+          ]
+        },
+        "event": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*(\\.[a-z0-9_]+)*$",
+          "maxLength": 64
+        },
+        "status": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 599
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "route": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^/",
+              "maxLength": 300,
+              "description": "path only; query strings are dropped"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "actor": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 64,
+              "description": "opaque site user id or a role class (owner, editor, agent, system)"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ipHash": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{8,64}$",
+              "description": "IP hashed with a daily salt; never the IP"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ua": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 32,
+              "description": "bucketed family, e.g. chrome-desktop"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ms": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "type": "object",
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "description": "flat, allow-listed keys per event, redacted, <= 2048 bytes"
+        },
+        "prevHash": {
+          "$ref": "common.json#/$defs/sha256"
+        },
+        "hash": {
+          "$ref": "common.json#/$defs/sha256"
+        }
+      },
+      "required": [
+        "cursor",
+        "at",
+        "kind",
+        "level",
+        "event"
+      ]
+    },
+    "securityAcknowledgement": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "until": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "state": {
+          "enum": [
+            "fail",
+            "warn"
+          ],
+          "description": "the state that was acknowledged"
+        },
+        "by": {
+          "$ref": "common.json#/$defs/siteActor"
+        },
+        "source": {
+          "enum": [
+            "os",
+            "site-admin"
+          ]
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 500,
+              "description": "plain text written by a person, redacted; agency-only (never shown to the client)"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "active": {
+          "type": "boolean",
+          "description": "until is in the future and the check has not changed state since (§37.5)"
+        }
+      },
+      "required": [
+        "at",
+        "until",
+        "state",
+        "by",
+        "source",
+        "active"
+      ],
+      "description": "v1.6.1 (§37.5): a person acknowledged a failing / warning check (snooze). by.name is always null; the OS resolves by.osUserId"
+    },
+    "securityConfigCheck": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.]{1,64}$",
+          "maxLength": 80,
+          "description": "<category>.<name>, e.g. edge.hsts; ids are never reused for a different meaning"
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "category": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,31}$"
+        },
+        "source": {
+          "enum": [
+            "plugin",
+            "worker",
+            "ci"
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "clientVisible": {
+          "type": "boolean"
+        },
+        "defaultSeverity": {
+          "$ref": "common.json#/$defs/securitySeverity"
+        },
+        "severity": {
+          "$ref": "common.json#/$defs/securitySeverity",
+          "description": "effective severity (severityOverride ?? defaultSeverity)"
+        },
+        "severityOverride": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/securitySeverity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "defaultSchedule": {
+          "enum": [
+            "15m",
+            "1h",
+            "6h",
+            "1d",
+            "1w",
+            "build",
+            "manual"
+          ]
+        },
+        "schedule": {
+          "anyOf": [
+            {
+              "enum": [
+                "15m",
+                "1h",
+                "6h",
+                "1d",
+                "1w",
+                "build",
+                "manual"
+              ],
+              "description": "null = the catalogue / site default (defaultSchedule)"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "frequency": {
+          "enum": [
+            "15m",
+            "1h",
+            "6h",
+            "1d",
+            "1w",
+            "build",
+            "manual"
+          ],
+          "description": "effective schedule (schedule ?? defaultSchedule)"
+        },
+        "snoozedUntil": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 500,
+              "description": "plain text written by a person, redacted; agency-only (never shown to the client)"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "acknowledged": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/securityAcknowledgement"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "adjustable": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "clientVisible": {
+              "type": "boolean",
+              "description": "false for checks without client wording"
+            },
+            "severity": {
+              "type": "array",
+              "items": {
+                "$ref": "common.json#/$defs/securitySeverity"
+              },
+              "uniqueItems": true,
+              "maxItems": 4,
+              "description": "allowed severityOverride values ([] = fixed)"
+            },
+            "schedule": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "15m",
+                  "1h",
+                  "6h",
+                  "1d",
+                  "1w",
+                  "build",
+                  "manual"
+                ]
+              },
+              "uniqueItems": true,
+              "maxItems": 7,
+              "description": "allowed schedule values ([] = fixed, e.g. host-worker checks)"
+            },
+            "snooze": {
+              "type": "boolean",
+              "description": "can be acknowledged now (enabled and fail / warn)"
+            }
+          },
+          "required": [
+            "enabled",
+            "clientVisible",
+            "severity",
+            "schedule",
+            "snooze"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "enabled",
+        "clientVisible",
+        "severity",
+        "severityOverride",
+        "frequency",
+        "schedule",
+        "snoozedUntil",
+        "note",
+        "adjustable"
+      ],
+      "description": "v1.6.1 (§37.2): one catalogue check's settings on this site, with what may be changed"
+    },
+    "securityAlertSettings": {
+      "type": "object",
+      "properties": {
+        "emailOnCritical": {
+          "type": "boolean",
+          "description": "the site e-mails a failing critical check (fallback when the OS is down)"
+        },
+        "dedupeHours": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 168,
+          "description": "at most one e-mail per check per this many hours"
+        },
+        "recipientsMode": {
+          "enum": [
+            "site",
+            "os"
+          ],
+          "description": "site = the site setting \"Alert e-mails\"; os = the site sends none"
+        },
+        "siteRecipients": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10,
+          "description": "how many addresses the site setting holds (never the addresses)"
+        }
+      },
+      "required": [
+        "emailOnCritical",
+        "dedupeHours",
+        "recipientsMode"
+      ]
+    },
+    "securityConfig": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "catalogueVersion": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "rev": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "compare-and-set token: security-config-set baseRev must equal it; +1 per applied write"
+        },
+        "generatedAt": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "common.json#/$defs/securityConfigCheck"
+          },
+          "maxItems": 200,
+          "description": "every catalogue check, enabled or not"
+        },
+        "alerts": {
+          "$ref": "common.json#/$defs/securityAlertSettings"
+        },
+        "worker": {
+          "type": "object",
+          "properties": {
+            "configured": {
+              "type": "boolean",
+              "description": "a worker key exists (never the key)"
+            },
+            "lastSeenAt": {
+              "anyOf": [
+                {
+                  "$ref": "common.json#/$defs/dateTime"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "configured"
+          ]
+        },
+        "lastChange": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "rev": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "at": {
+                  "$ref": "common.json#/$defs/dateTime"
+                },
+                "source": {
+                  "enum": [
+                    "os",
+                    "site-admin"
+                  ]
+                },
+                "by": {
+                  "$ref": "common.json#/$defs/siteActor"
+                }
+              },
+              "required": [
+                "rev",
+                "at",
+                "source",
+                "by"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "ackDefaultDays": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "ackMaxDays": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "ackCriticalMaxDays": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "ackDefaultDays",
+            "ackMaxDays",
+            "ackCriticalMaxDays"
+          ]
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "catalogueVersion",
+        "rev",
+        "checks",
+        "alerts",
+        "worker",
+        "lastChange"
+      ],
+      "description": "v1.6.1 (§37.2): the security check settings of the site (the site is the source of truth)"
+    },
+    "securityConfigChange": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.]{1,64}$",
+              "maxLength": 80,
+              "description": "<category>.<name>, e.g. edge.hsts; ids are never reused for a different meaning"
+            },
+            {
+              "const": "alerts"
+            }
+          ],
+          "description": "a check id, or \"alerts\" for the alert settings"
+        },
+        "field": {
+          "enum": [
+            "enabled",
+            "clientVisible",
+            "severityOverride",
+            "schedule",
+            "snoozedUntil",
+            "note",
+            "emailOnCritical",
+            "dedupeHours",
+            "recipientsMode"
+          ]
+        },
+        "from": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "string",
+              "maxLength": 500
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "to": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "string",
+              "maxLength": 500
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "field",
+        "from",
+        "to"
+      ]
+    },
+    "securityConfigChangedData": {
+      "type": "object",
+      "properties": {
+        "rev": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the new config rev; consecutive per site (a gap: pull security-config-get)"
+        },
+        "at": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "source": {
+          "enum": [
+            "os",
+            "site-admin"
+          ]
+        },
+        "by": {
+          "$ref": "common.json#/$defs/siteActor"
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "$ref": "common.json#/$defs/securityConfigChange"
+          },
+          "minItems": 1,
+          "maxItems": 100
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "more changes than listed; pull security-config-get"
+        },
+        "osRequest": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "idempotencyKey": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "route"
+          ],
+          "description": "the signed OS call behind the change (absent for site-admin changes)"
+        }
+      },
+      "required": [
+        "rev",
+        "at",
+        "source",
+        "by",
+        "changes"
+      ]
+    },
+    "securityAcknowledgedData": {
+      "type": "object",
+      "properties": {
+        "checkId": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.]{1,64}$",
+          "maxLength": 80,
+          "description": "<category>.<name>, e.g. edge.hsts; ids are never reused for a different meaning"
+        },
+        "severity": {
+          "$ref": "common.json#/$defs/securitySeverity"
+        },
+        "state": {
+          "enum": [
+            "fail",
+            "warn"
+          ]
+        },
+        "until": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "note": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 500,
+              "description": "plain text written by a person, redacted; agency-only (never shown to the client)"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "at": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "by": {
+          "$ref": "common.json#/$defs/siteActor"
+        },
+        "source": {
+          "enum": [
+            "os",
+            "site-admin"
+          ]
+        },
+        "rev": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "osRequest": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "idempotencyKey": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "route"
+          ],
+          "description": "the signed OS call behind the change (absent for site-admin changes)"
+        }
+      },
+      "required": [
+        "checkId",
+        "severity",
+        "state",
+        "until",
+        "at",
+        "by",
+        "source",
+        "rev"
+      ]
     }
   }
 }

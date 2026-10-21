@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/security-history.request.json",
+  "title": "security-history (v1.6.0)",
+  "description": "Daily points (UTC dates), oldest first. checkId narrows checks{} to one check.",
+  "type": "object",
+  "properties": {
+    "checkId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.]{1,64}$",
+      "maxLength": 80,
+      "description": "<category>.<name>, e.g. edge.hsts; ids are never reused for a different meaning"
+    },
+    "days": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 90
+    }
+  },
+  "required": [
+    "days"
+  ]
+}

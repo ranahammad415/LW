@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/security-config-get.request.json",
+  "title": "security-config-get (v1.6.1)",
+  "description": "The site's security check settings. Signed, read-only, no idempotency key.",
+  "type": "object",
+  "properties": {},
+  "required": []
+}

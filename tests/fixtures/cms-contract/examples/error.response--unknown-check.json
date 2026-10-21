@@ -1,0 +1,14 @@
+{
+  "ok": false,
+  "error": {
+    "code": "UNKNOWN_CHECK",
+    "message": "Unknown check id(s): edge.waf_rules (catalogue 1.0.0)",
+    "retryable": false,
+    "details": {
+      "ids": [
+        "edge.waf_rules"
+      ],
+      "catalogueVersion": "1.0.0"
+    }
+  }
+}

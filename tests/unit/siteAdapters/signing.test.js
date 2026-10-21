@@ -262,7 +262,7 @@ describe('verifyRequest (contract §3.2 order)', () => {
 describe('v1.5.4: site revision gate', () => {
   it('revisionAtLeast compares numerically per part; missing / malformed is below everything', async () => {
     const { revisionAtLeast, CONTRACT_REVISION } = await import('../../../src/lib/siteAdapters/signing.js');
-    expect(CONTRACT_REVISION).toBe('1.5.8');
+    expect(CONTRACT_REVISION).toBe('1.6.1');
     expect(revisionAtLeast('1.5.4', '1.5.4')).toBe(true);
     expect(revisionAtLeast('1.5.10', '1.5.4')).toBe(true);
     expect(revisionAtLeast('1.6', '1.5.4')).toBe(true);

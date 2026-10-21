@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/security-run.request.json",
+  "title": "security-run (v1.6.1)",
+  "description": "Queue a scan now (checkIds, or all: true for a full scan). Runs asynchronously; the result arrives as security.scan_completed with the same scanId (source os).",
+  "type": "object",
+  "properties": {
+    "checkIds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.]{1,64}$",
+        "maxLength": 80,
+        "description": "<category>.<name>, e.g. edge.hsts; ids are never reused for a different meaning"
+      },
+      "minItems": 1,
+      "maxItems": 50,
+      "uniqueItems": true
+    },
+    "all": {
+      "const": true
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "actor": {
+      "$ref": "common.json#/$defs/osActor"
+    }
+  },
+  "required": [
+    "reason",
+    "actor"
+  ],
+  "oneOf": [
+    {
+      "required": [
+        "checkIds"
+      ]
+    },
+    {
+      "required": [
+        "all"
+      ]
+    }
+  ]
+}

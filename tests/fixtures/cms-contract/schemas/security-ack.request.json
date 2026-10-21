@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/security-ack.request.json",
+  "title": "security-ack (v1.6.1)",
+  "description": "Acknowledge a fail / warn check (snooze) until a time (default 7 days, at most 30; a critical check at most 7 days).",
+  "type": "object",
+  "properties": {
+    "checkId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.]{1,64}$",
+      "maxLength": 80,
+      "description": "<category>.<name>, e.g. edge.hsts; ids are never reused for a different meaning"
+    },
+    "until": {
+      "$ref": "common.json#/$defs/dateTime"
+    },
+    "note": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "actor": {
+      "$ref": "common.json#/$defs/osActor"
+    }
+  },
+  "required": [
+    "checkId",
+    "note",
+    "actor"
+  ]
+}

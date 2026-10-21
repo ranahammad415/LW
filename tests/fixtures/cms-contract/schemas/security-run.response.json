@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/security-run.response.json",
+  "title": "security-run response (v1.6.1)",
+  "description": "queued: accepted; alreadyQueued: merged into a scan that was waiting (same scanId). checkIds null = full scan.",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
+    "scanId": {
+      "$ref": "common.json#/$defs/id"
+    },
+    "queued": {
+      "type": "boolean"
+    },
+    "alreadyQueued": {
+      "type": "boolean"
+    },
+    "checkIds": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.]{1,64}$",
+            "maxLength": 80,
+            "description": "<category>.<name>, e.g. edge.hsts; ids are never reused for a different meaning"
+          },
+          "maxItems": 200
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "skipped": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.]{1,64}$",
+            "maxLength": 80,
+            "description": "<category>.<name>, e.g. edge.hsts; ids are never reused for a different meaning"
+          },
+          "reason": {
+            "enum": [
+              "disabled",
+              "no_runner"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "reason"
+        ]
+      },
+      "maxItems": 50
+    }
+  },
+  "required": [
+    "ok",
+    "scanId",
+    "queued"
+  ]
+}

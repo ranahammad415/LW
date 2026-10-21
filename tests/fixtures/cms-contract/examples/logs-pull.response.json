@@ -1,0 +1,24 @@
+{
+  "ok": true,
+  "items": [
+    {
+      "cursor": 48213,
+      "at": "2026-11-03T08:31:02.114Z",
+      "kind": "auth",
+      "level": "warn",
+      "event": "magic_link.request",
+      "status": 429,
+      "route": "/_emdash/api/auth/magic-link",
+      "actor": null,
+      "ipHash": "d41d8cd98f00b204",
+      "ua": "chrome-desktop",
+      "ms": 12,
+      "data": {
+        "reason": "rate_limited"
+      }
+    }
+  ],
+  "next": 48213,
+  "dropped": 0,
+  "oldestCursor": 31877
+}

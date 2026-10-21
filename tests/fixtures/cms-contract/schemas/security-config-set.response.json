@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/security-config-set.response.json",
+  "title": "security-config-set response (v1.6.1)",
+  "description": "config = the settings after the write (rev + 1 when anything was applied). applied / rejected: one item per field.",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
+    "config": {
+      "$ref": "common.json#/$defs/securityConfig"
+    },
+    "applied": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.]{1,64}$",
+                "maxLength": 80,
+                "description": "<category>.<name>, e.g. edge.hsts; ids are never reused for a different meaning"
+              },
+              {
+                "const": "alerts"
+              }
+            ],
+            "description": "a check id, or \"alerts\" for the alert settings"
+          },
+          "field": {
+            "enum": [
+              "enabled",
+              "clientVisible",
+              "severityOverride",
+              "schedule",
+              "snoozedUntil",
+              "note",
+              "emailOnCritical",
+              "dedupeHours",
+              "recipientsMode"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "field"
+        ]
+      },
+      "maxItems": 400
+    },
+    "rejected": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*\\.[a-z0-9_.]{1,64}$",
+                "maxLength": 80,
+                "description": "<category>.<name>, e.g. edge.hsts; ids are never reused for a different meaning"
+              },
+              {
+                "const": "alerts"
+              }
+            ],
+            "description": "a check id, or \"alerts\" for the alert settings"
+          },
+          "field": {
+            "enum": [
+              "enabled",
+              "clientVisible",
+              "severityOverride",
+              "schedule",
+              "snoozedUntil",
+              "note",
+              "emailOnCritical",
+              "dedupeHours",
+              "recipientsMode"
+            ]
+          },
+          "reason": {
+            "enum": [
+              "not_adjustable",
+              "value_not_allowed",
+              "not_acknowledgeable",
+              "ack_too_long",
+              "duplicate"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "id",
+          "reason"
+        ]
+      },
+      "maxItems": 400
+    }
+  },
+  "required": [
+    "ok",
+    "config",
+    "applied",
+    "rejected"
+  ]
+}

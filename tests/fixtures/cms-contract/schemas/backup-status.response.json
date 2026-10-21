@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/backup-status.response.json",
+  "title": "backup-status response (v1.6.0)",
+  "description": "backups null = the site has no backup status record (unknown, never ok). runs: last 30, newest first.",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
+    "reportedAt": {
+      "anyOf": [
+        {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "backups": {
+      "anyOf": [
+        {
+          "$ref": "common.json#/$defs/securityBackups"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "runs": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/backupRun"
+      },
+      "maxItems": 30
+    }
+  },
+  "required": [
+    "ok",
+    "reportedAt",
+    "backups",
+    "runs"
+  ]
+}

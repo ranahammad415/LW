@@ -1,0 +1,82 @@
+{
+  "ok": true,
+  "reportedAt": "2026-11-03T08:31:35Z",
+  "backups": {
+    "agency": {
+      "db": {
+        "lastOkAt": "2026-11-03T08:30:40Z",
+        "bytes": 17825792,
+        "encrypted": false,
+        "lastError": null,
+        "nextExpectedAt": "2026-11-04T08:30:00Z"
+      },
+      "files": {
+        "lastOkAt": "2026-11-02T05:31:02Z",
+        "bytes": 212044800,
+        "encrypted": false,
+        "lastError": "NETWORK",
+        "nextExpectedAt": "2026-11-03T08:30:00Z"
+      },
+      "offsite": {
+        "destinationType": "s3",
+        "lastOkAt": "2026-11-03T08:31:30Z",
+        "nextExpectedAt": "2026-11-04T08:31:00Z"
+      }
+    },
+    "client": [
+      {
+        "destinationId": "dst_01JB0000000000000000000001",
+        "type": "sftp",
+        "label": "Office NAS",
+        "schedule": "daily 02:00 America/Chicago",
+        "db": {
+          "lastOkAt": "2026-11-03T07:00:12Z",
+          "bytes": 17825792,
+          "encrypted": true,
+          "lastError": null,
+          "nextExpectedAt": "2026-11-04T07:00:00Z"
+        },
+        "files": {
+          "lastOkAt": "2026-11-02T07:05:40Z",
+          "bytes": 212044800,
+          "encrypted": true,
+          "lastError": "TIMEOUT",
+          "nextExpectedAt": "2026-11-03T07:05:00Z"
+        },
+        "encrypted": true,
+        "retentionDays": 30,
+        "nextExpectedAt": "2026-11-04T07:00:00Z"
+      }
+    ],
+    "lastRestoreTest": {
+      "at": "2026-10-28T03:40:12Z",
+      "result": "ok"
+    }
+  },
+  "runs": [
+    {
+      "runId": "run_01JB0000000000000000000003",
+      "kind": "files",
+      "destinationId": "dst_01JB0000000000000000000001",
+      "owner": "client",
+      "startedAt": "2026-11-03T07:05:00Z",
+      "finishedAt": "2026-11-03T07:30:00Z",
+      "bytes": null,
+      "sha256": null,
+      "result": "failed",
+      "errorCode": "TIMEOUT"
+    },
+    {
+      "runId": "run_01JB0000000000000000000002",
+      "kind": "db",
+      "destinationId": null,
+      "owner": "agency",
+      "startedAt": "2026-11-03T08:30:01Z",
+      "finishedAt": "2026-11-03T08:30:40Z",
+      "bytes": 17825792,
+      "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+      "result": "ok",
+      "errorCode": null
+    }
+  ]
+}
