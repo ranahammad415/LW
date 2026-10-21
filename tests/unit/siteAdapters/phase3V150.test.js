@@ -8,7 +8,7 @@ import path from 'node:path';
 import { mkdtempSync, existsSync, readdirSync } from 'node:fs';
 
 const db = vi.hoisted(() => ({ calls: [], overrides: {} }));
-const site = vi.hoisted(() => ({ handler: null, routes: [] }));
+const site = vi.hoisted(() => ({ handler: null, routes: [], notPaired: false }));
 
 vi.mock('../../../src/lib/prisma.js', () => {
   const model = (name) =>
@@ -46,7 +46,13 @@ vi.mock('../../../src/lib/prisma.js', () => {
 });
 vi.mock('../../../src/lib/cmsStore.js', async (importOriginal) => ({
   ...(await importOriginal()),
-  loadEmdashConnection: async () => ({ conn: { siteId: 'site_9f3c2a7b41d0', siteUrl: 'https://s.example' } }),
+  loadEmdashConnection: async () => {
+    if (site.notPaired) {
+      const { CmsBridgeError } = await import('../../../src/lib/siteAdapters/emdash.js');
+      throw new CmsBridgeError({ status: 503, code: 'NOT_PAIRED', message: 'not paired' });
+    }
+    return { conn: { siteId: 'site_9f3c2a7b41d0', siteUrl: 'https://s.example' } };
+  },
 }));
 vi.mock('../../../src/lib/siteAdapters/emdash.js', async (importOriginal) => {
   const orig = await importOriginal();
@@ -65,7 +71,8 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { planWpHistoryMove, buildRekeyPlan, sanitizeMigratedFrom, sanitizeOutboxPause } from '../../../src/lib/siteAdapters/migration.js';
 import { validateLeadEvent, leadToRow } from '../../../src/lib/siteAdapters/leads.js';
-import { applyLeadEvent, copyLeadPhotos, eraseLocalLead, eraseLead, leadPhotoUrlAllowed, sweepOrphanLeadPhotos, busyRetryDelayMs } from '../../../src/lib/cmsLeads.js';
+import { applyLeadEvent, copyLeadPhotos, eraseLocalLead, eraseLead, leadPhotoUrlAllowed, sweepOrphanLeadPhotos, busyRetryDelayMs, retryPendingSiteErases, parseErasedReason, SITE_ERASE_MAX_ATTEMPTS } from '../../../src/lib/cmsLeads.js';
+import { CmsBridgeError } from '../../../src/lib/siteAdapters/emdash.js';
 import { pullSiteReports, sanitizeReport } from '../../../src/lib/cmsReports.js';
 import { previewMigration, applyMigration, mapHash, identityCheck, isMigrationActive } from '../../../src/lib/cmsMigration.js';
 import { applyEmdashContentEvent, mirrorEmdashReview, prismaCmsStore, isForeignWpPage } from '../../../src/lib/cmsStore.js';
@@ -87,6 +94,7 @@ beforeEach(() => {
   db.overrides = {};
   site.routes = [];
   site.handler = null;
+  site.notPaired = false;
 });
 
 describe('leads (§26.1)', () => {
@@ -259,9 +267,93 @@ describe('leads (§26.1)', () => {
     db.overrides['cmsLead.findUnique'] = async () => ({ id: 'l1', erasedAt: null, photos: [] });
     await expect(eraseLead({ projectId: 'p1', leadId: 'L', reason: 'whatever', user: { id: 'o', role: 'OWNER' } })).rejects.toMatchObject({ code: 'VALIDATION' });
     const out = await eraseLead({ projectId: 'p1', leadId: '01JAJ0LEAD0000000000000001', reason: 'subject_request', user: { id: 'o', name: 'Owner', role: 'OWNER' } });
-    expect(out).toEqual({ erased: true, alreadyGone: false });
+    expect(out).toEqual({ erased: true, alreadyGone: false, sitePending: false });
     expect(site.routes).toEqual(['lead-erase']);
     expect(calls('cmsLead.update')[0].args.data.erasedReason).toBe('subject_request');
+  });
+
+  it('site unreachable or disconnected: our copy is still erased (PII, photo rows, files) and the site erase is pending', async () => {
+    const OWNER = { id: '0f1e2d3c-4b5a-4968-8776-655443322110', name: 'Owner', role: 'OWNER' };
+    const { writeFileSync } = await import('node:fs');
+    const file = path.join(process.env.CMS_LEADS_DIR, 'a'.repeat(32) + '.jpg');
+    writeFileSync(file, 'x');
+    db.overrides['cmsLead.findUnique'] = async () => ({ id: 'l1', erasedAt: null, photos: [{ id: 'ph1', storageName: 'a'.repeat(32) + '.jpg' }] });
+    site.handler = () => {
+      throw new CmsBridgeError({ status: 503, code: 'UPSTREAM_UNAVAILABLE', message: 'down', retryable: true });
+    };
+    const out = await eraseLead({ projectId: 'p1', leadId: '01JAJ0LEAD0000000000000001', reason: 'subject_request', user: OWNER });
+    expect(out).toEqual({ erased: true, alreadyGone: false, sitePending: true });
+    expect(existsSync(file)).toBe(false);
+    expect(calls('cmsLeadPhoto.deleteMany')[0].args.where).toEqual({ leadRowId: 'l1' });
+    const upd = calls('cmsLead.update')[0].args.data;
+    expect(upd).toMatchObject({ fields: null, consent: null, erasedReason: 'site_pending:subject_request' });
+    expect(upd.utm.siteErase).toMatchObject({ attempts: 0, lastError: 'UPSTREAM_UNAVAILABLE', actor: { kind: 'human', osUserId: OWNER.id, role: 'OWNER' } });
+
+    // disconnected (no credential): no site call at all, same outcome
+    db.calls = [];
+    site.routes = [];
+    site.notPaired = true;
+    const out2 = await eraseLead({ projectId: 'p1', leadId: '01JAJ0LEAD0000000000000001', reason: 'spam', user: OWNER });
+    expect(out2.sitePending).toBe(true);
+    expect(site.routes).toEqual([]);
+    expect(calls('cmsLead.update')[0].args.data).toMatchObject({ erasedReason: 'site_pending:spam', utm: { siteErase: { lastError: 'NOT_PAIRED' } } });
+
+    // the site says it no longer has the lead: nothing owed
+    db.calls = [];
+    site.notPaired = false;
+    site.handler = () => {
+      throw new CmsBridgeError({ status: 404, code: 'NOT_FOUND', message: 'gone' });
+    };
+    expect(await eraseLead({ projectId: 'p1', leadId: '01JAJ0LEAD0000000000000001', reason: 'other', user: OWNER })).toEqual({ erased: true, alreadyGone: true, sitePending: false });
+    expect(calls('cmsLead.update')[0].args.data).toMatchObject({ erasedReason: 'other', utm: null });
+  });
+
+  it('pending site erases are retried by the housekeeping: success clears, backoff skips, repair-needed skips, last attempt -> failed', async () => {
+    const now = new Date('2026-10-21T10:00:00Z');
+    const actor = { kind: 'human', osUserId: '0f1e2d3c-4b5a-4968-8776-655443322110', name: 'Owner', role: 'OWNER' };
+    const rows = [
+      { id: 'a', projectId: 'p1', leadId: 'LA', erasedReason: 'site_pending:subject_request', utm: { siteErase: { attempts: 0, nextAt: '2026-10-21T09:00:00Z', actor } } },
+      { id: 'b', projectId: 'p1', leadId: 'LB', erasedReason: 'site_pending:spam', utm: { siteErase: { attempts: 2, nextAt: '2026-10-21T11:00:00Z', actor } } },
+      { id: 'c', projectId: 'p2', leadId: 'LC', erasedReason: 'site_pending:other', utm: { siteErase: { attempts: 0, actor } } },
+    ];
+    db.overrides['cmsLead.findMany'] = async (a) => {
+      expect(a.where.erasedReason).toEqual({ startsWith: 'site_pending:' });
+      return rows;
+    };
+    db.overrides['project.findUnique'] = async (a) => ({ cmsRepairNeededAt: a.where.id === 'p2' ? new Date() : null });
+    const bodies = [];
+    site.handler = (_r, body) => {
+      bodies.push(body);
+      return { ok: true, erased: true };
+    };
+    const out = await retryPendingSiteErases({ now });
+    expect(out).toEqual({ tried: 1, done: 1, failed: 0 });
+    expect(bodies).toEqual([{ leadId: 'LA', reason: 'subject_request', actor }]);
+    expect(calls('cmsLead.update')[0].args).toEqual({ where: { id: 'a' }, data: { erasedReason: 'subject_request', utm: null } });
+
+    // failures: attempts counted with backoff; the last one marks it failed
+    db.calls = [];
+    rows.splice(0, 3,
+      { id: 'd', projectId: 'p1', leadId: 'LD', erasedReason: 'site_pending:spam', utm: { siteErase: { attempts: SITE_ERASE_MAX_ATTEMPTS - 2, actor } } },
+      { id: 'e', projectId: 'p1', leadId: 'LE', erasedReason: 'site_pending:spam', utm: { siteErase: { attempts: SITE_ERASE_MAX_ATTEMPTS - 1, actor } } });
+    site.handler = () => {
+      throw new CmsBridgeError({ status: 503, code: 'UPSTREAM_UNAVAILABLE', message: 'down' });
+    };
+    expect(await retryPendingSiteErases({ now })).toEqual({ tried: 2, done: 0, failed: 1 });
+    const [d, e] = calls('cmsLead.update').map((c) => c.args.data);
+    expect(d.erasedReason).toBe('site_pending:spam');
+    expect(d.utm.siteErase).toMatchObject({ attempts: SITE_ERASE_MAX_ATTEMPTS - 1, lastError: 'UPSTREAM_UNAVAILABLE' });
+    expect(Date.parse(d.utm.siteErase.nextAt)).toBeGreaterThan(now.getTime());
+    expect(e.erasedReason).toBe('site_failed:spam');
+    expect(e.utm.siteErase.nextAt).toBeNull();
+    expect(parseErasedReason('site_failed:spam')).toEqual({ reason: 'spam', siteErase: 'failed' });
+    expect(parseErasedReason('retention')).toEqual({ reason: 'retention', siteErase: null });
+  });
+
+  it('a lead.erased from the site on a tombstone with a pending site erase clears the pending mark', async () => {
+    db.overrides['cmsLead.findUnique'] = async () => ({ id: 'l1', erasedAt: new Date(), erasedReason: 'site_pending:subject_request', photos: [] });
+    expect(await eraseLocalLead('p1', 'L', 'site')).toBe(true);
+    expect(calls('cmsLead.update')[0].args.data).toEqual({ erasedReason: 'subject_request', utm: null });
   });
 
   it('e2e O17: erasing an unknown id (e.g. our row id) is a 404: no site call, no tombstone', async () => {

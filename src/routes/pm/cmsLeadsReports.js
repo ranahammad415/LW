@@ -9,7 +9,7 @@ import { stat } from 'node:fs/promises';
 import { prisma } from '../../lib/prisma.js';
 import { ensureProjectAccess } from '../../lib/ensureProjectAccess.js';
 import { CmsBridgeError } from '../../lib/siteAdapters/emdash.js';
-import { eraseLead, photoPath } from '../../lib/cmsLeads.js';
+import { eraseLead, photoPath, parseErasedReason, SITE_ERASE_PENDING, SITE_ERASE_FAILED } from '../../lib/cmsLeads.js';
 import { pullSiteReports, listSiteReports } from '../../lib/cmsReports.js';
 
 const LEAD_ROLES = ['OWNER', 'PM'];
@@ -43,19 +43,23 @@ async function projectFor(request, reply, roles) {
 }
 
 function formatLead(l) {
+  const erased = parseErasedReason(l.erasedReason);
   return {
     leadId: l.leadId,
     receivedAt: l.receivedAt,
     createdAt: l.siteCreatedAt,
     form: { id: l.formId, name: l.formName },
     sourcePath: l.sourcePath,
-    utm: l.utm || null,
+    // An erased lead's utm column holds only the site-erase retry bookkeeping (never shown).
+    utm: l.erasedAt ? null : l.utm || null,
     fields: l.fields || null,
     consentMarketing: !!l.consentMarketing,
     consent: l.consent || null,
     spam: l.spamVerdict,
     erasedAt: l.erasedAt,
-    erasedReason: l.erasedReason,
+    erasedReason: erased.reason,
+    // 'pending': erased in Agency OS, the erase on the site is retried automatically; 'failed': retries ran out.
+    siteErase: erased.siteErase,
     photos: (l.photos || []).map((p) => ({ id: p.id, contentType: p.contentType, bytes: p.bytes, copied: !!p.copiedAt, error: p.error || null })),
   };
 }
@@ -74,8 +78,12 @@ export async function pmCmsLeadsReportsRoutes(app) {
         take,
         include: { photos: true },
       });
+      const [sitePending, siteFailed] = await Promise.all([
+        prisma.cmsLead.count({ where: { projectId: project.id, erasedReason: { startsWith: SITE_ERASE_PENDING } } }),
+        prisma.cmsLead.count({ where: { projectId: project.id, erasedReason: { startsWith: SITE_ERASE_FAILED } } }),
+      ]);
       reply.header('cache-control', 'no-store');
-      return reply.send({ items: rows.map(formatLead), retentionMonths: project.cmsLeadRetentionMonths ?? 24 });
+      return reply.send({ items: rows.map(formatLead), retentionMonths: project.cmsLeadRetentionMonths ?? 24, siteErase: { pending: sitePending, failed: siteFailed } });
     } catch (err) {
       return sendError(reply, err, request.log);
     }

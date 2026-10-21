@@ -5,7 +5,8 @@
  * - Photos come as 7-day signed URLs: copied into private storage (CMS_LEADS_DIR, never under the public /uploads),
  *   the URL is dropped once copied or expired. Bounded: ≤ 5 photos, ≤ 10 MiB each, images only.
  * - `lead.erased` / OS `lead-erase` → PII and photo files deleted; the row stays as a tombstone (ids only) so a
- *   replayed `lead.created` never resurrects the lead.
+ *   replayed `lead.created` never resurrects the lead. An OS erase while the site is disconnected / unreachable still
+ *   erases our copy and marks the tombstone "site erase pending" (retried by the leader-only housekeeping, bounded).
  * - Retention: leads older than Project.cmsLeadRetentionMonths (default 24) are erased by the leader-only hourly job.
  * Nothing here logs lead data.
  */
@@ -219,43 +220,158 @@ async function deletePhotoFiles(photos) {
   }
 }
 
-/** Delete our copy: PII cleared, photos deleted; the row stays as an id-only tombstone. */
-export async function eraseLocalLead(projectId, leadId, reason) {
+/**
+ * Site-side erase still owed (the site was disconnected or unreachable when the OWNER erased). No schema change: the
+ * tombstone's `erasedReason` carries the state as a prefix (`site_pending:<reason>`, after the last attempt
+ * `site_failed:<reason>`; ≤ 32 chars) and its (otherwise cleared) `utm` column the retry bookkeeping
+ * `{ siteErase: { attempts, nextAt, lastError, actor } }` (actor = the OWNER who erased; never lead data).
+ */
+export const SITE_ERASE_PENDING = 'site_pending:';
+export const SITE_ERASE_FAILED = 'site_failed:';
+export const SITE_ERASE_MAX_ATTEMPTS = 10;
+const SITE_ERASE_BASE_DELAY_MS = 15 * 60_000;
+const SITE_ERASE_MAX_DELAY_MS = 24 * 3600_000;
+
+/** `{ reason, siteErase: 'pending' | 'failed' | null }` of a stored erasedReason. */
+export function parseErasedReason(raw) {
+  const s = String(raw || '');
+  if (s.startsWith(SITE_ERASE_PENDING)) return { reason: s.slice(SITE_ERASE_PENDING.length) || null, siteErase: 'pending' };
+  if (s.startsWith(SITE_ERASE_FAILED)) return { reason: s.slice(SITE_ERASE_FAILED.length) || null, siteErase: 'failed' };
+  return { reason: raw ?? null, siteErase: null };
+}
+
+export function siteEraseDelayMs(attempts) {
+  return Math.min(SITE_ERASE_MAX_DELAY_MS, SITE_ERASE_BASE_DELAY_MS * 2 ** Math.max(0, attempts - 1));
+}
+
+/**
+ * Delete our copy: PII cleared, photos deleted; the row stays as an id-only tombstone. `sitePending` (OS erase while
+ * the site could not be reached) marks the tombstone so the leader housekeeping retries the site erase.
+ */
+export async function eraseLocalLead(projectId, leadId, reason, { sitePending = null, now = new Date() } = {}) {
   const lead = await prisma.cmsLead.findUnique({ where: { projectId_leadId: { projectId, leadId: String(leadId).slice(0, 64) } }, include: { photos: true } });
   if (!lead) {
     // Unknown lead: record a tombstone so a late lead.created cannot create it.
     await prisma.cmsLead.create({ data: { projectId, leadId: String(leadId).slice(0, 64), erasedAt: new Date(), erasedReason: reason } }).catch(() => {});
     return true;
   }
-  if (lead.erasedAt) return false;
+  if (lead.erasedAt) {
+    // The site erased it itself (lead.erased) while we still owed the site erase: nothing is owed any more.
+    const parsed = parseErasedReason(lead.erasedReason);
+    if (reason === 'site' && parsed.siteErase) {
+      await prisma.cmsLead.update({ where: { id: lead.id }, data: { erasedReason: parsed.reason, utm: null } });
+      return true;
+    }
+    return false;
+  }
   await deletePhotoFiles(lead.photos);
   await prisma.cmsLeadPhoto.deleteMany({ where: { leadRowId: lead.id } });
   await prisma.cmsLead.update({
     where: { id: lead.id },
-    data: { fields: null, consent: null, utm: null, formName: null, sourcePath: null, erasedAt: new Date(), erasedReason: reason },
+    data: {
+      fields: null,
+      consent: null,
+      utm: sitePending ? { siteErase: { attempts: 0, nextAt: new Date(now.getTime() + SITE_ERASE_BASE_DELAY_MS).toISOString(), lastError: sitePending.code || 'ERROR', actor: sitePending.actor } } : null,
+      formName: null,
+      sourcePath: null,
+      erasedAt: now,
+      erasedReason: sitePending ? `${SITE_ERASE_PENDING}${reason}`.slice(0, 32) : reason,
+    },
   });
   return true;
 }
 
-/** OS → site lead-erase (OWNER), then our own erasure path. */
+const leadActor = (user) => ({ kind: 'human', osUserId: String(user.id), name: String(user.name || 'Agency OS user').slice(0, 200), role: user.role });
+
+/**
+ * OS → site lead-erase (OWNER), then our own erasure path. When the site is disconnected or unreachable (any site
+ * error after our own checks), our copy is still erased (PII, photo rows and files) and the site erase is retried by
+ * the leader-only housekeeping (bounded): `{ erased: true, sitePending: true }`.
+ */
 export async function eraseLead({ projectId, leadId, reason, user, log }) {
   if (!LEAD_ERASE_REASONS.includes(reason)) throw new CmsBridgeError({ status: 400, code: 'VALIDATION', message: 'Choose a reason.' });
   // e2e O17: only a lead we know (by the site's leadId, not our row id) can be erased from the OS; an unknown id must
   // never reach the site or leave a tombstone for a lead that does not exist.
   const known = await prisma.cmsLead.findUnique({ where: { projectId_leadId: { projectId, leadId: String(leadId).slice(0, 64) } }, select: { id: true, erasedAt: true } });
   if (!known) throw new CmsBridgeError({ status: 404, code: 'NOT_FOUND', message: 'Unknown lead.' });
-  const { conn } = await loadEmdashConnection(projectId);
-  const res = await emdashRoutes.leadErase(
-    conn,
-    { leadId: String(leadId), reason, actor: { kind: 'human', osUserId: String(user.id), name: String(user.name || 'Agency OS user').slice(0, 200), role: user.role } },
-    { retryDelays: INTERACTIVE_RETRY_DELAYS_MS }
-  );
+  const actor = leadActor(user);
+  let res;
+  let reached = false;
+  try {
+    const { conn } = await loadEmdashConnection(projectId);
+    reached = true;
+    res = await emdashRoutes.leadErase(conn, { leadId: String(leadId), reason, actor }, { retryDelays: INTERACTIVE_RETRY_DELAYS_MS });
+  } catch (err) {
+    const code = err instanceof CmsBridgeError ? err.code : 'NETWORK';
+    if (reached && code === 'NOT_FOUND') {
+      // The site no longer has it: nothing is owed there.
+      await eraseLocalLead(projectId, leadId, reason);
+      return { erased: true, alreadyGone: true, sitePending: false };
+    }
+    await eraseLocalLead(projectId, leadId, reason, { sitePending: { code: String(code).slice(0, 40), actor } });
+    log?.warn?.({ projectId, code }, 'EmDash lead erased in the OS; the site erase is pending');
+    return { erased: true, alreadyGone: false, sitePending: true };
+  }
   await eraseLocalLead(projectId, leadId, reason);
   log?.info?.({ projectId, reason }, 'EmDash lead erased');
-  return { erased: !!res?.erased, alreadyGone: !!res?.alreadyGone };
+  return { erased: !!res?.erased, alreadyGone: !!res?.alreadyGone, sitePending: false };
 }
 
-/** Leader-only: erase leads past the project's retention and copy pending photos. Bounded per run. */
+/**
+ * Leader-only: retry site erases still owed (≤ `limit` per run, exponential backoff 15 min → 24 h,
+ * SITE_ERASE_MAX_ATTEMPTS calls, then `site_failed:`). A project that is not paired (or needs re-pairing) is skipped
+ * without using an attempt; staff see "erase on site pending" until it is re-paired or erased in the site admin.
+ */
+export async function retryPendingSiteErases({ now = new Date(), limit = 20, log } = {}) {
+  const rows = await prisma.cmsLead.findMany({
+    where: { erasedAt: { not: null }, erasedReason: { startsWith: SITE_ERASE_PENDING } },
+    select: { id: true, projectId: true, leadId: true, erasedReason: true, utm: true },
+    orderBy: { erasedAt: 'asc' },
+    take: 200,
+  });
+  const out = { tried: 0, done: 0, failed: 0 };
+  for (const row of rows) {
+    if (out.tried >= limit) break;
+    const st = row.utm && typeof row.utm === 'object' && row.utm.siteErase && typeof row.utm.siteErase === 'object' ? row.utm.siteErase : {};
+    if (st.nextAt && Date.parse(st.nextAt) > now.getTime()) continue;
+    const { reason } = parseErasedReason(row.erasedReason);
+    let conn;
+    try {
+      const p = await prisma.project.findUnique({ where: { id: row.projectId }, select: { cmsRepairNeededAt: true } });
+      if (!p || p.cmsRepairNeededAt) continue; // re-pair needed: no call with the stored keys
+      conn = (await loadEmdashConnection(row.projectId)).conn;
+    } catch {
+      continue; // not paired / not EmDash any more: no call, no attempt used
+    }
+    out.tried += 1;
+    const attempts = (Number.isInteger(st.attempts) ? st.attempts : 0) + 1;
+    try {
+      await emdashRoutes.leadErase(conn, { leadId: String(row.leadId), reason: LEAD_ERASE_REASONS.includes(reason) ? reason : 'other', actor: st.actor }, { retryDelays: [] });
+      await prisma.cmsLead.update({ where: { id: row.id }, data: { erasedReason: reason, utm: null } });
+      out.done += 1;
+    } catch (err) {
+      const code = err instanceof CmsBridgeError ? err.code : 'NETWORK';
+      if (code === 'NOT_FOUND') {
+        await prisma.cmsLead.update({ where: { id: row.id }, data: { erasedReason: reason, utm: null } });
+        out.done += 1;
+        continue;
+      }
+      const last = attempts >= SITE_ERASE_MAX_ATTEMPTS;
+      await prisma.cmsLead.update({
+        where: { id: row.id },
+        data: {
+          erasedReason: `${last ? SITE_ERASE_FAILED : SITE_ERASE_PENDING}${reason || 'other'}`.slice(0, 32),
+          utm: { siteErase: { ...st, attempts, lastError: String(code).slice(0, 40), nextAt: last ? null : new Date(now.getTime() + siteEraseDelayMs(attempts)).toISOString() } },
+        },
+      });
+      if (last) out.failed += 1;
+    }
+  }
+  if (out.tried) log?.info?.(out, 'EmDash lead site-erase retries');
+  return out;
+}
+
+/** Leader-only: erase leads past the project's retention, retry owed site erases and copy pending photos. Bounded per run. */
 export async function leadHousekeeping({ now = new Date(), log } = {}) {
   let erased = 0;
   const projects = await prisma.project.findMany({ where: { cmsType: 'EMDASH' }, select: { id: true, cmsLeadRetentionMonths: true }, take: 500 });
@@ -266,10 +382,11 @@ export async function leadHousekeeping({ now = new Date(), log } = {}) {
     const old = await prisma.cmsLead.findMany({ where: { projectId: p.id, erasedAt: null, receivedAt: { lt: cutoff } }, select: { leadId: true }, take: 200 });
     for (const l of old) if (await eraseLocalLead(p.id, l.leadId, 'retention')) erased += 1;
   }
+  const siteErases = await retryPendingSiteErases({ now, log }).catch(() => ({ tried: 0, done: 0, failed: 0 }));
   const copied = await copyLeadPhotos(null, { now }).catch(() => 0);
   const orphansRemoved = await sweepOrphanLeadPhotos({ now }).catch(() => 0);
   if (erased || copied || orphansRemoved) log?.info?.({ erased, copied, orphansRemoved }, 'EmDash lead housekeeping');
-  return { erased, copied, orphansRemoved };
+  return { erased, copied, orphansRemoved, siteErases };
 }
 
 /** Absolute path of a copied photo (validated name) for the authenticated download route. */
