@@ -3553,7 +3553,7 @@
         },
         "data": {
           "type": "object",
-          "description": "Type-specific payload for site.* and reserved seo.* events"
+          "description": "Type-specific payload for site.* and reserved seo.* events; pipeline_cancelled { force }; v1.5.9 pipeline_reopened { from, reason, by, round, changed, changedTotal? } and pipeline_unscheduled { cause } (§35)"
         },
         "suggestion": {
           "$ref": "common.json#/$defs/suggestionChange"
@@ -3784,6 +3784,102 @@
               "seq",
               "suggestion"
             ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "pipeline_reopened"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "data": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "enum": [
+                      "client_approved",
+                      "scheduled"
+                    ],
+                    "description": "The review status before the save (scheduled: the schedule was removed first, pipeline_unscheduled with data.cause content_changed)"
+                  },
+                  "reason": {
+                    "enum": [
+                      "content_changed"
+                    ]
+                  },
+                  "by": {
+                    "$ref": "common.json#/$defs/siteActor",
+                    "description": "Who saved the content change (same as the event actor)"
+                  },
+                  "round": {
+                    "type": "integer",
+                    "minimum": 2,
+                    "description": "The new round (the client decides it); = review.round"
+                  },
+                  "changed": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "maxLength": 300
+                    },
+                    "minItems": 1,
+                    "maxItems": 20,
+                    "description": "Content field paths that changed (§35.2), at most 20"
+                  },
+                  "changedTotal": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "How many content paths changed (> changed.length when the list was cut at 20)"
+                  }
+                },
+                "required": [
+                  "from",
+                  "reason",
+                  "by",
+                  "round",
+                  "changed"
+                ],
+                "description": "v1.5.9 (§35) pipeline_reopened: the approved review went back to pending_client_review"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "pipeline_unscheduled"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "type": "object",
+                "properties": {
+                  "cause": {
+                    "enum": [
+                      "content_changed"
+                    ],
+                    "description": "v1.5.9 (§35): content_changed = removed because the content changed after client approval (a pipeline_reopened follows)"
+                  }
+                },
+                "required": []
+              }
+            }
           }
         },
         {

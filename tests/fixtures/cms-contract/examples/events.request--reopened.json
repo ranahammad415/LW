@@ -1,0 +1,265 @@
+{
+  "contract": 1,
+  "siteId": "site_9f3c2a7b41d0",
+  "sentAt": "2026-10-20T09:30:01Z",
+  "events": [
+    {
+      "eventId": "01JAJ0EV00000000000000000A",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "content.saved",
+      "at": "2026-10-20T09:30:00Z",
+      "cursor": 140,
+      "actor": {
+        "kind": "human",
+        "id": "01JA0USER0000000000000EDT",
+        "name": "Erin Editor",
+        "role": "editor",
+        "osUserId": null,
+        "source": "api"
+      },
+      "entry": {
+        "entryId": "01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+        "entryNo": 118,
+        "collection": "pages",
+        "slug": "hot-tub-repair",
+        "path": "/spa-services/hot-tub-repair/",
+        "title": "Hot Tub Repair for Most Brands (2026)",
+        "status": "scheduled",
+        "hasPendingDraft": false,
+        "draftRevisionId": null,
+        "liveRevisionId": null,
+        "seo": {
+          "title": "Hot Tub Repair in Waukesha & Milwaukee | Oasis Pool and Spa",
+          "description": "Hot tub not heating? Oasis repairs most spa brands across Waukesha and Milwaukee.",
+          "canonical": null,
+          "noIndex": false
+        },
+        "contentHash": "9b1f0c2d3e4a5b6c7d8e9f00112233445566778899aabbccddeeff0011223344",
+        "wordCount": 812,
+        "excerpt": "Oasis diagnoses and repairs most hot tub brands.",
+        "updatedAt": "2026-10-20T09:30:00Z",
+        "publishedAt": null,
+        "scheduledAt": null,
+        "editUrl": "https://oasispoolspas.com/_emdash/admin/content/pages/01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+        "template": null,
+        "outline": {
+          "headings": [
+            {
+              "level": 1,
+              "text": "Hot Tub Repair for Most Brands"
+            },
+            {
+              "level": 2,
+              "text": "Hot tub repair questions"
+            },
+            {
+              "level": 3,
+              "text": "Why is my hot tub not heating?"
+            }
+          ],
+          "internalLinks": [
+            "/spa-services/",
+            "/contact/"
+          ],
+          "externalLinkCount": 0,
+          "imageCount": 1
+        },
+        "outlineHash": "fdf9c0ae7d0c95ee25b6921c6d0c988a9893787520d142903b1f1637f7cf672b",
+        "rev": "01JAC6ZK3D4F5G6H7J8K9M0N1P"
+      },
+      "message": null
+    },
+    {
+      "eventId": "01JAJ0EV00000000000000000B",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "pipeline_unscheduled",
+      "at": "2026-10-20T09:30:00Z",
+      "cursor": 141,
+      "seq": 7,
+      "actor": {
+        "kind": "human",
+        "id": "01JA0USER0000000000000EDT",
+        "name": "Erin Editor",
+        "role": "editor",
+        "osUserId": null,
+        "source": "api"
+      },
+      "review": {
+        "reviewId": "01JAC7Q2HV5M8N3P4R6S9T0W1X",
+        "siteId": "site_9f3c2a7b41d0",
+        "reviewNo": 42,
+        "entryId": "01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+        "entryNo": 118,
+        "collection": "pages",
+        "slug": "hot-tub-repair",
+        "path": "/spa-services/hot-tub-repair/",
+        "title": "Hot Tub Repair for Most Brands",
+        "status": "client_approved",
+        "statusLabel": "Client Approved",
+        "stage": "ready",
+        "readyToPublish": true,
+        "entryStatus": "draft",
+        "updateMode": false,
+        "parentEntryId": null,
+        "round": 1,
+        "seq": 7,
+        "rev": 7,
+        "contentType": "service_page",
+        "submittedBy": {
+          "memberId": "c9f0f895-fb98-4b91-a5b3-0e1d2c3b4a59",
+          "name": "Sam Worker"
+        },
+        "pmAssigned": {
+          "memberId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90",
+          "name": "Jane PM"
+        },
+        "pmDecision": "approved",
+        "pmComment": "Good to go",
+        "pmReviewedAt": "2026-10-15T11:59:58Z",
+        "clientDecision": "approved",
+        "clientComment": "Looks great",
+        "clientReviewedAt": "2026-10-16T09:00:00Z",
+        "workerNote": "Refreshed FAQ",
+        "draftRevisionId": "01JAC6ZK3D4F5G6H7J8K9M0N1P",
+        "liveRevisionId": null,
+        "pmPreviewUrl": null,
+        "clientPreviewUrl": null,
+        "linksExpireAt": {
+          "pm": "2026-10-22T11:00:00Z",
+          "client": "2026-10-29T12:00:00Z"
+        },
+        "editUrl": "https://oasispoolspas.com/_emdash/admin/content/pages/01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+        "seoGate": null,
+        "publishedAt": null,
+        "scheduledAt": null,
+        "cancelledReason": null,
+        "createdAt": "2026-10-15T11:00:00Z",
+        "updatedAt": "2026-10-20T09:30:00Z",
+        "history": [],
+        "links": {
+          "pm": {
+            "state": "active",
+            "issuedAt": "2026-10-15T11:00:00Z",
+            "expiresAt": "2026-10-22T11:00:00Z"
+          },
+          "client": {
+            "state": "active",
+            "issuedAt": "2026-10-15T12:00:00Z",
+            "expiresAt": "2026-10-29T12:00:00Z"
+          }
+        },
+        "publishedBy": null,
+        "publishOrigin": null,
+        "override": null
+      },
+      "message": "Unscheduled: the content changed after client approval",
+      "data": {
+        "cause": "content_changed"
+      }
+    },
+    {
+      "eventId": "01JAJ0EV00000000000000000C",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "pipeline_reopened",
+      "at": "2026-10-20T09:30:00Z",
+      "cursor": 142,
+      "seq": 8,
+      "actor": {
+        "kind": "human",
+        "id": "01JA0USER0000000000000EDT",
+        "name": "Erin Editor",
+        "role": "editor",
+        "osUserId": null,
+        "source": "api"
+      },
+      "review": {
+        "reviewId": "01JAC7Q2HV5M8N3P4R6S9T0W1X",
+        "siteId": "site_9f3c2a7b41d0",
+        "reviewNo": 42,
+        "entryId": "01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+        "entryNo": 118,
+        "collection": "pages",
+        "slug": "hot-tub-repair",
+        "path": "/spa-services/hot-tub-repair/",
+        "title": "Hot Tub Repair for Most Brands",
+        "status": "pending_client_review",
+        "statusLabel": "Pending Client Review",
+        "stage": "review",
+        "readyToPublish": false,
+        "entryStatus": "draft",
+        "updateMode": false,
+        "parentEntryId": null,
+        "round": 2,
+        "seq": 8,
+        "rev": 8,
+        "contentType": "service_page",
+        "submittedBy": {
+          "memberId": "c9f0f895-fb98-4b91-a5b3-0e1d2c3b4a59",
+          "name": "Sam Worker"
+        },
+        "pmAssigned": {
+          "memberId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90",
+          "name": "Jane PM"
+        },
+        "pmDecision": "approved",
+        "pmComment": "Good to go",
+        "pmReviewedAt": "2026-10-15T11:59:58Z",
+        "clientDecision": null,
+        "clientComment": null,
+        "clientReviewedAt": null,
+        "workerNote": "Refreshed FAQ",
+        "draftRevisionId": "01JAC6ZK3D4F5G6H7J8K9M0N1P",
+        "liveRevisionId": null,
+        "pmPreviewUrl": null,
+        "clientPreviewUrl": "https://oasispoolspas.com/_emdash/api/plugins/agency-os-bridge/review?t=4f9c0d3e2b1a5968778695a4b3c2d1e0f9e8d7c6b5a4938271605f4e3d2c1b0a",
+        "linksExpireAt": {
+          "pm": "2026-10-22T11:00:00Z",
+          "client": "2026-11-03T09:30:00Z"
+        },
+        "editUrl": "https://oasispoolspas.com/_emdash/admin/content/pages/01JAB4M9ZQ7X3K2V8N5T6R1W0C",
+        "seoGate": null,
+        "publishedAt": null,
+        "scheduledAt": null,
+        "cancelledReason": null,
+        "createdAt": "2026-10-15T11:00:00Z",
+        "updatedAt": "2026-10-20T09:30:00Z",
+        "history": [],
+        "links": {
+          "pm": {
+            "state": "active",
+            "issuedAt": "2026-10-15T11:00:00Z",
+            "expiresAt": "2026-10-22T11:00:00Z"
+          },
+          "client": {
+            "state": "active",
+            "issuedAt": "2026-10-20T09:30:00Z",
+            "expiresAt": "2026-11-03T09:30:00Z"
+          }
+        },
+        "publishedBy": null,
+        "publishOrigin": null,
+        "override": null,
+        "clientDecisionSource": null
+      },
+      "message": "Back to client review (round 2): the content changed after client approval",
+      "data": {
+        "from": "scheduled",
+        "reason": "content_changed",
+        "by": {
+          "kind": "human",
+          "id": "01JA0USER0000000000000EDT",
+          "name": "Erin Editor",
+          "role": "editor",
+          "osUserId": null,
+          "source": "api"
+        },
+        "round": 2,
+        "changed": [
+          "title",
+          "layout[faq1]"
+        ],
+        "changedTotal": 2
+      }
+    }
+  ]
+}

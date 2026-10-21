@@ -35,6 +35,7 @@ import { CmsKeyConfigError } from '../../lib/cmsKeyCrypto.js';
 import { credentialToRings, normalizeReviewEvent } from '../../lib/siteAdapters/emdash.js';
 import { suggestionEventMessage, clientActorFromEvent } from '../../lib/siteAdapters/clientReview.js';
 import { validateLeadEvent } from '../../lib/siteAdapters/leads.js';
+import { REOPEN_EVENT, reopenEventMessage, reopenNotice } from '../../lib/siteAdapters/reopen.js';
 import { isMigrationActive } from '../../lib/cmsMigration.js';
 
 export const OS_VERSION = '2026.10.16';
@@ -628,6 +629,11 @@ export async function processEventBatch({ store, project, events, log }) {
               const quote = await store.suggestionQuote?.(project.id, ev.suggestion?.suggestionId).catch(() => null);
               message = suggestionEventMessage(ev, quote);
             }
+            // v1.5.9 §35: the reopen line is OS wording (round, who, which content paths; text only).
+            if (ev.type === REOPEN_EVENT) message = reopenEventMessage(ev);
+            else if (ev.type === 'pipeline_unscheduled' && ev.data?.cause === 'content_changed' && !message) {
+              message = 'Unscheduled: the content changed after client approval';
+            }
             const normalized = normalizeReviewEvent(r, {
               eventType: ev.type,
               seq: ev.seq,
@@ -636,6 +642,7 @@ export async function processEventBatch({ store, project, events, log }) {
               snapshotText: ev.snapshotText,
               clientActor: clientActorFromEvent(ev.actor),
             });
+            if (ev.type === REOPEN_EVENT) normalized.reopen = reopenNotice(ev);
             const applied = await store.applyPipelineEvent(project, normalized, log);
             if (applied?.skipped === 'stale_seq') {
               // Lost the atomic seq claim to a newer event (another instance): stale, no notification.
