@@ -18,6 +18,7 @@ import {
 import { prepareDraftPush, checkMediaItems, checkLayout, draftFromEntryGet, MEDIA_LIMITS, MEDIA_TYPES, DRAFT_LIMITS } from './siteAdapters/push.js';
 import { probeImage } from './imageProbe.js';
 import { guardedFetch } from './siteAdapters/netGuard.js';
+import { changedBy } from './siteAdapters/reopen.js';
 import { ensureProjectAccess } from './ensureProjectAccess.js';
 
 export const DRAFT_STAFF_ROLES = Object.freeze(['OWNER', 'PM', 'TEAM_MEMBER', 'CONTRACTOR']);
@@ -388,16 +389,10 @@ export function pushErrorMessage(err, { creating = true } = {}) {
 
 /**
  * v1.5.4 §30.3: CONFLICT_REV.updatedBy is the last saver (a person in the admin, or an OS push), null only when nobody
- * can be named. Names only, never site ids or e-mails; `viaOs` = the save came from an Agency OS push.
+ * can be named. Names only, never site ids or e-mails; `viaOs` = the save came from an Agency OS push. The rule lives in
+ * siteAdapters/reopen.js (v1.5.9 reopen lines use it too).
  */
-export function changedBy(u) {
-  if (!u || typeof u !== 'object') return null;
-  const name = typeof u.name === 'string' && u.name.trim() ? u.name.trim().slice(0, 200) : null;
-  const kind = ['human', 'agent', 'plugin', 'system'].includes(u.kind) ? u.kind : null;
-  const viaOs = !!u.osUserId || u.source === 'os';
-  if (!name && !kind) return null;
-  return { name, kind, viaOs };
-}
+export { changedBy };
 
 /**
  * v1.5.7 §33.3–§33.5 push warnings, with OS wording (the site's code, path and fields are kept). Unknown codes pass

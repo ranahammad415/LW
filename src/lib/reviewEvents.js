@@ -14,6 +14,7 @@
  *   site sends the full Review, so decision fields are taken verbatim; cms* columns are
  *   written; the event row carries cmsSeq.
  */
+import { Prisma } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { emdashPublishColumns } from './siteAdapters/emdash.js';
 import { safeSiteLink, safeEmdashLink } from './siteLinks.js';
@@ -177,6 +178,9 @@ export async function applyReviewEvent({ project, event: n, log }) {
         ...(n.cms.clientDecisionSource ? { cmsClientDecisionSource: n.cms.clientDecisionSource } : {}),
         ...(n.cms.suggestionCounts ? { cmsSuggestionCounts: n.cms.suggestionCounts } : {}),
         ...emdashPublishColumns(n.cms),
+        // v1.5.9 §35: a reopen starts a new client round; the previous round's decision channel and decider are cleared
+        // (status, round, decision, comment and the new client link come from the Review as usual).
+        ...(eventType === 'pipeline_reopened' ? { cmsClientDecisionSource: null, cmsClientActor: Prisma.DbNull } : {}),
         ...(Number.isInteger(n.cms.seq) ? { cmsSeq: n.cms.seq } : {}),
       }
     : {};
@@ -528,6 +532,42 @@ async function notifyForReviewEvent({ project, n, review, alreadyPublished, port
         recipientIds: recipients,
         variables: commonVars,
         actionUrl: pmPreviewUrl || portalProjectUrl,
+        metadata: { contentReviewId: review.id, projectId: project.id },
+      }).catch(() => {});
+    }
+  } else if (eventType === 'pipeline_reopened') {
+    // v1.5.9 §35: the content changed after the client approved, so the site opened a new client round with a new
+    // client link. Clients: the existing "ready for your review" path (preferences respected by notify), with the
+    // client link only (never the PM link). Project PM: in-app only (template content_review_reopened).
+    const ro = n.reopen || {};
+    const round = ro.round || revisionNumber || null;
+    const roundText = round ? `round ${round}` : 'a new round';
+    const clientUserIds = await getClientUserIds();
+    if (clientUserIds.length > 0) {
+      notify({
+        slug: 'content_ready_for_client_review',
+        recipientIds: uniq(clientUserIds),
+        variables: {
+          ...commonVars,
+          contentTitle: round ? `${postTitle} (round ${round})` : postTitle,
+          postType: `${postType || 'Page'} · ${roundText}: updated after your approval`,
+          roundLabel: round ? ` (Round ${round})` : '',
+        },
+        actionUrl: clientPreviewUrl || portalProjectUrl,
+        metadata: { contentReviewId: review.id, projectId: project.id, reopened: true },
+      }).catch(() => {});
+    }
+    if (pmIds.length > 0) {
+      notify({
+        slug: 'content_review_reopened',
+        recipientIds: pmIds,
+        variables: {
+          ...commonVars,
+          round: round ? String(round) : '',
+          changedBy: ro.changedBy || 'someone on the site',
+          changedSummary: ro.changedSummary || '',
+        },
+        actionUrl: portalProjectUrl,
         metadata: { contentReviewId: review.id, projectId: project.id },
       }).catch(() => {});
     }

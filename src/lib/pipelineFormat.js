@@ -39,6 +39,8 @@ export const EVENT_LABELS = {
   pipeline_draft_updated: 'Draft Updated',
   pipeline_scheduled: 'Scheduled',
   pipeline_unscheduled: 'Unscheduled',
+  // EmDash v1.5.9 §35: the content changed after client approval → pending_client_review, round + 1.
+  pipeline_reopened: 'Back to client review',
   // EmDash v1.1.0: editor decisions on client suggestions (timeline only).
   'review.suggestion_accepted': 'Suggestion accepted',
   'review.suggestion_rejected': 'Suggestion not used',

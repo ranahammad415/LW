@@ -66,6 +66,7 @@ const MATRIX = {
   content_published:               { active: true, owner: 1, pm: 1, mgr: 1, viewer: 0 },
   content_ready_for_client_review: { active: true, owner: 1, pm: 1, mgr: 1, viewer: 0 },
   content_submitted_for_review:    { active: true, owner: 1, pm: 1, mgr: 1, viewer: 0 },
+  content_review_reopened:         { active: true, owner: 0, pm: 0, mgr: 0, viewer: 0 }, // in-app only (EmDash v1.5.9)
 
   content_map_submitted:           { active: true, owner: 1, pm: 1, mgr: 1, viewer: 1 },
   content_map_comment_added:       { active: true, owner: 1, pm: 1, mgr: 1, viewer: 0 },

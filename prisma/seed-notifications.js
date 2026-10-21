@@ -166,6 +166,14 @@ const templates = [
     bodyText: 'The EmDash site for {{projectName}} needs to be paired again: {{reason}}. Re-pair it from the Website tab.',
     inAppMessage: 'Re-pair needed: {{projectName}}',
     variables: ['projectName', 'reason', 'actionUrl'] },
+  // EmDash contract v1.5.9 §35 (migration 20261103_emdash_reopen seeds the same row with INSERT IGNORE). In-app only:
+  // every email flag is off. Sent to the project's lead PM.
+  { slug: 'content_review_reopened', name: 'Content Back to Client Review', description: 'The content changed on the site after the client approved it, so it went back to client review (EmDash)', category: 'pipeline',
+    subject: '[Back to client review] "{{postTitle}}" — {{projectName}}',
+    bodyHtml: '<p><strong>“{{postTitle}}”</strong> ({{postType}}) in project <strong>{{projectName}}</strong> went back to client review (round {{round}}): {{changedBy}} changed the content after the client approved it. Changed: {{changedSummary}}</p>',
+    bodyText: '"{{postTitle}}" ({{postType}}) in project "{{projectName}}" went back to client review (round {{round}}): {{changedBy}} changed the content after the client approved it. Changed: {{changedSummary}}',
+    inAppMessage: '[{{projectName}}] "{{postTitle}}" is back in client review (round {{round}}): changed by {{changedBy}} after client approval',
+    variables: ['postTitle', 'projectName', 'postType', 'round', 'changedBy', 'changedSummary', 'actionUrl'] },
 
   // Security platform (migration 20261103_security_platform seeds the same rows with INSERT IGNORE and role flags:
   // security_alert / security_digest email owners + PMs; security_backup_failed emails client managers + viewers).
