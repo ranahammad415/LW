@@ -32,3 +32,13 @@ describe('migration 20261108_contract_180', () => {
     for (const c of ['promptId', 'mentionPosition', 'period', 'source']) expect(SCHEMA).toMatch(new RegExp(`\\n\\s+${c}\\s`));
   });
 });
+
+describe('migration 20261109_contract_180_fixes', () => {
+  const FIX = readFileSync(join(here, '../../../prisma/migrations/20261109_contract_180_fixes/migration.sql'), 'utf8').replace(/^--.*$/gm, '');
+  it('adds aivisibilityresult.promptSource, guarded and additive; the column is in schema.prisma', () => {
+    expect(FIX).not.toMatch(/\bDROP\b|\bRENAME\b|\bMODIFY\b|\bTRUNCATE\b|\bDELETE\b|CHANGE\s+COLUMN/i);
+    expect(FIX).toMatch(/COLUMN_NAME = 'promptSource'/);
+    expect(FIX).toMatch(/ADD COLUMN `promptSource` VARCHAR\(16\) NULL/);
+    expect(SCHEMA).toMatch(/\n\s+promptSource\s+String\?\s+@db\.VarChar\(16\)/);
+  });
+});

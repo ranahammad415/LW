@@ -287,6 +287,7 @@ export async function executeAiVisibilityRun(runId, opts = {}) {
             town: p.town ? String(p.town).slice(0, 100) : null,
             service: p.service ? String(p.service).slice(0, 200) : null,
             branded: p.branded === true,
+            promptSource: p.source === 'handoff' || p.source === 'answer_target' ? p.source : null,
           }
         : {};
     const freshResults = await mapPool(jobs, CONCURRENCY, async (job) => {

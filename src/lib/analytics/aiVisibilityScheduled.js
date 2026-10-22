@@ -167,7 +167,7 @@ async function latestScheduledRuns(projectId, take = 6) {
       finishedAt: true,
       costUsd: true,
       results: {
-        select: { promptId: true, query: true, town: true, service: true, branded: true, platform: true, cited: true, citationType: true, mentionPosition: true, competitorsJson: true, costUsd: true },
+        select: { promptId: true, query: true, town: true, service: true, branded: true, promptSource: true, platform: true, cited: true, citationType: true, mentionPosition: true, competitorsJson: true, costUsd: true },
       },
     },
   });
@@ -179,7 +179,7 @@ export function promptOutcomes(results) {
   for (const r of results || []) {
     if (r.citationType === 'error') continue;
     const key = r.promptId || r.query;
-    if (!byPrompt.has(key)) byPrompt.set(key, { promptId: r.promptId, text: r.query, town: r.town, service: r.service, branded: !!r.branded, cells: [] });
+    if (!byPrompt.has(key)) byPrompt.set(key, { promptId: r.promptId, text: r.query, town: r.town, service: r.service, branded: !!r.branded, source: r.promptSource ?? null, cells: [] });
     byPrompt.get(key).cells.push(r);
   }
   return [...byPrompt.values()].map((p) => ({ ...p, mentioned: p.cells.some((c) => c.cited) }));
@@ -191,10 +191,36 @@ const mostCommon = (list) => {
   return [...m.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
 };
 
+const QUESTION_START_RE = /^(how|what|why|when|where|who|which|can|do|does|is|are)\b/i;
+export const LABEL_VALUE_MAX = 40;
+
+/** A service / town short enough to read as a name (not a question or a page title). Pure. */
+export function isPlainLabelValue(v) {
+  if (typeof v !== 'string') return false;
+  const s = v.trim();
+  return !!s && s.length <= LABEL_VALUE_MAX && !s.endsWith('?') && !QUESTION_START_RE.test(s);
+}
+
+/**
+ * " about <service> in <town>" from the handoff prompts only (answer_target prompts may carry a page title in
+ * `service`, O-C180-2 / S-C180-1). The part is dropped when a picked value looks like a question or a title. Pure.
+ */
+export function aboutPart(outcomes) {
+  const handoff = (outcomes || []).filter((p) => p.source === 'handoff');
+  const service = mostCommon(handoff.map((p) => p.service));
+  const town = mostCommon(handoff.map((p) => p.town));
+  if ((service && !isPlainLabelValue(service)) || (town && !isPlainLabelValue(town))) return '';
+  if (service && town) return ` about ${service.trim().toLowerCase()} in ${town.trim()}`;
+  if (service) return ` about ${service.trim().toLowerCase()}`;
+  if (town) return ` about services in ${town.trim()}`;
+  return '';
+}
+
 /**
  * Client "AI answers" tile: allow-list. "Mentioned in X of Y questions people ask AI about <service> in <town>" (the
- * most common service / town of the questions asked; non-branded questions only), plus a monthly trend. No vendor,
- * model, platform, cost, prompt ids, answers or competitor domains.
+ * most common service / town of the handoff questions asked; see aboutPart) or, without that part, "Mentioned in X of
+ * Y questions people ask AI assistants"; non-branded questions only; plus a monthly trend. No vendor, model,
+ * platform, cost, prompt ids, answers or competitor domains.
  */
 export async function clientAiAnswersView(project) {
   const runs = await latestScheduledRuns(project.id, 6);
@@ -209,14 +235,12 @@ export async function clientAiAnswersView(project) {
   const latest = points[0];
   const mentioned = latest.outcomes.filter((p) => p.mentioned).length;
   const total = latest.outcomes.length;
-  const service = mostCommon(latest.outcomes.map((p) => p.service));
-  const town = mostCommon(latest.outcomes.map((p) => p.town));
-  const about = service && town ? ` about ${service.toLowerCase()} in ${town}` : service ? ` about ${service.toLowerCase()}` : town ? ` about services in ${town}` : '';
+  const about = aboutPart(latest.outcomes);
   return {
     available: true,
     mentioned,
     total,
-    label: `Mentioned in ${mentioned} of ${total} questions people ask AI${about}`,
+    label: `Mentioned in ${mentioned} of ${total} questions people ask ${about ? `AI${about}` : 'AI assistants'}`,
     trend: points
       .map((p) => ({ month: p.month, mentioned: p.outcomes.filter((o) => o.mentioned).length, total: p.outcomes.length }))
       .reverse(),

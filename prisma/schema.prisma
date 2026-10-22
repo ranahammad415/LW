@@ -2562,6 +2562,9 @@ model AiVisibilityResult {
   town            String?  @db.VarChar(100)
   service         String?  @db.VarChar(200)
   branded         Boolean?
+  /// prompt source: handoff | answer_target (null = admin run / older row). The client "about <service> in <town>"
+  /// sentence uses handoff prompts only (O-C180-2); migration 20261109_contract_180_fixes
+  promptSource    String?  @db.VarChar(16)
   /// 1-based position of the first brand mention among the answer's listed items (null = not cited / not in a list)
   mentionPosition Int?
   /// provider-reported cost of this cell (USD); staff only

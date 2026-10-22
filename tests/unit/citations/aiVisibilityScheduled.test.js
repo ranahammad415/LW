@@ -54,6 +54,8 @@ import {
   clientAiAnswersView,
   staffAiPromptsView,
   promptOutcomes,
+  aboutPart,
+  isPlainLabelValue,
 } from '../../../src/lib/analytics/aiVisibilityScheduled.js';
 import { mentionPosition } from '../../../src/lib/analytics/aiVisibilityRunner.js';
 
@@ -136,7 +138,7 @@ describe('monthly job', () => {
     expect(probe).toHaveBeenCalledTimes(12);
     expect(probe.mock.calls[0][0]).toMatchObject({ maxAttempts: 1, includeCost: true });
     const rows = db.calls.find((c) => c.key === 'aiVisibilityResult.createMany').args.data;
-    expect(rows[0]).toMatchObject({ promptId: 'p1', town: 'Waukesha', service: 'Closing', branded: false, cited: true, mentionPosition: 1, costUsd: 0.001 });
+    expect(rows[0]).toMatchObject({ promptId: 'p1', town: 'Waukesha', service: 'Closing', branded: false, promptSource: 'handoff', cited: true, mentionPosition: 1, costUsd: 0.001 });
     expect(rows.find((r) => r.promptId === 'p2')).toMatchObject({ cited: false, mentionPosition: null });
     const fin = db.calls.filter((c) => c.key === 'aiVisibilityRun.update').pop().args.data;
     expect(fin).toMatchObject({ status: 'completed', costUsd: 0.012 });
@@ -157,7 +159,7 @@ describe('monthly job', () => {
 
 describe('views', () => {
   const run = (period, cells) => ({ id: `r-${period}`, period, finishedAt: new Date(`${period}-02T06:00:00Z`), costUsd: 0.01, results: cells });
-  const cell = (promptId, platform, cited, extra = {}) => ({ promptId, query: `Q ${promptId}`, town: 'Waukesha', service: 'Pool closing', branded: false, platform, cited, citationType: cited ? 'brand' : 'none', mentionPosition: cited ? 2 : null, competitorsJson: ['rival.com'], costUsd: 0.0005, ...extra });
+  const cell = (promptId, platform, cited, extra = {}) => ({ promptId, query: `Q ${promptId}`, town: 'Waukesha', service: 'Pool closing', branded: false, promptSource: 'handoff', platform, cited, citationType: cited ? 'brand' : 'none', mentionPosition: cited ? 2 : null, competitorsJson: ['rival.com'], costUsd: 0.0005, ...extra });
 
   it('promptOutcomes: a prompt is mentioned when any platform cites it; error-only prompts are left out', () => {
     const out = promptOutcomes([cell('p1', 'chatgpt', false), cell('p1', 'gemini', true), cell('p2', 'chatgpt', false, { citationType: 'error' })]);
@@ -182,6 +184,42 @@ describe('views', () => {
     expect(where).toMatchObject({ isDemo: false, source: 'scheduled', status: 'completed' });
     const json = JSON.stringify(out).toLowerCase();
     for (const bad of ['chatgpt', 'openrouter', 'dataforseo', 'cost', 'rival.com', 'p1']) expect(json).not.toContain(bad);
+  });
+
+  it('client sentence (O-C180-2): "about <service> in <town>" from handoff prompts only; answer-target titles never leak', async () => {
+    const title = { promptSource: 'answer_target', service: 'How Much Does Pool Service Cost in Wisconsin?', town: null };
+    db.overrides['aiVisibilityRun.findMany'] = async () => [
+      run('2026-11', [
+        cell('p1', 'chatgpt', true),
+        cell('G01:q1', 'chatgpt', false, title),
+        cell('G01:q2', 'chatgpt', true, title),
+        cell('G01:q3', 'chatgpt', false, title),
+      ]),
+    ];
+    const out = await clientAiAnswersView({ id: 'p1' });
+    expect(out.label).toBe('Mentioned in 2 of 4 questions people ask AI about pool closing in Waukesha');
+  });
+
+  it('client sentence falls back to "…people ask AI assistants" without handoff prompts or with a question / title value', async () => {
+    const at = (id, cited, extra) => cell(id, 'chatgpt', cited, { promptSource: 'answer_target', ...extra });
+    db.overrides['aiVisibilityRun.findMany'] = async () => [run('2026-11', [at('G01:q1', true, { service: 'how much does pool service cost in wisconsin?' }), at('G01:q2', false, {})])];
+    expect((await clientAiAnswersView({ id: 'p1' })).label).toBe('Mentioned in 1 of 2 questions people ask AI assistants');
+    for (const service of ['Pool closing?', 'What is a pool opening', 'Does pool closing cost much', 'Complete guide to closing an inground pool for the winter']) {
+      db.overrides['aiVisibilityRun.findMany'] = async () => [run('2026-11', [cell('p1', 'chatgpt', true, { service })])];
+      expect((await clientAiAnswersView({ id: 'p1' })).label).toBe('Mentioned in 1 of 1 questions people ask AI assistants');
+    }
+    // older rows without a prompt source never feed the sentence
+    db.overrides['aiVisibilityRun.findMany'] = async () => [run('2026-11', [cell('p1', 'chatgpt', true, { promptSource: null })])];
+    expect((await clientAiAnswersView({ id: 'p1' })).label).toBe('Mentioned in 1 of 1 questions people ask AI assistants');
+  });
+
+  it('isPlainLabelValue / aboutPart', () => {
+    for (const v of ['Closing', 'Hot tub repair', 'Waukesha', 'Island pools', 'Canopy cleaning', 'Dock repair']) expect(isPlainLabelValue(v)).toBe(true);
+    for (const v of ['', '  ', null, 'Closing?', 'How to close a pool', 'who repairs hot tubs', 'Can I close my pool', 'Are pool covers worth it', 'x'.repeat(41)]) expect(isPlainLabelValue(v)).toBe(false);
+    expect(aboutPart([{ source: 'handoff', service: 'Closing', town: null }])).toBe(' about closing');
+    expect(aboutPart([{ source: 'handoff', service: null, town: 'Brookfield' }])).toBe(' about services in Brookfield');
+    expect(aboutPart([{ source: 'handoff', service: 'Closing', town: 'Where is Waukesha?' }])).toBe('');
+    expect(aboutPart([])).toBe('');
   });
 
   it('staff view: per prompt and platform with cited, position, competitors, cost and last run’s outcome', async () => {
