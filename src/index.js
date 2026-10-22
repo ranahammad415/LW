@@ -448,6 +448,19 @@ try {
     }
   });
 
+  // Health score v2 (docs/ledger/features/health-score.md): 07:00 server time, after the GSC/GA4/GMB/DFS syncs and the
+  // 03:00 EmDash pull. Leader only; idempotent upserts (projectId+date), so a double run is harmless. Daily key is UTC.
+  cron.schedule('0 7 * * *', async () => {
+    if (!isLeader()) return;
+    try {
+      const { runHealthScoreDaily } = await import('./lib/health/healthScoreService.js');
+      const out = await runHealthScoreDaily({ log: app.log });
+      app.log.info(out, 'Health score daily complete');
+    } catch (err) {
+      app.log.error({ err }, 'Health score daily failed');
+    }
+  });
+
   // SEO Engine retention (OS-05 / OS-14): hourly purge of expired Idempotency-Key rows. Leader only
   // (NODE_APP_INSTANCE 0 / unset); the deletes are plain conditional deleteMany calls, so a double run is harmless.
   cron.schedule('23 * * * *', async () => {
