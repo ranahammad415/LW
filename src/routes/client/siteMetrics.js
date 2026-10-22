@@ -7,6 +7,7 @@
 import { prisma } from '../../lib/prisma.js';
 import { clientPageSpeedView } from '../../lib/pageSpeed.js';
 import { clientAuthorityView } from '../../lib/backlinkSnapshots.js';
+import { clientUptimeView } from '../../lib/uptime.js';
 
 async function scopedProject(request, reply) {
   const clientIds = request.clientAccountIds;
@@ -37,5 +38,12 @@ export async function clientSiteMetricsRoutes(app) {
     if (!project) return;
     reply.header('cache-control', 'no-store');
     return reply.send(await clientAuthorityView(project));
+  });
+
+  app.get('/projects/:id/uptime', guard, async (request, reply) => {
+    const project = await scopedProject(request, reply);
+    if (!project) return;
+    reply.header('cache-control', 'no-store');
+    return reply.send(await clientUptimeView(project));
   });
 }

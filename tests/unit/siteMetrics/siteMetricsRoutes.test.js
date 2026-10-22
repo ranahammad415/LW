@@ -38,6 +38,14 @@ vi.mock('../../../src/lib/backlinkSnapshots.js', async (orig) => ({
   },
 }));
 
+vi.mock('../../../src/lib/uptime.js', async (orig) => ({
+  ...(await orig()),
+  probeProject: async () => {
+    outside.calls.push('probe');
+    return { ok: true, errorClass: null, incident: 'up' };
+  },
+}));
+
 import { pmSiteMetricsRoutes } from '../../../src/routes/pm/siteMetrics.js';
 import { clientSiteMetricsRoutes } from '../../../src/routes/client/siteMetrics.js';
 import { redactResponseSecrets, CLIENT_DROP_KEYS } from '../../../src/lib/redactSecrets.js';
@@ -195,5 +203,64 @@ describe('client routes', () => {
   it('costUsd is in the client drop list of the global redaction', () => {
     expect(CLIENT_DROP_KEYS.has('costUsd')).toBe(true);
     expect(redactResponseSecrets({ a: { costUsd: 1, n: 2 } }, 0, CLIENT_DROP_KEYS)).toEqual({ a: { n: 2 } });
+  });
+});
+
+describe('uptime routes', () => {
+  it('agents and API tokens never run an uptime check (403 HUMAN_ONLY, no probe)', async () => {
+    db.overrides['project.findUnique'] = async () => PROJECT;
+    for (const w of [{ user: { id: 'o', role: 'OWNER', isAgent: true } }, { user: { id: 'o', role: 'OWNER' }, token: true }]) {
+      who = w;
+      const res = await app.inject({ method: 'POST', url: '/api/pm/projects/p1/uptime/check' });
+      expect(res.statusCode).toBe(403);
+      expect(res.json().code).toBe('HUMAN_ONLY');
+    }
+    expect(outside.calls).toEqual([]);
+  });
+
+  it('a person can probe now, with a per-project cooldown', async () => {
+    db.overrides['project.findUnique'] = async () => PROJECT;
+    who = { user: { id: 'pm1', role: 'PM' } };
+    expect((await app.inject({ method: 'POST', url: '/api/pm/projects/p1/uptime/check' })).statusCode).toBe(200);
+    db.overrides['uptimeCheck.findFirst'] = async () => ({ at: new Date() });
+    expect((await app.inject({ method: 'POST', url: '/api/pm/projects/p1/uptime/check' })).statusCode).toBe(429);
+    expect(outside.calls).toEqual(['probe']);
+  });
+
+  it('staff view guards; fleet is OWNER/PM and scoped to the PM', async () => {
+    db.overrides['project.findUnique'] = async () => PROJECT;
+    who = { user: { id: 'tm', role: 'TEAM_MEMBER' } };
+    expect((await app.inject({ method: 'GET', url: '/api/pm/projects/p1/uptime' })).statusCode).toBe(403);
+    expect((await app.inject({ method: 'GET', url: '/api/pm/uptime/fleet' })).statusCode).toBe(403);
+    who = { user: { id: 'pm1', role: 'PM' } };
+    let where;
+    db.overrides['project.findMany'] = async (a) => ((where = a.where), [{ id: 'p1', name: 'Acme', client: { name: 'Acme Inc' } }]);
+    const res = await app.inject({ method: 'GET', url: '/api/pm/uptime/fleet' });
+    expect(res.statusCode).toBe(200);
+    expect(where.OR).toEqual([{ leadPmId: 'pm1' }, { client: { leadPmId: 'pm1' } }, { client: { secondaryPmId: 'pm1' } }]);
+    expect(res.json().sites[0]).toMatchObject({ projectId: 'p1', state: 'unknown', availability30: null });
+    who = { user: { id: 'o', role: 'OWNER' } };
+    await app.inject({ method: 'GET', url: '/api/pm/uptime/fleet' });
+    expect(where.OR).toBeUndefined();
+    expect((await app.inject({ method: 'GET', url: '/api/pm/projects/p1/uptime' })).statusCode).toBe(200);
+  });
+
+  it('client view: availability, state and plain incidents only', async () => {
+    who = { user: { id: 'u1', role: 'CLIENT' }, clientIds: ['c1'] };
+    db.overrides['project.findUnique'] = async () => ({ id: 'p1', clientId: 'c1' });
+    const now = Date.now();
+    db.overrides['uptimeDaily.findMany'] = async () => [{ date: new Date(now), checks: 720, okChecks: 719 }];
+    db.overrides['uptimeIncident.findMany'] = async () => [
+      { openedAt: new Date(now - 3600_000), closedAt: new Date(now - 3000_000), durationSec: 600, cause: 'http_5xx', lastError: 'server error (HTTP 503)' },
+    ];
+    db.overrides['uptimeCheck.findFirst'] = async () => ({ at: new Date() });
+    const res = await app.inject({ method: 'GET', url: '/api/client/projects/p1/uptime' });
+    expect(res.headers['cache-control']).toBe('no-store');
+    const body = res.json();
+    expect(body).toEqual({ available: true, availability30: 99.86, state: 'up', incidents: [{ startedAt: new Date(now - 3600_000).toISOString(), durationText: 'about 10 minutes' }] });
+    expect(res.body).not.toMatch(/cause|lastError|http|503|errorClass|"ms"|header/i);
+
+    db.overrides['project.findUnique'] = async () => ({ id: 'p1', clientId: 'other' });
+    expect((await app.inject({ method: 'GET', url: '/api/client/projects/p1/uptime' })).statusCode).toBe(404);
   });
 });

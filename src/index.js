@@ -474,6 +474,41 @@ try {
       app.log.error({ err }, 'Backlink snapshot monthly run failed');
     }
   });
+  // Uptime (UPTIME_ENABLED, default on): prober every UPTIME_INTERVAL_MIN minutes (in-process overlap guard), rollup
+  // of today + yesterday hourly at :07, final rollup of yesterday + retention purge at 00:20 UTC. Leader only.
+  {
+    const uptime = await import('./lib/uptime.js');
+    if (uptime.isUptimeEnabled()) {
+      cron.schedule(uptime.uptimeCron(), async () => {
+        if (!isLeader()) return;
+        try {
+          const out = await uptime.runUptimeProbes({ log: app.log });
+          if (out.opened || out.recovered || out.errors) app.log.info(out, 'Uptime probe tick');
+        } catch (err) {
+          app.log.error({ err }, 'Uptime probe tick failed');
+        }
+      });
+      cron.schedule('7 * * * *', async () => {
+        if (!isLeader()) return;
+        try {
+          await uptime.rollupUptime();
+        } catch (err) {
+          app.log.error({ err }, 'Uptime hourly rollup failed');
+        }
+      });
+      cron.schedule('20 0 * * *', async () => {
+        if (!isLeader()) return;
+        try {
+          const now = new Date();
+          const yesterday = new Date(uptime.utcDayStart(now).getTime() - 86_400_000);
+          await uptime.rollupUptime({ now, days: [yesterday] });
+          app.log.info(await uptime.purgeUptime({ now }), 'Uptime nightly rollup + purge complete');
+        } catch (err) {
+          app.log.error({ err }, 'Uptime nightly rollup failed');
+        }
+      });
+    }
+  }
 
   // SEO Engine retention (OS-05 / OS-14): hourly purge of expired Idempotency-Key rows. Leader only
   // (NODE_APP_INSTANCE 0 / unset); the deletes are plain conditional deleteMany calls, so a double run is harmless.

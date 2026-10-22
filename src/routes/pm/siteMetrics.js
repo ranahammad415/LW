@@ -3,8 +3,9 @@
  *
  * Who: OWNER (every project) and PM (their projects: ensureProjectAccess). TEAM_MEMBER / CONTRACTOR / CLIENT: 403.
  * Refresh routes are for people only: agent accounts and API tokens get 403 HUMAN_ONLY before any outside call.
- * The backlink refresh costs money (DataForSEO), so it is OWNER-only. Both refreshes are rate-limited per instance
- * (route rateLimit) and per project through the database (cooldown on the latest fetchedAt, cluster-safe).
+ * The backlink refresh costs money (DataForSEO), so it is OWNER-only. Every write (page-speed refresh, backlink refresh,
+ * uptime check) is rate-limited per instance (route rateLimit) and per project through the database (cooldown on the
+ * latest stored row, cluster-safe). GET /uptime/fleet: OWNER sees every site, a PM only their own.
  */
 import { prisma } from '../../lib/prisma.js';
 import { ensureProjectAccess } from '../../lib/ensureProjectAccess.js';
@@ -23,6 +24,7 @@ import {
   monthKey,
   BACKLINK_REFRESH_COOLDOWN_MS,
 } from '../../lib/backlinkSnapshots.js';
+import { isUptimeEnabled, probeProject, staffUptimeView, uptimeFleetView, siteHomeUrl } from '../../lib/uptime.js';
 
 export const SITE_METRICS_ROLES = ['OWNER', 'PM'];
 
@@ -39,7 +41,7 @@ async function projectFor(request, reply) {
   }
   const project = await prisma.project.findUnique({
     where: { id: String(request.params.id) },
-    select: { id: true, clientId: true, leadPmId: true, wpUrl: true, dataforseoDomain: true, cmsType: true },
+    select: { id: true, name: true, clientId: true, leadPmId: true, wpUrl: true, dataforseoDomain: true, cmsType: true },
   });
   if (!project || !(await ensureProjectAccess(project, request.user))) {
     reply.status(project ? 403 : 404).send({ message: project ? 'Access denied' : 'Project not found' });
@@ -54,7 +56,8 @@ function cooldown(reply, sinceMs, windowMs) {
   return reply.status(429).send({ code: 'COOLDOWN', message: 'This was refreshed a moment ago. Try again later.', retryAfterSec: sec });
 }
 
-const REFRESH_LIMIT = { rateLimit: { max: 6, timeWindow: '10 minutes' } };
+const UPTIME_CHECK_COOLDOWN_MS = 60_000;
+const REFRESH_LIMIT ={ rateLimit: { max: 6, timeWindow: '10 minutes' } };
 
 export async function pmSiteMetricsRoutes(app) {
   const read = { onRequest: [app.verifyJwt] };
@@ -91,6 +94,32 @@ export async function pmSiteMetricsRoutes(app) {
     if (!project) return;
     reply.header('cache-control', 'no-store');
     return reply.send(await staffBacklinkView(project));
+  });
+
+  app.get('/projects/:id/uptime', read, async (request, reply) => {
+    const project = await projectFor(request, reply);
+    if (!project) return;
+    reply.header('cache-control', 'no-store');
+    return reply.send(await staffUptimeView(project));
+  });
+
+  // Probe now (same rules as the prober, incl. incident logic). People only, once per project per minute.
+  app.post('/projects/:id/uptime/check', write, async (request, reply) => {
+    const project = await projectFor(request, reply);
+    if (!project) return;
+    if (!isUptimeEnabled()) return reply.status(409).send({ code: 'DISABLED', message: 'Uptime monitoring is turned off (UPTIME_ENABLED=false).' });
+    if (!siteHomeUrl(project)) return reply.status(409).send({ code: 'NO_URL', message: 'This project has no public https site URL to monitor.' });
+    const last = await prisma.uptimeCheck.findFirst({ where: { projectId: project.id, target: 'home' }, orderBy: { at: 'desc' }, select: { at: true } });
+    const since = last ? Date.now() - new Date(last.at).getTime() : Infinity;
+    if (since < UPTIME_CHECK_COOLDOWN_MS) return cooldown(reply, since, UPTIME_CHECK_COOLDOWN_MS);
+    const out = await probeProject(project, { log: request.log });
+    return reply.send({ result: { ok: out.ok ?? null, errorClass: out.errorClass ?? null }, view: await staffUptimeView(project) });
+  });
+
+  app.get('/uptime/fleet', read, async (request, reply) => {
+    if (!SITE_METRICS_ROLES.includes(request.user?.role)) return reply.status(403).send({ message: 'Access denied' });
+    reply.header('cache-control', 'no-store');
+    return reply.send({ sites: await uptimeFleetView(request.user) });
   });
 
   // Costs one DataForSEO call: OWNER only, people only, once per project per hour.
