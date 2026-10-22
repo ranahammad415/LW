@@ -79,6 +79,8 @@ import { adminSecuritySettingsRoutes } from './routes/admin/securitySettings.js'
 import { pmHealthRoutes } from './routes/pm/health.js';
 import { clientHealthRoutes } from './routes/client/health.js';
 import { adminHealthRoutes } from './routes/admin/health.js';
+import { pmSiteMetricsRoutes } from './routes/pm/siteMetrics.js';
+import { clientSiteMetricsRoutes } from './routes/client/siteMetrics.js';
 import { pmDigestRoutes } from './routes/pm/digest.js';
 import { pmClientDashboardRoutes } from './routes/pm/clientDashboard.js';
 import { wpWebhookRoutes } from './routes/webhooks.js';
@@ -285,6 +287,9 @@ app.register(adminSecuritySettingsRoutes, { prefix: '/api/admin' });
 app.register(pmHealthRoutes, { prefix: '/api/pm' });
 app.register(clientHealthRoutes, { prefix: '/api/client' });
 app.register(adminHealthRoutes, { prefix: '/api/admin' });
+// Site metrics (docs/ledger/features/site-metrics.md): page speed, backlinks / authority, uptime.
+app.register(pmSiteMetricsRoutes, { prefix: '/api/pm' });
+app.register(clientSiteMetricsRoutes, { prefix: '/api/client' });
 app.register(pmDigestRoutes, { prefix: '/api/pm' });
 app.register(pmClientDashboardRoutes, { prefix: '/api/pm' });
 app.register(pmInputRequestRoutes, { prefix: '/api/pm' });
@@ -467,6 +472,63 @@ try {
       app.log.error({ err }, 'Health score daily failed');
     }
   });
+
+  // Site metrics (docs/ledger/features/site-metrics.md), leader only. 02:30 UTC daily: PageSpeed Insights (mobile +
+  // desktop per site, capped, stops on 429, 400-day retention; PAGESPEED_ENABLED). 04:30 UTC on the 1st: backlink
+  // snapshots (paid DataForSEO call, off unless BACKLINKS_SNAPSHOT_ENABLED=true, capped). Both skip work already done.
+  cron.schedule('30 2 * * *', async () => {
+    if (!isLeader()) return;
+    try {
+      const { runPageSpeedJob } = await import('./lib/pageSpeed.js');
+      app.log.info(await runPageSpeedJob({ log: app.log }), 'PageSpeed nightly run complete');
+    } catch (err) {
+      app.log.error({ err }, 'PageSpeed nightly run failed');
+    }
+  });
+  cron.schedule('30 4 1 * *', async () => {
+    if (!isLeader()) return;
+    try {
+      const { runBacklinkSnapshotJob } = await import('./lib/backlinkSnapshots.js');
+      app.log.info(await runBacklinkSnapshotJob({ log: app.log }), 'Backlink snapshot monthly run complete');
+    } catch (err) {
+      app.log.error({ err }, 'Backlink snapshot monthly run failed');
+    }
+  });
+  // Uptime (UPTIME_ENABLED, default on): prober every UPTIME_INTERVAL_MIN minutes (in-process overlap guard), rollup
+  // of today + yesterday hourly at :07, final rollup of yesterday + retention purge at 00:20 UTC. Leader only.
+  {
+    const uptime = await import('./lib/uptime.js');
+    if (uptime.isUptimeEnabled()) {
+      cron.schedule(uptime.uptimeCron(), async () => {
+        if (!isLeader()) return;
+        try {
+          const out = await uptime.runUptimeProbes({ log: app.log });
+          if (out.opened || out.recovered || out.errors) app.log.info(out, 'Uptime probe tick');
+        } catch (err) {
+          app.log.error({ err }, 'Uptime probe tick failed');
+        }
+      });
+      cron.schedule('7 * * * *', async () => {
+        if (!isLeader()) return;
+        try {
+          await uptime.rollupUptime();
+        } catch (err) {
+          app.log.error({ err }, 'Uptime hourly rollup failed');
+        }
+      });
+      cron.schedule('20 0 * * *', async () => {
+        if (!isLeader()) return;
+        try {
+          const now = new Date();
+          const yesterday = new Date(uptime.utcDayStart(now).getTime() - 86_400_000);
+          await uptime.rollupUptime({ now, days: [yesterday] });
+          app.log.info(await uptime.purgeUptime({ now }), 'Uptime nightly rollup + purge complete');
+        } catch (err) {
+          app.log.error({ err }, 'Uptime nightly rollup failed');
+        }
+      });
+    }
+  }
 
   // SEO Engine retention (OS-05 / OS-14): hourly purge of expired Idempotency-Key rows. Leader only
   // (NODE_APP_INSTANCE 0 / unset); the deletes are plain conditional deleteMany calls, so a double run is harmless.

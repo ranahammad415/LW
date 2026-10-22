@@ -704,6 +704,11 @@ model Project {
   healthScores         HealthScoreDaily[]
   keywordRanks         KeywordRankDaily[]
   llmReferrals         LlmReferralDaily[]
+  pageSpeedDaily        PageSpeedDaily[]
+  backlinkSnapshots     BacklinkSnapshotMonthly[]
+  uptimeChecks          UptimeCheck[]
+  uptimeIncidents       UptimeIncident[]
+  uptimeDaily           UptimeDaily[]
 
   @@map("project")
 }
@@ -3586,4 +3591,133 @@ model BacklinkOrderEvent {
 
   @@index([orderId, createdAt])
   @@map("backlinkorderevent")
+}
+
+/// Site metrics (docs/ledger/features/site-metrics.md): one PageSpeed Insights v5 run per project, UTC day and
+/// strategy. Lab values come from Lighthouse; field values (CrUX p75, page data with origin fallback) are null when
+/// Google has no field data. Health v2 (factor S5) reads it through lib/pageSpeed.js pageSpeedStatus(row).
+model PageSpeedDaily {
+  id               String   @id @default(uuid())
+  projectId        String
+  date             DateTime @db.Date
+  /// mobile | desktop
+  strategy         String   @db.VarChar(8)
+  url              String   @db.VarChar(500)
+  performanceScore Int?
+  lcpMs            Int?
+  cls              Float?
+  tbtMs            Int?
+  fcpMs            Int?
+  speedIndexMs     Int?
+  fieldLcpP75      Int?
+  fieldInpP75      Int?
+  fieldClsP75      Float?
+  /// FAST | AVERAGE | SLOW | null
+  fieldCategory    String?  @db.VarChar(8)
+  /// ok | error
+  status           String   @db.VarChar(8)
+  errorCode        String?  @db.VarChar(40)
+  fetchedAt        DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, date, strategy])
+  @@index([projectId, date])
+  @@map("pagespeeddaily")
+}
+
+/// Site metrics: monthly backlink / authority snapshot of the client's domain (DataForSEO Backlinks summary/live).
+/// costUsd is staff-only (lib/redactSecrets.js drops it from every client response). new/lost referring domains come
+/// from the summary when present, otherwise from the net change against the previous ok snapshot.
+model BacklinkSnapshotMonthly {
+  id                   String   @id @default(uuid())
+  projectId            String
+  /// YYYY-MM (UTC month of the fetch)
+  month                String   @db.VarChar(7)
+  target               String   @db.VarChar(255)
+  rank                 Int?
+  backlinks            Int?
+  referringDomains     Int?
+  referringMainDomains Int?
+  newReferringDomains  Int?
+  lostReferringDomains Int?
+  backlinksSpamScore   Int?
+  brokenBacklinks      Int?
+  costUsd              Decimal? @db.Decimal(10, 5)
+  /// ok | error
+  status               String   @db.VarChar(8)
+  errorCode            String?  @db.VarChar(40)
+  fetchedAt            DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, month])
+  @@map("backlinksnapshotmonthly")
+}
+
+/// Site metrics, uptime: one probe result (lib/uptime.js). target home | status (EmDash /_agency/status), source os |
+/// external (reserved for an outside vantage). Kept 30 days (leader purge in batches); UptimeDaily keeps the rollup.
+model UptimeCheck {
+  id           String    @id @default(uuid())
+  projectId    String
+  at           DateTime  @default(now())
+  /// home | status
+  target       String    @db.VarChar(8)
+  /// os | external
+  source       String    @default("os") @db.VarChar(10)
+  ok           Boolean
+  httpStatus   Int?
+  ms           Int?
+  /// timeout | dns | tls | http_5xx | http_4xx | connect | redirect | marker
+  errorClass   String?   @db.VarChar(12)
+  tlsExpiresAt DateTime?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, at])
+  @@index([at])
+  @@map("uptimecheck")
+}
+
+/// Site metrics, uptime incident: opened after 2 failed home probes in a row, closed by the next ok probe. At most one
+/// open incident per project: openProjectId holds the projectId while open and NULL once closed (unique).
+model UptimeIncident {
+  id             String    @id @default(uuid())
+  projectId      String
+  openedAt       DateTime
+  closedAt       DateTime?
+  /// errorClass of the probe that opened it
+  cause          String    @db.VarChar(12)
+  /// short OS-written text (never a raw socket message): staff only
+  lastError      String?   @db.VarChar(120)
+  durationSec    Int?
+  notifiedDownAt DateTime?
+  notifiedUpAt   DateTime?
+  openProjectId  String?   @unique @db.VarChar(191)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, openedAt])
+  @@map("uptimeincident")
+}
+
+/// Site metrics, uptime daily rollup of home probes (UTC day). Recomputed hourly for today/yesterday, finalized nightly.
+model UptimeDaily {
+  id              String   @id @default(uuid())
+  projectId       String
+  date            DateTime @db.Date
+  checks          Int
+  okChecks        Int
+  availabilityPct Float?
+  avgMs           Int?
+  p95Ms           Int?
+  incidents       Int      @default(0)
+  downtimeSec     Int      @default(0)
+  updatedAt       DateTime @default(now()) @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, date])
+  @@index([date])
+  @@map("uptimedaily")
 }

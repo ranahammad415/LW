@@ -196,6 +196,27 @@ const templates = [
     inAppMessage: 'Backups of {{projectName}} to {{destination}} are not working',
     variables: ['projectName', 'destination', 'failures', 'actionUrl'] },
 
+  // Site metrics, uptime (migration 20261105_uptime_monitoring seeds the same rows with INSERT IGNORE; staff only:
+  // email owners + PMs, never clients). Sent by lib/uptime.js to on-call + owners.
+  { slug: 'site_down', name: 'Website Down', description: 'A client website failed two uptime probes in a row (agency on-call + owners; staff only)', category: 'security',
+    subject: 'Website down: {{projectName}}',
+    bodyHtml: '<p><strong>{{projectName}}</strong> is not responding ({{reason}}) since {{since}}.</p><p>Open the project Site performance tab for the probe history.</p>',
+    bodyText: '{{projectName}} is not responding ({{reason}}) since {{since}}. Open the project Site performance tab for the probe history.',
+    inAppMessage: 'Website down: {{projectName}} ({{reason}})',
+    variables: ['projectName', 'reason', 'since', 'actionUrl'] },
+  { slug: 'site_recovered', name: 'Website Recovered', description: 'A client website that was down responds again (staff only)', category: 'security',
+    subject: 'Website back up: {{projectName}}',
+    bodyHtml: '<p><strong>{{projectName}}</strong> is responding again. It was down for {{duration}}.</p>',
+    bodyText: '{{projectName}} is responding again. It was down for {{duration}}.',
+    inAppMessage: 'Website back up: {{projectName}} (down {{duration}})',
+    variables: ['projectName', 'duration', 'actionUrl'] },
+  { slug: 'tls_expiring', name: 'TLS Certificate Expiring', description: 'The https certificate of a client website expires in under 14 days (at most once a day; staff only)', category: 'security',
+    subject: 'Certificate expiring: {{projectName}} ({{daysLeft}} days)',
+    bodyHtml: '<p>The https certificate of <strong>{{projectName}}</strong> expires on {{expiresAt}} ({{daysLeft}} days).</p><p>Renew it before visitors see a browser warning.</p>',
+    bodyText: 'The https certificate of {{projectName}} expires on {{expiresAt}} ({{daysLeft}} days). Renew it before visitors see a browser warning.',
+    inAppMessage: 'Certificate of {{projectName}} expires in {{daysLeft}} days',
+    variables: ['projectName', 'expiresAt', 'daysLeft', 'actionUrl'] },
+
   // ── Content Map Category ──
   { slug: 'content_map_submitted', name: 'Content Map Submitted', description: 'When a content map is submitted for client review', category: 'content_map',
     subject: '[Review Needed] Content map ready — {{projectName}}',

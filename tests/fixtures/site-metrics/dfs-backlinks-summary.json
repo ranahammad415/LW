@@ -1,0 +1,35 @@
+{
+  "version": "0.1.20240801",
+  "status_code": 20000,
+  "status_message": "Ok.",
+  "time": "0.4210 sec.",
+  "cost": 0.02003,
+  "tasks_count": 1,
+  "tasks_error": 0,
+  "tasks": [
+    {
+      "id": "10221234-0000-0000-0000-000000000000",
+      "status_code": 20000,
+      "status_message": "Ok.",
+      "time": "0.3900 sec.",
+      "cost": 0.02003,
+      "result_count": 1,
+      "path": ["v3", "backlinks", "summary", "live"],
+      "data": { "api": "backlinks", "function": "summary", "target": "example.com", "include_subdomains": true },
+      "result": [
+        {
+          "target": "example.com",
+          "first_seen": "2019-03-01 00:00:00 +00:00",
+          "rank": 312,
+          "backlinks": 4821,
+          "backlinks_spam_score": 7,
+          "broken_backlinks": 33,
+          "referring_domains": 214,
+          "referring_domains_nofollow": 40,
+          "referring_main_domains": 198,
+          "referring_ips": 180
+        }
+      ]
+    }
+  ]
+}
