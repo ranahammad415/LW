@@ -106,10 +106,21 @@ export async function pullCitations(projectId, { conn = null, opts = NO_RETRY } 
   return replaceMirror(projectId, list);
 }
 
-/** Pull only when the site has the capability (daily EmDash pull, pairing). Errors are swallowed by the caller. */
-export async function pullCitationsIfCapable(projectId) {
+export const DAILY_CITATIONS_FRESH_MS = 20 * 60 * 60 * 1000;
+
+/**
+ * Pull only when the site has the capability (daily EmDash pull, pairing). Errors are swallowed by the caller.
+ * `skipIfFreshMs` (the daily pull: DAILY_CITATIONS_FRESH_MS): skip when the mirror was fetched within that window AND
+ * has rev > 0. A rev-0 mirror (e.g. the pairing pull of an empty list, O-C180-5) is always re-pulled.
+ */
+export async function pullCitationsIfCapable(projectId, { skipIfFreshMs = 0, now = new Date() } = {}) {
   const p = await prisma.project.findUnique({ where: { id: projectId }, select: { cmsType: true, cmsCapabilities: true } });
   if (!hasSeoCitations(p)) return { skipped: 'NO_CAPABILITY' };
+  if (skipIfFreshMs > 0) {
+    const state = await loadCitationState(projectId);
+    const fetchedAt = state?.fetchedAt ? new Date(state.fetchedAt).getTime() : null;
+    if (Number.isInteger(state?.rev) && state.rev > 0 && fetchedAt != null && now.getTime() - fetchedAt < skipIfFreshMs) return { skipped: 'FRESH' };
+  }
   return pullCitations(projectId);
 }
 

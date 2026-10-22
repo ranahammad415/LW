@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const mem = vi.hoisted(() => ({ mirror: new Map(), state: new Map(), calls: [] }));
+const mem = vi.hoisted(() => ({ mirror: new Map(), state: new Map(), calls: [], project: null }));
 const site = vi.hoisted(() => ({ list: null, upsert: null, calls: [] }));
 
 vi.mock('../../../src/lib/prisma.js', async () => {
@@ -76,7 +76,7 @@ vi.mock('../../../src/lib/prisma.js', async () => {
   };
   return {
     prisma: new Proxy(
-      { seoCitationMirror: wrap('seoCitationMirror', mirror), seoCitationState: wrap('seoCitationState', state) },
+      { seoCitationMirror: wrap('seoCitationMirror', mirror), seoCitationState: wrap('seoCitationState', state), project: wrap('project', { findUnique: () => mem.project }) },
       { get: (t, n) => t[n] || wrap(String(n), {}) }
     ),
   };
@@ -106,6 +106,8 @@ import {
   sanitizeCitationList,
   validateCitationEvent,
   replaceMirror,
+  pullCitationsIfCapable,
+  DAILY_CITATIONS_FRESH_MS,
   applyCitationChanged,
   upsertCitations,
   staffUpsertCitation,
@@ -134,6 +136,7 @@ beforeEach(() => {
   mem.mirror = new Map();
   mem.state = new Map();
   mem.calls = [];
+  mem.project = null;
   site.calls = [];
   site.list = ex('seo-citations-list.response');
   site.upsert = () => ex('seo-citations-upsert.response');
@@ -234,6 +237,44 @@ describe('mirror by rev', () => {
     const pull2 = vi.fn();
     await applyCitationChanged({ id: 'p2' }, ev(1, { id: 'yelp.com' }), { schedulePull: pull2 });
     expect(pull2).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('daily pull (O-C180-5)', () => {
+  const now = new Date('2026-10-24T03:00:00Z');
+  const daily = () => pullCitationsIfCapable('p1', { skipIfFreshMs: DAILY_CITATIONS_FRESH_MS, now });
+  const ago = (h) => new Date(now.getTime() - h * 3600e3);
+
+  it('re-pulls a rev-0 mirror stored at pairing even when it is fresh', async () => {
+    mem.project = { ...P };
+    mem.state.set('p1', { projectId: 'p1', rev: 0, stale: false, fetchedAt: ago(1) });
+    const out = await daily();
+    expect(site.calls).toEqual([['list']]);
+    expect(out.rev).toBe(site.list.rev);
+    expect(mem.state.get('p1').rev).toBe(site.list.rev);
+  });
+
+  it('skips a mirror fetched < 20 h ago with rev > 0; pulls once it is older or never fetched', async () => {
+    mem.project = { ...P };
+    mem.state.set('p1', { projectId: 'p1', rev: 3, stale: false, fetchedAt: ago(19) });
+    expect(await daily()).toEqual({ skipped: 'FRESH' });
+    expect(site.calls).toEqual([]);
+    mem.state.set('p1', { projectId: 'p1', rev: 3, stale: false, fetchedAt: ago(21) });
+    await daily();
+    expect(site.calls).toEqual([['list']]);
+    mem.state.clear();
+    await daily();
+    expect(site.calls).toHaveLength(2);
+  });
+
+  it('no capability → no call; without skipIfFreshMs (pairing) a fresh mirror is pulled', async () => {
+    mem.project = { ...P, cmsCapabilities: {} };
+    expect(await daily()).toEqual({ skipped: 'NO_CAPABILITY' });
+    expect(site.calls).toEqual([]);
+    mem.project = { ...P };
+    mem.state.set('p1', { projectId: 'p1', rev: 3, stale: false, fetchedAt: ago(1) });
+    await pullCitationsIfCapable('p1');
+    expect(site.calls).toEqual([['list']]);
   });
 });
 

@@ -424,9 +424,10 @@ export async function syncAllEmdashProjects() {
       // v1.6.0 §36.1: daily security-status {detail: full} + security-history + backup-status (+ v1.6.1 settings).
       const { pullSecurityForProject } = await import('./security/securitySync.js');
       await pullSecurityForProject(id).catch(() => {});
-      // v1.8.0 §39: the citation list (sites with seoCitations; read-only, no retries; events keep it current between pulls).
-      const { pullCitationsIfCapable } = await import('./citations/citations.js');
-      await pullCitationsIfCapable(id).catch(() => {});
+      // v1.8.0 §39: the citation list (sites with seoCitations; read-only, no retries; events keep it current between
+      // pulls). Skipped when fetched < 20 h ago with rev > 0; a rev-0 mirror (empty at pairing) is re-pulled (O-C180-5).
+      const { pullCitationsIfCapable, DAILY_CITATIONS_FRESH_MS } = await import('./citations/citations.js');
+      await pullCitationsIfCapable(id, { skipIfFreshMs: DAILY_CITATIONS_FRESH_MS }).catch(() => {});
     } catch (err) {
       results.push({ projectId: id, error: err.message });
     }
