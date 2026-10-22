@@ -1,0 +1,51 @@
+{
+  "ok": false,
+  "error": {
+    "code": "CONFLICT_REV",
+    "message": "The citations changed since they were read (rev 2, expected 1)",
+    "retryable": false,
+    "details": {
+      "currentRev": 2,
+      "items": [
+        {
+          "id": "angi.com",
+          "name": "Angi",
+          "url": null,
+          "kind": "directory",
+          "listed": false,
+          "nap_status": "unknown",
+          "name_seen": null,
+          "phone_seen": null,
+          "zip_seen": null,
+          "hours_seen": null,
+          "checks": null,
+          "last_checked": null,
+          "checked_by": "human",
+          "note": "Status in the plan: Unknown. Action: Claim the free listing; same NAP",
+          "utm": null,
+          "rank": 5,
+          "updated_at": "2026-11-02T09:00:01.000Z"
+        },
+        {
+          "id": "bbb.org",
+          "name": "BBB",
+          "url": null,
+          "kind": "review-site",
+          "listed": false,
+          "nap_status": "unknown",
+          "name_seen": null,
+          "phone_seen": null,
+          "zip_seen": null,
+          "hours_seen": null,
+          "checks": null,
+          "last_checked": null,
+          "checked_by": "human",
+          "note": "Status in the plan: Could not be verified. Action: Claim or create a free profile; accreditation is the client's call: `[[CLIENT: BBB accreditation yes/no]]`. Conflict: Unknown",
+          "utm": null,
+          "rank": 4,
+          "updated_at": "2026-11-02T09:00:01.000Z"
+        }
+      ]
+    }
+  }
+}

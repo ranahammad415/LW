@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/seo-citations-list.response.json",
+  "title": "seo-citations-list response (v1.8.0)",
+  "description": "rev = compare-and-set token of seo-citations-upsert. At most 200 listings, in the plan's priority order.",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
+    "rev": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/seoCitation"
+      },
+      "maxItems": 200
+    }
+  },
+  "required": [
+    "ok",
+    "rev",
+    "items"
+  ]
+}

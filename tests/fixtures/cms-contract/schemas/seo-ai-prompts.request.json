@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/seo-ai-prompts.request.json",
+  "title": "seo-ai-prompts (v1.8.0)",
+  "description": "The AI-visibility prompt set (read-only). Signed, no idempotency key.",
+  "type": "object",
+  "properties": {},
+  "required": []
+}

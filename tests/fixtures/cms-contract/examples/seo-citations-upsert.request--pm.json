@@ -1,0 +1,17 @@
+{
+  "baseRev": 1,
+  "items": [
+    {
+      "id": "business.google.com",
+      "listed": true,
+      "nap_status": "correct",
+      "last_checked": "2026-11-02T10:00:00Z"
+    }
+  ],
+  "actor": {
+    "kind": "human",
+    "osUserId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90",
+    "name": "Jane PM",
+    "role": "PM"
+  }
+}

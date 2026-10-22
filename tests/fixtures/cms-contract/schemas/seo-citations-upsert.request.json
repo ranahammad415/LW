@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/seo-citations-upsert.request.json",
+  "title": "seo-citations-upsert (v1.8.0)",
+  "description": "The OS's monitoring results (1-50 listings). Compare-and-set on baseRev (else 409 CONFLICT_REV with details.currentRev and details.items). A person OWNER / PM, or kind system (the OS's scheduled monitor); agents 403 HUMAN_ONLY, other roles 403 FORBIDDEN.",
+  "type": "object",
+  "properties": {
+    "baseRev": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/seoCitationUpsertItem"
+      },
+      "minItems": 1,
+      "maxItems": 50
+    },
+    "actor": {
+      "$ref": "common.json#/$defs/osActor"
+    }
+  },
+  "required": [
+    "baseRev",
+    "items",
+    "actor"
+  ]
+}

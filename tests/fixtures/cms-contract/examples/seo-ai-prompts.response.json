@@ -1,0 +1,50 @@
+{
+  "ok": true,
+  "prompts": [
+    {
+      "id": "p1",
+      "text": "Who should I call to close my inground pool in Waukesha, WI this fall?",
+      "town": "Waukesha",
+      "service": "Closing",
+      "page_ids": [],
+      "branded": false,
+      "source": "handoff"
+    },
+    {
+      "id": "p2",
+      "text": "Who repairs hot tubs in Brookfield, Wisconsin? I don't want a dealer, my tub is an older brand.",
+      "town": "Brookfield",
+      "service": "Hot tub repair",
+      "page_ids": [],
+      "branded": false,
+      "source": "handoff"
+    },
+    {
+      "id": "p3",
+      "text": "My pool in Wauwatosa is losing about two inches of water a day. Who does pool leak detection near me?",
+      "town": "Wauwatosa",
+      "service": "Leak detection",
+      "page_ids": [],
+      "branded": false,
+      "source": "handoff"
+    },
+    {
+      "id": "p4",
+      "text": "Best pool cleaning service in Milwaukee for weekly maintenance?",
+      "town": "Milwaukee",
+      "service": "Weekly maintenance",
+      "page_ids": [],
+      "branded": false,
+      "source": "handoff"
+    },
+    {
+      "id": "p5",
+      "text": "How much does it cost to close a pool in the Milwaukee area, and who can do it?",
+      "town": "Milwaukee",
+      "service": "Closing cost",
+      "page_ids": [],
+      "branded": false,
+      "source": "handoff"
+    }
+  ]
+}

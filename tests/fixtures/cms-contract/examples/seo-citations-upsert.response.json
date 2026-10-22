@@ -1,0 +1,46 @@
+{
+  "ok": true,
+  "rev": 2,
+  "applied": [
+    {
+      "id": "yelp.com",
+      "created": false,
+      "fields": [
+        "hours_seen",
+        "checks",
+        "last_checked",
+        "checked_by"
+      ]
+    },
+    {
+      "id": "facebook.com",
+      "created": false,
+      "fields": [
+        "nap_status",
+        "name_seen",
+        "phone_seen",
+        "checks",
+        "last_checked",
+        "checked_by"
+      ]
+    },
+    {
+      "id": "porch.com",
+      "created": true,
+      "fields": [
+        "name",
+        "url",
+        "listed",
+        "last_checked",
+        "checked_by"
+      ]
+    }
+  ],
+  "rejected": [],
+  "warnings": [
+    {
+      "code": "FIELD_OWNED_BY_SITE",
+      "message": "Ignored site-owned fields: note"
+    }
+  ]
+}

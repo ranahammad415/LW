@@ -1,0 +1,263 @@
+{
+  "contract": 1,
+  "siteId": "site_9f3c2a7b41d0",
+  "sentAt": "2026-11-02T09:01:00Z",
+  "events": [
+    {
+      "eventId": "01JBCITE000000000000000001",
+      "siteId": "site_9f3c2a7b41d0",
+      "cursor": 901,
+      "type": "seo.citation_changed",
+      "at": "2026-10-22T15:44:13.680Z",
+      "actor": {
+        "kind": "system",
+        "id": "5c2b9a4e-1f3d-4e8a-9b7c-0d6e5f4a3b21",
+        "name": "Agency OS listing monitor",
+        "osUserId": "5c2b9a4e-1f3d-4e8a-9b7c-0d6e5f4a3b21",
+        "source": "os"
+      },
+      "data": {
+        "rev": 2,
+        "at": "2026-10-22T15:44:13.677Z",
+        "source": "os",
+        "by": {
+          "kind": "system",
+          "id": "5c2b9a4e-1f3d-4e8a-9b7c-0d6e5f4a3b21",
+          "name": "Agency OS listing monitor",
+          "osUserId": "5c2b9a4e-1f3d-4e8a-9b7c-0d6e5f4a3b21",
+          "source": "os"
+        },
+        "citation": {
+          "id": "yelp.com",
+          "name": "Yelp",
+          "url": null,
+          "kind": "review-site",
+          "listed": true,
+          "nap_status": "wrong",
+          "name_seen": "OASIS POOL AND SPAS",
+          "phone_seen": "262-667-6421",
+          "zip_seen": "53187",
+          "hours_seen": "Mon–Fri 8:00–18:00",
+          "checks": {
+            "name": false,
+            "phone": true,
+            "zip": false,
+            "hours": false,
+            "areas": null,
+            "site_link": true
+          },
+          "last_checked": "2026-11-01T06:00:00.000Z",
+          "checked_by": "os",
+          "note": "Status in the plan: Exists: \"OASIS POOL AND SPAS\", Waukesha 53187, 22 photos, 262-667-6421. Action: Claim, fix name and ZIP, add services and the four towns, link to site. Conflict: Name (\"Spas\", all caps); ZIP 53187",
+          "utm": null,
+          "rank": 2,
+          "updated_at": "2026-10-22T15:44:13.676Z"
+        },
+        "changes": [
+          {
+            "field": "hours_seen",
+            "from": null,
+            "to": "Mon–Fri 8:00–18:00"
+          },
+          {
+            "field": "checks",
+            "from": null,
+            "to": {
+              "name": false,
+              "phone": true,
+              "zip": false,
+              "hours": false,
+              "areas": null,
+              "site_link": true
+            }
+          },
+          {
+            "field": "last_checked",
+            "from": null,
+            "to": "2026-11-01T06:00:00.000Z"
+          },
+          {
+            "field": "checked_by",
+            "from": "human",
+            "to": "os"
+          }
+        ],
+        "osRequest": {
+          "route": "seo-citations-upsert",
+          "idempotencyKey": "seo-citations-2026-11-01"
+        }
+      }
+    },
+    {
+      "eventId": "01JBCITE000000000000000002",
+      "siteId": "site_9f3c2a7b41d0",
+      "cursor": 902,
+      "type": "seo.citation_changed",
+      "at": "2026-10-22T15:44:13.680Z",
+      "actor": {
+        "kind": "system",
+        "id": "5c2b9a4e-1f3d-4e8a-9b7c-0d6e5f4a3b21",
+        "name": "Agency OS listing monitor",
+        "osUserId": "5c2b9a4e-1f3d-4e8a-9b7c-0d6e5f4a3b21",
+        "source": "os"
+      },
+      "data": {
+        "rev": 2,
+        "at": "2026-10-22T15:44:13.680Z",
+        "source": "os",
+        "by": {
+          "kind": "system",
+          "id": "5c2b9a4e-1f3d-4e8a-9b7c-0d6e5f4a3b21",
+          "name": "Agency OS listing monitor",
+          "osUserId": "5c2b9a4e-1f3d-4e8a-9b7c-0d6e5f4a3b21",
+          "source": "os"
+        },
+        "citation": {
+          "id": "facebook.com",
+          "name": "Facebook",
+          "url": null,
+          "kind": "social",
+          "listed": true,
+          "nap_status": "correct",
+          "name_seen": "Oasis Pool and Spa",
+          "phone_seen": "262-667-6421",
+          "zip_seen": null,
+          "hours_seen": null,
+          "checks": {
+            "name": true,
+            "phone": true,
+            "zip": null,
+            "hours": true,
+            "areas": true,
+            "site_link": true
+          },
+          "last_checked": "2026-11-01T06:00:00.000Z",
+          "checked_by": "os",
+          "note": "Status in the plan: Exists: \"Oasis Pool and Spa Services\", last visible post 10 May 2025. Action: Rename, set service area, phone, hours, website; post monthly (deliverable 7 calendar). Conflict: Name (\"Services\")",
+          "utm": null,
+          "rank": 3,
+          "updated_at": "2026-10-22T15:44:13.676Z"
+        },
+        "changes": [
+          {
+            "field": "nap_status",
+            "from": "wrong",
+            "to": "correct"
+          },
+          {
+            "field": "name_seen",
+            "from": "Oasis Pool and Spa Services",
+            "to": "Oasis Pool and Spa"
+          },
+          {
+            "field": "phone_seen",
+            "from": null,
+            "to": "262-667-6421"
+          },
+          {
+            "field": "checks",
+            "from": null,
+            "to": {
+              "name": true,
+              "phone": true,
+              "zip": null,
+              "hours": true,
+              "areas": true,
+              "site_link": true
+            }
+          },
+          {
+            "field": "last_checked",
+            "from": null,
+            "to": "2026-11-01T06:00:00.000Z"
+          },
+          {
+            "field": "checked_by",
+            "from": "human",
+            "to": "os"
+          }
+        ],
+        "osRequest": {
+          "route": "seo-citations-upsert",
+          "idempotencyKey": "seo-citations-2026-11-01"
+        }
+      }
+    },
+    {
+      "eventId": "01JBCITE000000000000000003",
+      "siteId": "site_9f3c2a7b41d0",
+      "cursor": 903,
+      "type": "seo.citation_changed",
+      "at": "2026-10-22T15:44:13.680Z",
+      "actor": {
+        "kind": "system",
+        "id": "5c2b9a4e-1f3d-4e8a-9b7c-0d6e5f4a3b21",
+        "name": "Agency OS listing monitor",
+        "osUserId": "5c2b9a4e-1f3d-4e8a-9b7c-0d6e5f4a3b21",
+        "source": "os"
+      },
+      "data": {
+        "rev": 2,
+        "at": "2026-10-22T15:44:13.680Z",
+        "source": "os",
+        "by": {
+          "kind": "system",
+          "id": "5c2b9a4e-1f3d-4e8a-9b7c-0d6e5f4a3b21",
+          "name": "Agency OS listing monitor",
+          "osUserId": "5c2b9a4e-1f3d-4e8a-9b7c-0d6e5f4a3b21",
+          "source": "os"
+        },
+        "citation": {
+          "id": "porch.com",
+          "name": "Porch",
+          "url": "https://www.porch.com/waukesha-wi/pool-contractors/oasis-pool-and-spa",
+          "kind": "directory",
+          "listed": true,
+          "nap_status": "unknown",
+          "name_seen": null,
+          "phone_seen": null,
+          "zip_seen": null,
+          "hours_seen": null,
+          "checks": null,
+          "last_checked": "2026-11-01T06:00:00.000Z",
+          "checked_by": "os",
+          "note": "",
+          "utm": null,
+          "rank": null,
+          "updated_at": "2026-10-22T15:44:13.676Z"
+        },
+        "changes": [
+          {
+            "field": "name",
+            "from": null,
+            "to": "Porch"
+          },
+          {
+            "field": "url",
+            "from": null,
+            "to": "https://www.porch.com/waukesha-wi/pool-contractors/oasis-pool-and-spa"
+          },
+          {
+            "field": "listed",
+            "from": null,
+            "to": true
+          },
+          {
+            "field": "last_checked",
+            "from": null,
+            "to": "2026-11-01T06:00:00.000Z"
+          },
+          {
+            "field": "checked_by",
+            "from": null,
+            "to": "os"
+          }
+        ],
+        "osRequest": {
+          "route": "seo-citations-upsert",
+          "idempotencyKey": "seo-citations-2026-11-01"
+        }
+      }
+    }
+  ]
+}

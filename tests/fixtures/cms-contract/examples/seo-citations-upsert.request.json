@@ -1,0 +1,53 @@
+{
+  "baseRev": 1,
+  "items": [
+    {
+      "id": "yelp.com",
+      "listed": true,
+      "nap_status": "wrong",
+      "name_seen": "OASIS POOL AND SPAS",
+      "phone_seen": "262-667-6421",
+      "zip_seen": "53187",
+      "hours_seen": "Mon–Fri 8:00–18:00",
+      "checks": {
+        "name": false,
+        "phone": true,
+        "zip": false,
+        "hours": false,
+        "areas": null,
+        "site_link": true
+      },
+      "last_checked": "2026-11-01T06:00:00Z",
+      "note": "OS notes are ignored"
+    },
+    {
+      "id": "facebook.com",
+      "listed": true,
+      "nap_status": "correct",
+      "name_seen": "Oasis Pool and Spa",
+      "phone_seen": "262-667-6421",
+      "checks": {
+        "name": true,
+        "phone": true,
+        "zip": null,
+        "hours": true,
+        "areas": true,
+        "site_link": true
+      },
+      "last_checked": "2026-11-01T06:00:00Z"
+    },
+    {
+      "url": "https://www.porch.com/waukesha-wi/pool-contractors/oasis-pool-and-spa",
+      "name": "Porch",
+      "kind": "directory",
+      "listed": true,
+      "nap_status": "unknown",
+      "last_checked": "2026-11-01T06:00:00Z"
+    }
+  ],
+  "actor": {
+    "kind": "system",
+    "osUserId": "5c2b9a4e-1f3d-4e8a-9b7c-0d6e5f4a3b21",
+    "name": "Agency OS listing monitor"
+  }
+}

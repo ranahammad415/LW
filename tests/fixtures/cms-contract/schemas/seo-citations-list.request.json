@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/seo-citations-list.request.json",
+  "title": "seo-citations-list (v1.8.0)",
+  "description": "The site's citations (listings) with their NAP status. Signed, read-only, no idempotency key.",
+  "type": "object",
+  "properties": {},
+  "required": []
+}

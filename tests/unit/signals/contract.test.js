@@ -34,8 +34,8 @@ const batchEvent = () => ex('events.request--signals').events[0];
 const visit = () => structuredClone(batchEvent().data.events[0]);
 
 describe('contract revision and transport', () => {
-  it('claims 1.7.0, /events takes 1.5 MiB, the handshake keeps 1 MiB', () => {
-    expect(CONTRACT_REVISION).toBe('1.7.0');
+  it('claims 1.7.0 or later (1.8.0 since §39), /events takes 1.5 MiB, the handshake keeps 1 MiB', () => {
+    expect(CONTRACT_REVISION.localeCompare('1.7.0', undefined, { numeric: true })).toBeGreaterThanOrEqual(0);
     expect(MAX_EVENTS_ROUTE_BODY_BYTES).toBeGreaterThanOrEqual(1.5 * 1024 * 1024);
     expect(MAX_EVENTS_BODY_BYTES).toBe(1024 * 1024);
   });

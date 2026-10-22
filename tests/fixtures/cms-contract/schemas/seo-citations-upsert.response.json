@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/seo-citations-upsert.response.json",
+  "title": "seo-citations-upsert response (v1.8.0)",
+  "description": "rev = the revision after the write (unchanged when nothing changed). applied: one item per accepted listing (fields = the fields that changed, [] = no change); rejected: per listing; warnings: FIELD_OWNED_BY_SITE for site-owned fields that were ignored.",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
+    "rev": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "applied": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,99}$",
+            "description": "the directory's domain (yelp.com) or a slug of its name (poolpad)"
+          },
+          "created": {
+            "type": "boolean"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "id",
+          "created",
+          "fields"
+        ]
+      },
+      "maxItems": 50
+    },
+    "rejected": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "reason": {
+            "enum": [
+              "invalid",
+              "duplicate",
+              "too_many"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "id",
+          "reason"
+        ]
+      },
+      "maxItems": 50
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/warning"
+      },
+      "maxItems": 10
+    }
+  },
+  "required": [
+    "ok",
+    "rev",
+    "applied",
+    "rejected",
+    "warnings"
+  ]
+}

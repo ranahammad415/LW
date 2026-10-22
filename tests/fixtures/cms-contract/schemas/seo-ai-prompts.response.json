@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/seo-ai-prompts.response.json",
+  "title": "seo-ai-prompts response (v1.8.0)",
+  "description": "At most 500 prompts: the handoff's tracking prompts first, then every profile's answer-target questions, de-duplicated.",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
+    "prompts": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/seoAiPrompt"
+      },
+      "maxItems": 500
+    }
+  },
+  "required": [
+    "ok",
+    "prompts"
+  ]
+}

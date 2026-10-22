@@ -1604,6 +1604,14 @@
         "signals": {
           "type": "boolean",
           "description": "v1.7.0 (§38): first-party visit signals are ON (the site sends signals.batch / lead.attributed and lead.created.lead.attribution). The four signals-* routes are served whenever site-info.signals is present, so the OS can switch them on with signals-config-set. Key every signals view on this flag, never on the project type (WordPress sites never have it)"
+        },
+        "seoCitations": {
+          "type": "boolean",
+          "description": "v1.8.0 (§39): seo-citations-list / seo-citations-upsert and the seo.citation_changed events (emdash-seo API 1.3.0 citations is present)"
+        },
+        "seoAiPrompts": {
+          "type": "boolean",
+          "description": "v1.8.0 (§39): seo-ai-prompts, the AI-visibility prompt set (emdash-seo API 1.2.0 aiPrompts is present)"
         }
       },
       "required": [
@@ -4532,6 +4540,42 @@
             "properties": {
               "data": {
                 "$ref": "common.json#/$defs/signalsConfigChangedData"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "snapshotText"
+                  ]
+                },
+                {
+                  "required": [
+                    "lead"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "seo.citation_changed"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "common.json#/$defs/seoCitationChangedData"
               }
             },
             "not": {
@@ -8917,6 +8961,582 @@
         "config",
         "buffer"
       ]
+    },
+    "seoCitation": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,99}$",
+          "description": "the directory's domain (yelp.com) or a slug of its name (poolpad)"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "url": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/url",
+              "description": "the business's page on the directory (null until known)"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "kind": {
+          "enum": [
+            "directory",
+            "social",
+            "maps",
+            "review-site",
+            "industry-list"
+          ]
+        },
+        "listed": {
+          "type": "boolean"
+        },
+        "nap_status": {
+          "enum": [
+            "missing",
+            "wrong",
+            "correct",
+            "unknown"
+          ],
+          "description": "missing = not listed; wrong = name, phone, ZIP or hours differ from the canonical record; correct; unknown = not checked"
+        },
+        "name_seen": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phone_seen": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "zip_seen": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hours_seen": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "checks": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "phone": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "zip": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "hours": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "areas": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "site_link": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "phone",
+                "zip",
+                "hours",
+                "areas",
+                "site_link"
+              ],
+              "description": "one look at the listing: true = matches the canonical record, false = wrong, null = not checked"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_checked": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "checked_by": {
+          "enum": [
+            "human",
+            "os"
+          ]
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "a person's note (agency-only; render as text)"
+        },
+        "utm": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 300,
+              "description": "UTM query of the website link on the listing, without ?"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rank": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "description": "priority order of the plan (handoff 06 §5)"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "updated_at": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "url",
+        "kind",
+        "listed",
+        "nap_status",
+        "name_seen",
+        "phone_seen",
+        "zip_seen",
+        "hours_seen",
+        "checks",
+        "last_checked",
+        "checked_by",
+        "note",
+        "utm",
+        "rank",
+        "updated_at"
+      ],
+      "description": "v1.8.0 (§39.2): one listing of the business (every key present)"
+    },
+    "seoCitationUpsertItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]{0,99}$",
+          "description": "the directory's domain (yelp.com) or a slug of its name (poolpad)"
+        },
+        "listed": {
+          "type": "boolean"
+        },
+        "nap_status": {
+          "enum": [
+            "missing",
+            "wrong",
+            "correct",
+            "unknown"
+          ]
+        },
+        "name_seen": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phone_seen": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "zip_seen": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hours_seen": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "checks": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "phone": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "zip": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "hours": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "areas": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "site_link": {
+                  "anyOf": [
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "phone",
+                "zip",
+                "hours",
+                "areas",
+                "site_link"
+              ],
+              "description": "one look at the listing: true = matches the canonical record, false = wrong, null = not checked"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_checked": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "new listings only (ignored with FIELD_OWNED_BY_SITE on an existing one)"
+        },
+        "url": {
+          "$ref": "common.json#/$defs/url",
+          "description": "new listings only"
+        },
+        "kind": {
+          "enum": [
+            "directory",
+            "social",
+            "maps",
+            "review-site",
+            "industry-list"
+          ],
+          "description": "new listings only"
+        }
+      },
+      "required": [],
+      "description": "v1.8.0 (§39.3): the OS's monitoring result for one listing. id, or (a new listing) url / name to derive it",
+      "anyOf": [
+        {
+          "required": [
+            "id"
+          ]
+        },
+        {
+          "required": [
+            "url"
+          ]
+        },
+        {
+          "required": [
+            "name"
+          ]
+        }
+      ]
+    },
+    "seoCitationChange": {
+      "type": "object",
+      "properties": {
+        "field": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "from": {
+          "description": "any JSON value (string, number, boolean, object, null)"
+        },
+        "to": {
+          "description": "any JSON value (string, number, boolean, object, null)"
+        }
+      },
+      "required": [
+        "field",
+        "from",
+        "to"
+      ]
+    },
+    "seoCitationChangedData": {
+      "type": "object",
+      "properties": {
+        "rev": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "the citations list revision after the write (one rev per applied call; several events can share it)"
+        },
+        "at": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "source": {
+          "enum": [
+            "os",
+            "site-admin"
+          ]
+        },
+        "by": {
+          "$ref": "common.json#/$defs/siteActor"
+        },
+        "citation": {
+          "$ref": "common.json#/$defs/seoCitation"
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "$ref": "common.json#/$defs/seoCitationChange"
+          },
+          "minItems": 1,
+          "maxItems": 20
+        },
+        "osRequest": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "idempotencyKey": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "route"
+          ]
+        }
+      },
+      "required": [
+        "rev",
+        "at",
+        "source",
+        "by",
+        "citation",
+        "changes"
+      ],
+      "description": "v1.8.0 (§39.4): one per changed listing (OS writes included, with osRequest)"
+    },
+    "seoAiPrompt": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "town": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "service": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "page_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "common.json#/$defs/pageId"
+          },
+          "maxItems": 50
+        },
+        "branded": {
+          "type": "boolean"
+        },
+        "source": {
+          "enum": [
+            "handoff",
+            "answer_target"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "text",
+        "town",
+        "service",
+        "page_ids",
+        "branded",
+        "source"
+      ],
+      "description": "v1.8.0 (§39.5): a prompt the OS runs against answer engines (handoff 06 §6, or a profile's answer target)"
     }
   }
 }
