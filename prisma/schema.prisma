@@ -411,7 +411,16 @@ model ClientAccount {
   intakeStatus         String?           @db.VarChar(50)
   intakeData           Json?
   intakeCompletedAt    DateTime?
+  /// Health score v2 (docs/ledger/features/health-score.md): written only by lib/health/healthScoreService.js
+  /// (rollup of the per-project daily scores). null = not enough data yet.
   healthScore          Int?
+  healthCoverage       Int?
+  healthTrend28        Int?
+  healthComputedAt     DateTime?
+  /// Staff-only note on the client's health (OWNER / PM). Never sent to /api/client/*.
+  healthNote           String?           @db.VarChar(500)
+  healthNoteById       String?           @db.VarChar(191)
+  healthNoteAt         DateTime?
   isActive             Boolean           @default(true)
   analyticsGoogleEmail String?           @db.VarChar(255)
   internalNotes        String?           @db.LongText
@@ -441,6 +450,8 @@ model ClientAccount {
   workCycleSnapshots   WorkCycleAnalyticsSnapshot[]
   backlinkCartItems    BacklinkCartItem[]
   backlinkOrders       BacklinkOrder[]
+  healthDaily          ClientHealthDaily[]
+  healthAlertLogs      HealthAlertLog[]
 
   @@map("clientaccount")
 }
@@ -690,6 +701,9 @@ model Project {
   securityReports      SecurityMonthlyReport[]
   securityConfig       SecurityConfigMirror?
   securityConfigActions SecurityConfigAction[]
+  healthScores         HealthScoreDaily[]
+  keywordRanks         KeywordRankDaily[]
+  llmReferrals         LlmReferralDaily[]
 
   @@map("project")
 }
@@ -824,6 +838,7 @@ model KeywordTrack {
   project     Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   sitemapNode SitemapNode?     @relation(fields: [sitemapNodeId], references: [id], onDelete: SetNull)
   comments    KeywordComment[]
+  rankDaily   KeywordRankDaily[]
 
   @@map("keywordtrack")
 }
@@ -1919,6 +1934,114 @@ model SecurityConfigAction {
 
   @@index([projectId, createdAt])
   @@map("securityconfigaction")
+}
+
+// ── Health score v2 (docs/ledger/features/health-score.md, migration 20261105_health_score_v2) ──
+
+/// One health score per project per UTC day (lib/health/healthScoreService.js). score null = not enough data.
+model HealthScoreDaily {
+  id            String   @id @default(uuid())
+  projectId     String
+  /// YYYY-MM-DD UTC, same convention as SecurityDailyPoint.
+  date          String   @db.VarChar(10)
+  score         Int?
+  coverage      Int      @default(0)
+  /// SEO | LOCAL | AEO | WEBSITE
+  profile       String   @db.VarChar(16)
+  configVersion Int
+  pillars       Json
+  /// [{key,pillar,score,weight,raw:{cur,prev,yoy},parts:{trend,level},reason}]. Staff only: never sent to clients.
+  factors       Json
+  trend28       Int?
+  backfilled    Boolean  @default(false)
+  computedAt    DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, date])
+  @@index([date])
+  @@map("healthscoredaily")
+}
+
+/// Client rollup of the project scores, one per client per UTC day.
+model ClientHealthDaily {
+  id             String   @id @default(uuid())
+  clientId       String
+  date           String   @db.VarChar(10)
+  score          Int?
+  coverage       Int      @default(0)
+  pillars        Json
+  /// [{projectId, weight, score, coverage}]
+  projectWeights Json
+  configVersion  Int
+  trend28        Int?
+  computedAt     DateTime @default(now())
+
+  client ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@unique([clientId, date])
+  @@index([date])
+  @@map("clienthealthdaily")
+}
+
+/// Versioned scoring config (weights, gates, bands). Exactly one active row; OWNER edits create a new version.
+model HealthScoreConfig {
+  id          String   @id @default(uuid())
+  version     Int      @unique
+  config      Json
+  isActive    Boolean  @default(false)
+  note        String?  @db.VarChar(500)
+  createdById String?  @db.VarChar(191)
+  createdAt   DateTime @default(now())
+
+  @@map("healthscoreconfig")
+}
+
+/// Health alert dedupe per client and key (compare-and-set on sentAt, like SecurityAlertLog).
+model HealthAlertLog {
+  id       String   @id @default(uuid())
+  clientId String
+  alertKey String   @db.VarChar(191)
+  sentAt   DateTime
+  count    Int      @default(1)
+
+  client ClientAccount @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@unique([clientId, alertKey])
+  @@map("healthalertlog")
+}
+
+/// Daily rank history of a tracked keyword (written by the DataForSEO sync; KeywordTrack.currentRank stays the latest).
+model KeywordRankDaily {
+  id        String   @id @default(uuid())
+  keywordId String
+  projectId String
+  date      DateTime @db.Date
+  rank      Int
+  createdAt DateTime @default(now())
+
+  keyword KeywordTrack @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+  project Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([keywordId, date])
+  @@index([projectId, date])
+  @@map("keywordrankdaily")
+}
+
+/// Daily GA4 sessions referred by AI assistants (chatgpt | claude | gemini | perplexity | copilot | other).
+model LlmReferralDaily {
+  id        String   @id @default(uuid())
+  projectId String
+  date      DateTime @db.Date
+  platform  String   @db.VarChar(40)
+  sessions  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, date, platform])
+  @@index([projectId, date])
+  @@map("llmreferraldaily")
 }
 
 /// Owner-deleted pipeline ids. Sync and webhooks must not recreate these rows.
