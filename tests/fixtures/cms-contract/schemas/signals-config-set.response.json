@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/signals-config-set.response.json",
+  "title": "signals-config-set response (v1.7.0)",
+  "description": "config = the settings after the write (rev + 1 when anything changed). applied / rejected: one item per dotted field.",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
+    "config": {
+      "$ref": "common.json#/$defs/signalsConfig"
+    },
+    "applied": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "enabled",
+          "consentMode",
+          "events.engagement",
+          "events.cta_click",
+          "events.form_start",
+          "events.vitals",
+          "sampling.pageview",
+          "sampling.engagement",
+          "geoDetail",
+          "bufferDays"
+        ]
+      },
+      "maxItems": 10
+    },
+    "rejected": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "field": {
+            "enum": [
+              "enabled",
+              "consentMode",
+              "events.engagement",
+              "events.cta_click",
+              "events.form_start",
+              "events.vitals",
+              "sampling.pageview",
+              "sampling.engagement",
+              "geoDetail",
+              "bufferDays"
+            ]
+          },
+          "reason": {
+            "enum": [
+              "value_not_allowed",
+              "not_adjustable"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "field",
+          "reason"
+        ]
+      },
+      "maxItems": 10
+    }
+  },
+  "required": [
+    "ok",
+    "config",
+    "applied",
+    "rejected"
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "baseRev": 4,
+  "changes": {
+    "events": {
+      "engagement": false
+    },
+    "sampling": {
+      "pageview": 0.5
+    },
+    "bufferDays": 14
+  },
+  "actor": {
+    "kind": "human",
+    "osUserId": "0f1e2d3c-4b5a-4968-8776-655443322110",
+    "name": "Sam Owner",
+    "role": "OWNER"
+  }
+}

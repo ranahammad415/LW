@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "contract v1.6.0 §36.5: redactString(input) === output for strings; redact(input) deep-equals output for objects. Rules run in order (secrets, then PII, then home paths). The 8 KiB evidence bound is boundEvidence().",
+  "description": "contract v1.6.0 §36.5 (v1.7.0 §38.6 adds the visit-signal cases): redactString(input) === output for strings; redact(input) deep-equals output for objects. Rules run in order (secrets, then PII, then home paths). The 8 KiB evidence bound is boundEvidence().",
   "strings": [
     {
       "name": "email",
@@ -116,6 +116,46 @@
       "name": "kept: small numbers and sizes",
       "input": "17825792 bytes in 12 ms, score 91",
       "output": "17825792 bytes in 12 ms, score 91"
+    },
+    {
+      "name": "kept: signals ipPrefix (IPv4 /24 as three octets)",
+      "input": "203.0.113",
+      "output": "203.0.113"
+    },
+    {
+      "name": "kept: signals ipPrefix (IPv6 /48 as three hextets)",
+      "input": "2001:db8:85a3",
+      "output": "2001:db8:85a3"
+    },
+    {
+      "name": "kept: signals ipHash (16 hex)",
+      "input": "9f3a0c71d41d8cd9",
+      "output": "9f3a0c71d41d8cd9"
+    },
+    {
+      "name": "kept: signals ids and local time",
+      "input": "s_01JB3Q7Z9F8K2M4N6P8R0T2V00 v_01JB2R1S3T5V7X9Z1B3D5F7H9K 2026-10-22T09:03:11",
+      "output": "s_01JB3Q7Z9F8K2M4N6P8R0T2V00 v_01JB2R1S3T5V7X9Z1B3D5F7H9K 2026-10-22T09:03:11"
+    },
+    {
+      "name": "signals: a /24 written as CIDR is not the prefix form",
+      "input": "203.0.113.0/24",
+      "output": "[ip]/24"
+    },
+    {
+      "name": "signals: dotted quad in a page title",
+      "input": "Pool controller at 192.168.1.20 offline | Oasis",
+      "output": "Pool controller at [ip] offline | Oasis"
+    },
+    {
+      "name": "signals: e-mail inside utm_content",
+      "input": "spring-promo bob.smith@example.com",
+      "output": "spring-promo [email]"
+    },
+    {
+      "name": "signals: phone number in a page title",
+      "input": "Call 262-555-0100 today | Oasis Pool and Spa",
+      "output": "Call [phone] today | Oasis Pool and Spa"
     }
   ],
   "objects": [
@@ -171,6 +211,51 @@
         "ok": true,
         "none": null,
         "ratio": 0.25
+      }
+    },
+    {
+      "name": "v1.7.0 signals: network passes (ipHash / ipPrefix are not secret keys), an e-mail in utm.content does not",
+      "input": {
+        "network": {
+          "ipHash": "9f3a0c71d41d8cd9",
+          "ipPrefix": "203.0.113",
+          "country": "US",
+          "region": "WI",
+          "city": "Waukesha",
+          "asn": null,
+          "cfRay": "8d3f1a2b3c4d5e6f-ORD"
+        },
+        "utm": {
+          "source": "newsletter",
+          "content": "bob@example.com"
+        },
+        "page": {
+          "title": "Spa Services | Oasis Pool and Spa",
+          "query": {
+            "utm_content": "call 414-555-0123"
+          }
+        }
+      },
+      "output": {
+        "network": {
+          "ipHash": "9f3a0c71d41d8cd9",
+          "ipPrefix": "203.0.113",
+          "country": "US",
+          "region": "WI",
+          "city": "Waukesha",
+          "asn": null,
+          "cfRay": "8d3f1a2b3c4d5e6f-ORD"
+        },
+        "utm": {
+          "source": "newsletter",
+          "content": "[email]"
+        },
+        "page": {
+          "title": "Spa Services | Oasis Pool and Spa",
+          "query": {
+            "utm_content": "call [phone]"
+          }
+        }
       }
     }
   ],

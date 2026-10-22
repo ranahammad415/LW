@@ -1665,6 +1665,8 @@ model CmsLead {
 
   project Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
   photos  CmsLeadPhoto[]
+  /// v1.7.0 §38.5: lead attribution (erased with the lead).
+  attribution LeadAttribution?
 
   @@unique([projectId, leadId])
   @@index([projectId, receivedAt])
@@ -3720,4 +3722,276 @@ model UptimeDaily {
   @@unique([projectId, date])
   @@index([date])
   @@map("uptimedaily")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// First-party visit signals and lead attribution (EmDash contract v1.7.0 §38, plan
+// docs/analytics/first-party-attribution-plan.md §5; ledger features/signals-attribution.md). EmDash-only, keyed on
+// capabilities.signals. No foreign key to Project on these tables (rows of a deleted project are swept by the
+// nightly signals.retention job). SignalEvent.id (BIGINT) is internal only: never select it into a response, export
+// or log line (JSON.stringify cannot serialise BigInt); the external key is (projectId, eventId).
+
+/// One stored signal (signals.batch inner event). Indexed scalars + `payload` = the redacted envelope MINUS the scalars.
+/// Retention: payload 90 days, then compacted (payload NULL, payloadCompactedAt set); scalars 13 months (compacted
+/// pageview / engagement / vitals rows may be deleted earlier, the session holds them). botScore = capture time; never
+/// rewritten (the authoritative score is SignalSession.botScore).
+model SignalEvent {
+  id                 BigInt    @id @default(autoincrement())
+  projectId          String
+  eventId            String    @db.Char(26)
+  type               String    @db.VarChar(16)
+  at                 DateTime  @db.DateTime(3)
+  sessionId          String    @db.VarChar(28)
+  visitorId          String?   @db.VarChar(28)
+  refClass           String    @db.VarChar(10)
+  refSource          String?   @db.VarChar(64)
+  country            String?   @db.VarChar(2)
+  pagePath           String    @db.VarChar(2048)
+  /// The SITE's lead id (lead.leadId), not CmsLead.id.
+  leadId             String?   @db.VarChar(64)
+  botScore           Int       @default(0) @db.SmallInt
+  /// null = not sessionized; a date before 1990 = claimed by a sessionizer run (now − 100 years); else confirmed.
+  sessionizedAt      DateTime? @db.DateTime(3)
+  payloadCompactedAt DateTime? @db.DateTime(3)
+  payload            Json?
+  createdAt          DateTime  @default(now()) @db.DateTime(3)
+
+  @@unique([projectId, eventId])
+  @@index([projectId, at])
+  @@index([projectId, sessionId])
+  @@index([projectId, visitorId, at])
+  @@index([projectId, type, at])
+  @@index([projectId, leadId])
+  @@index([projectId, sessionizedAt])
+  @@index([sessionizedAt, at])
+  @@index([payloadCompactedAt, at])
+  @@map("signalevent")
+}
+
+/// One visit session (built by the leader-only sessionizer from SignalEvent). botScore is authoritative:
+/// max(capture-time score, nightly re-score). Retention 25 months.
+model SignalSession {
+  id              String   @id @default(uuid())
+  projectId       String
+  sessionId       String   @db.VarChar(28)
+  visitorId       String?  @db.VarChar(28)
+  startedAt       DateTime @db.DateTime(3)
+  endedAt         DateTime @db.DateTime(3)
+  landingPath     String   @db.VarChar(2048)
+  exitPath        String?  @db.VarChar(2048)
+  pageviews       Int      @default(0)
+  engagedSec      Int      @default(0)
+  engaged         Boolean  @default(false)
+  ctaClicks       Int      @default(0)
+  formStarts      Int      @default(0)
+  refClass        String   @db.VarChar(10)
+  refSource       String?  @db.VarChar(64)
+  utmCampaign     String?  @db.VarChar(200)
+  formFactor      String?  @db.VarChar(10)
+  uaFamily        String?  @db.VarChar(20)
+  country         String?  @db.VarChar(2)
+  region          String?  @db.VarChar(8)
+  /// Admin-only (never in a client response).
+  city            String?  @db.VarChar(80)
+  tz              String?  @db.VarChar(64)
+  localHour       Int?     @db.SmallInt
+  /// Network prefix bucket for the nightly bot job (copied while the payload exists; never an IP).
+  ipPrefix        String?  @db.VarChar(20)
+  captureBotScore Int      @default(0) @db.SmallInt
+  rescoreBotScore Int?     @db.SmallInt
+  botScore        Int      @default(0) @db.SmallInt
+  botReasons      Json?
+  isNewVisitor    Boolean  @default(false)
+  sessionOnly     Boolean  @default(false)
+  /// The SITE's lead id of a lead_submitted in this session.
+  leadId          String?  @db.VarChar(64)
+  /// The session's touch { at, class, source, campaign, medium, landing }.
+  touch           Json?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @default(now()) @updatedAt
+
+  @@unique([projectId, sessionId])
+  @@index([projectId, startedAt])
+  @@index([projectId, visitorId, startedAt])
+  @@index([projectId, refClass, startedAt])
+  @@index([projectId, leadId])
+  @@map("signalsession")
+}
+
+/// Lead attribution, keyed on our CmsLead (one per lead; deleted in the same transaction as the lead's erasure).
+/// siteSnapshot = the site's leadAttribution (lead.created.attribution / lead.attributed; first write wins per field);
+/// firstTouch / lastTouch / pathSummary = OS-derived (signals.attribute: last non-direct click within 30 days).
+model LeadAttribution {
+  id                  String    @id @default(uuid())
+  projectId           String
+  leadRowId           String    @unique
+  /// The SITE's lead id (CmsLead.leadId).
+  siteLeadId          String    @db.VarChar(64)
+  leadAt              DateTime
+  visitorId           String?   @db.VarChar(28)
+  sessionId           String?   @db.VarChar(28)
+  /// site-snapshot | cookie-only | os-derived (the effective model)
+  model               String    @db.VarChar(16)
+  siteSnapshot        Json?
+  sitePath            Json?
+  firstTouch          Json?
+  lastTouch           Json?
+  /// Effective last touch (derived, else the site snapshot): what the rollups count the lead under.
+  lastClass           String    @default("unknown") @db.VarChar(10)
+  lastSource          String    @default("") @db.VarChar(64)
+  landingPath         String?   @db.VarChar(2048)
+  formId              String?   @db.VarChar(40)
+  placement           String?   @db.VarChar(40)
+  heardFrom           String?   @db.VarChar(100)
+  country             String?   @db.VarChar(2)
+  region              String?   @db.VarChar(8)
+  formFactor          String?   @db.VarChar(10)
+  pathSummary         Json?
+  sessionsBeforeLead  Int?
+  pageviewsBeforeLead Int?
+  timeToLeadSec       Int?
+  sessionToLeadSec    Int?
+  mismatch            Boolean   @default(false)
+  needsDerive         Boolean   @default(true)
+  derivedAt           DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @default(now()) @updatedAt
+
+  lead CmsLead @relation(fields: [leadRowId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, siteLeadId])
+  @@index([projectId, createdAt])
+  @@index([projectId, visitorId])
+  @@index([projectId, leadAt])
+  @@index([needsDerive])
+  @@map("leadattribution")
+}
+
+/// Accountability record of a signals erasure (holds a hash, never the id). `pendingSubject` keeps the visitor id
+/// ONLY while the site-side signals-erase is still owed (cleared once the site acknowledged or retries ran out).
+model SignalErasure {
+  id               String    @id @default(uuid())
+  projectId        String
+  /// visitorId | leadId
+  kind             String    @db.VarChar(16)
+  subjectHash      String    @db.Char(64)
+  reason           String?   @db.VarChar(32)
+  /// os (an OS erasure) | site (signals.erased from the site)
+  origin           String    @default("os") @db.VarChar(8)
+  rowsEvents       Int       @default(0)
+  rowsSessions     Int       @default(0)
+  rowsAttributions Int       @default(0)
+  at               DateTime  @default(now())
+  actor            Json?
+  /// pending | done | failed | none
+  siteState        String    @default("none") @db.VarChar(16)
+  siteAttempts     Int       @default(0)
+  siteNextAt       DateTime?
+  siteLastError    String?   @db.VarChar(40)
+  siteRows         Int?
+  pendingSubject   String?   @db.VarChar(28)
+
+  @@index([projectId, at])
+  @@index([siteState, siteNextAt])
+  @@map("signalerasure")
+}
+
+/// Ingest counters per project per UTC day (+ the last signals-summary). Retention 400 days.
+model SignalIngestStat {
+  id              String    @id @default(uuid())
+  projectId       String
+  date            DateTime  @db.Date
+  batches         Int       @default(0)
+  events          Int       @default(0)
+  innerDuplicates Int       @default(0)
+  rejectedInvalid Int       @default(0)
+  clamped         Int       @default(0)
+  botEvents       Int       @default(0)
+  siteSummary     Json?
+  siteSummaryAt   DateTime?
+  updatedAt       DateTime  @default(now()) @updatedAt
+
+  @@unique([projectId, date])
+  @@map("signalingeststat")
+}
+
+/// Daily rollup by referrer class / source (bots ≥ 70 excluded). `visitors` is distinct per day only: never sum it
+/// across days or sources (range visitors come from SignalSession). Retention 3 years.
+model SignalDailyBySource {
+  id              String   @id @default(uuid())
+  projectId       String
+  date            DateTime @db.Date
+  refClass        String   @db.VarChar(10)
+  refSource       String   @default("") @db.VarChar(64)
+  sessions        Int      @default(0)
+  visitors        Int      @default(0)
+  newVisitors     Int      @default(0)
+  pageviews       Int      @default(0)
+  engagedSessions Int      @default(0)
+  ctaClicks       Int      @default(0)
+  formStarts      Int      @default(0)
+  leads           Int      @default(0)
+  botSessions     Int      @default(0)
+
+  @@unique([projectId, date, refClass, refSource])
+  @@index([projectId, date])
+  @@map("signaldailybysource")
+}
+
+/// Daily rollup by landing page and class. Retention 3 years.
+model SignalDailyByLanding {
+  id              String   @id @default(uuid())
+  projectId       String
+  date            DateTime @db.Date
+  landingPath     String   @db.VarChar(512)
+  refClass        String   @db.VarChar(10)
+  sessions        Int      @default(0)
+  leads           Int      @default(0)
+  engagedSessions Int      @default(0)
+
+  @@unique([projectId, date, landingPath, refClass])
+  @@index([projectId, date])
+  @@map("signaldailybylanding")
+}
+
+/// Daily rollup by country / region / form factor (no city). Retention 3 years.
+model SignalDailyByGeoDevice {
+  id         String   @id @default(uuid())
+  projectId  String
+  date       DateTime @db.Date
+  country    String   @default("") @db.VarChar(2)
+  region     String   @default("") @db.VarChar(8)
+  formFactor String   @default("other") @db.VarChar(10)
+  sessions   Int      @default(0)
+  leads      Int      @default(0)
+
+  @@unique([projectId, date, country, region, formFactor])
+  @@index([projectId, date])
+  @@map("signaldailybygeodevice")
+}
+
+/// Per-project dirty-date set: days the sessionizer / attribution touched; the nightly rollup recomputes exactly these.
+model SignalRollupDirty {
+  id        String   @id @default(uuid())
+  projectId String
+  date      DateTime @db.Date
+  createdAt DateTime @default(now())
+
+  @@unique([projectId, date])
+  @@map("signalrollupdirty")
+}
+
+/// Mirror of the site's signalsConfig (site-info.signals / signals-config-get / signals.config_changed) and buffer
+/// counts. The row exists only for sites that have the signals module (site-info.signals present).
+model SignalConfigMirror {
+  id        String    @id @default(uuid())
+  projectId String    @unique
+  rev       Int?
+  config    Json?
+  buffer    Json?
+  stale     Boolean   @default(false)
+  fetchedAt DateTime?
+  updatedAt DateTime  @default(now()) @updatedAt
+
+  @@map("signalconfigmirror")
 }

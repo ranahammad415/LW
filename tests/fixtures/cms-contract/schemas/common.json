@@ -1600,6 +1600,10 @@
         "securityConfig": {
           "type": "boolean",
           "description": "v1.6.1 (§37): security-config-get / security-config-set / security-run / security-ack and the security.config_changed / security.acknowledged events (site-sentinel's API has the config methods)"
+        },
+        "signals": {
+          "type": "boolean",
+          "description": "v1.7.0 (§38): first-party visit signals are ON (the site sends signals.batch / lead.attributed and lead.created.lead.attribution). The four signals-* routes are served whenever site-info.signals is present, so the OS can switch them on with signals-config-set. Key every signals view on this flag, never on the project type (WordPress sites never have it)"
         }
       },
       "required": [
@@ -2683,6 +2687,10 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 365
+        },
+        "attribution": {
+          "$ref": "common.json#/$defs/leadAttribution",
+          "description": "v1.7.0 (§38.5), optional: the site's attribution snapshot (no PII: ids, classes, paths, times). Absent when the visitor's browser sent no visit signals"
         }
       },
       "required": [
@@ -3065,6 +3073,10 @@
         "serviceToken": {
           "$ref": "common.json#/$defs/serviceTokenState",
           "description": "v1.5.5 (§31.1, e2e O25): same value as site-info.serviceToken, so a heartbeat refreshes it instead of clearing it. Absent from sites below 1.5.5: keep the last known value"
+        },
+        "signals": {
+          "$ref": "common.json#/$defs/signalsSiteInfo",
+          "description": "v1.7.0 (§38.1): present when the site has the signals module (enabled or not): its settings and buffer counts"
         }
       },
       "required": [
@@ -4398,6 +4410,150 @@
           "if": {
             "properties": {
               "type": {
+                "const": "signals.batch"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "common.json#/$defs/signalsBatchData"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "snapshotText"
+                  ]
+                },
+                {
+                  "required": [
+                    "lead"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "lead.attributed"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "common.json#/$defs/leadAttributedData"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "snapshotText"
+                  ]
+                },
+                {
+                  "required": [
+                    "lead"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "signals.erased"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "common.json#/$defs/signalsErasedData"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "snapshotText"
+                  ]
+                },
+                {
+                  "required": [
+                    "lead"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "signals.config_changed"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "common.json#/$defs/signalsConfigChangedData"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "snapshotText"
+                  ]
+                },
+                {
+                  "required": [
+                    "lead"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
                 "pattern": "^content\\."
               }
             }
@@ -4759,8 +4915,10 @@
             "ok",
             "warn",
             "fail",
-            "unknown"
-          ]
+            "unknown",
+            "n/a"
+          ],
+          "description": "ok | warn | fail | unknown, or n/a (v1.7.0 errata §38.9): the feature is switched off by configuration; not scored"
         },
         "reason": {
           "anyOf": [
@@ -4771,9 +4929,10 @@
                 "stale",
                 "error",
                 "no_data",
-                "not_instrumented"
+                "not_instrumented",
+                "disabled"
               ],
-              "description": "why the state is unknown (absent / null otherwise)"
+              "description": "why the state is unknown or n/a (absent / null otherwise; n/a: disabled | not_configured)"
             },
             {
               "type": "null"
@@ -5392,6 +5551,11 @@
                 "unknown": {
                   "type": "integer",
                   "minimum": 0
+                },
+                "na": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "v1.7.0 errata (§38.9): checks that are n/a (present only when > 0)"
                 }
               },
               "required": [
@@ -5646,8 +5810,10 @@
                       "ok",
                       "warn",
                       "fail",
-                      "unknown"
-                    ]
+                      "unknown",
+                      "n/a"
+                    ],
+                    "description": "ok | warn | fail | unknown, or n/a (v1.7.0 errata §38.9): the feature is switched off by configuration; not scored"
                   },
                   {
                     "type": "null"
@@ -5659,8 +5825,10 @@
                   "ok",
                   "warn",
                   "fail",
-                  "unknown"
-                ]
+                  "unknown",
+                  "n/a"
+                ],
+                "description": "ok | warn | fail | unknown, or n/a (v1.7.0 errata §38.9): the feature is switched off by configuration; not scored"
               },
               "at": {
                 "$ref": "common.json#/$defs/dateTime"
@@ -5777,6 +5945,11 @@
             "unknown": {
               "type": "integer",
               "minimum": 0
+            },
+            "na": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "v1.7.0 errata (§38.9): checks that are n/a (present only when > 0)"
             }
           },
           "required": [
@@ -6888,6 +7061,1861 @@
         "by",
         "source",
         "rev"
+      ]
+    },
+    "signalTouch": {
+      "type": "object",
+      "properties": {
+        "at": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "class": {
+          "enum": [
+            "ai",
+            "search",
+            "social",
+            "referral",
+            "direct",
+            "email",
+            "ads",
+            "internal",
+            "unknown"
+          ],
+          "description": "STABLE enum (never renamed or removed within contract 1)"
+        },
+        "source": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._-]*$",
+          "maxLength": 64,
+          "description": "free-form per referrer table version (chatgpt, google, yelp.com, …)"
+        },
+        "campaign": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "medium": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 200
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "landing": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^/",
+              "maxLength": 2048
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "at",
+        "class",
+        "source",
+        "campaign",
+        "medium",
+        "landing"
+      ],
+      "description": "v1.7.0 (§38.5): one touch (a session's source). internal is never a touch: a session that starts from the site itself counts as direct / none"
+    },
+    "leadAttribution": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "enum": [
+            "site-snapshot",
+            "cookie-only",
+            "os-derived"
+          ],
+          "description": "site-snapshot = from the site's buffered session rows; cookie-only = from the visitor's cookies only (signals API not ready, rows gone); os-derived = the OS's own"
+        },
+        "firstTouch": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/signalTouch"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "lastTouch": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/signalTouch"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sessionId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^s_[0-9A-HJKMNP-TV-Z]{26}$",
+              "description": "server-minted session id (cookie _oa_sid, 30 min rolling)"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "visitorId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^v_[0-9A-HJKMNP-TV-Z]{26}$",
+              "description": "server-minted visitor id (cookie _oa_vid, 13 months rolling); null in session-only mode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "landing": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^/",
+              "maxLength": 2048,
+              "description": "landing page of the lead's session"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "formId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 40
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "placement": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 40
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "model",
+        "firstTouch",
+        "lastTouch",
+        "sessionId",
+        "visitorId",
+        "landing",
+        "formId",
+        "placement"
+      ],
+      "description": "v1.7.0 (§38.5): where a lead came from. No PII (ids, classes, paths, times)"
+    },
+    "signalEvent": {
+      "type": "object",
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "siteId": {
+          "$ref": "common.json#/$defs/siteId"
+        },
+        "eventId": {
+          "type": "string",
+          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+          "description": "ULID (Crockford base32), minted by the site server (the browser never mints ids)"
+        },
+        "type": {
+          "enum": [
+            "visit",
+            "pageview",
+            "engagement",
+            "cta_click",
+            "form_start",
+            "vitals",
+            "lead_submitted",
+            "lead_attributed"
+          ]
+        },
+        "sessionId": {
+          "type": "string",
+          "pattern": "^s_[0-9A-HJKMNP-TV-Z]{26}$",
+          "description": "server-minted session id (cookie _oa_sid, 30 min rolling)"
+        },
+        "visitorId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^v_[0-9A-HJKMNP-TV-Z]{26}$",
+              "description": "server-minted visitor id (cookie _oa_vid, 13 months rolling); null in session-only mode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ts": {
+          "$ref": "common.json#/$defs/dateTime",
+          "description": "server UTC clock (the browser clock is not trusted)"
+        },
+        "tsLocal": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}$",
+              "description": "the visitor's wall-clock time without offset (derived by the site server from tz and its own clock)"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tzOffset": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -840,
+              "maximum": 840,
+              "description": "local minus UTC in minutes at ts in tz (ISO sign: Chicago in CDT = -300)"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tz": {
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 64,
+              "description": "IANA zone (Intl resolvedOptions().timeZone)"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "page": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "pattern": "^/",
+                  "maxLength": 2048
+                },
+                "title": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 200,
+                      "description": "redacted (an e-mail / phone in a title becomes [email] / [phone])"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "canonical": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 2048
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "query": {
+                  "type": "object",
+                  "properties": {
+                    "utm_source": {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    "utm_medium": {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    "utm_campaign": {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    "utm_term": {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    "utm_content": {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    "gclid": {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    "gbraid": {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    "wbraid": {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    "fbclid": {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    "msclkid": {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    "ttclid": {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    "srsltid": {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    "ref": {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    "page": {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    "s": {
+                      "type": "string",
+                      "maxLength": 200
+                    }
+                  },
+                  "required": [],
+                  "additionalProperties": false,
+                  "description": "allow-listed query parameters only (SIGNAL_QUERY_KEYS); everything else is dropped at capture"
+                }
+              },
+              "required": [
+                "path",
+                "title",
+                "canonical",
+                "query"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "referrer": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "url": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 512,
+                      "description": "query dropped except the allow-list; redacted"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "host": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 253
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "class": {
+                  "enum": [
+                    "ai",
+                    "search",
+                    "social",
+                    "referral",
+                    "direct",
+                    "email",
+                    "ads",
+                    "internal",
+                    "unknown"
+                  ],
+                  "description": "STABLE enum (never renamed or removed within contract 1)"
+                },
+                "source": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9._-]*$",
+                      "maxLength": 64,
+                      "description": "free-form per referrer table version (chatgpt, google, yelp.com, …)"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "table": {
+                  "type": "string",
+                  "pattern": "^\\d+\\.\\d+\\.\\d+$",
+                  "description": "referrers.mjs table version used at capture"
+                }
+              },
+              "required": [
+                "url",
+                "host",
+                "class",
+                "source",
+                "table"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "utm": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "medium": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "campaign": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "term": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "content": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "source",
+                "medium",
+                "campaign",
+                "term",
+                "content"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "clickIds": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "gclid": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "gbraid": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "wbraid": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "fbclid": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "msclkid": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "ttclid": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "gclid",
+                "gbraid",
+                "wbraid",
+                "fbclid",
+                "msclkid",
+                "ttclid"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attribution": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "firstTouch": {
+                  "anyOf": [
+                    {
+                      "$ref": "common.json#/$defs/signalTouch"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "lastTouch": {
+                  "anyOf": [
+                    {
+                      "$ref": "common.json#/$defs/signalTouch"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "model": {
+                  "enum": [
+                    "site-snapshot",
+                    "cookie-only",
+                    "os-derived"
+                  ]
+                }
+              },
+              "required": [
+                "firstTouch",
+                "lastTouch",
+                "model"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "device": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "ua": {
+                  "enum": [
+                    "chrome-desktop",
+                    "chrome-mobile",
+                    "safari-desktop",
+                    "safari-mobile",
+                    "firefox-desktop",
+                    "firefox-mobile",
+                    "edge-desktop",
+                    "edge-mobile",
+                    "samsung-mobile",
+                    "opera",
+                    "in-app-facebook",
+                    "in-app-instagram",
+                    "in-app-other",
+                    "bot",
+                    "other"
+                  ],
+                  "description": "browser family bucket, never the raw User-Agent"
+                },
+                "os": {
+                  "enum": [
+                    "ios",
+                    "android",
+                    "windows",
+                    "macos",
+                    "linux",
+                    "chromeos",
+                    "other"
+                  ]
+                },
+                "formFactor": {
+                  "enum": [
+                    "phone",
+                    "tablet",
+                    "desktop",
+                    "other"
+                  ]
+                },
+                "viewport": {
+                  "anyOf": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 20000
+                      },
+                      "minItems": 2,
+                      "maxItems": 2
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "language": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 16
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "ua",
+                "os",
+                "formFactor",
+                "viewport",
+                "language"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "network": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "ipHash": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{16}$",
+                      "description": "HMAC-SHA256(daily salt, ip)[0:16]: unlinkable across days; null in session-only mode"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "ipPrefix": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 20,
+                      "pattern": "^(?:\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}|[0-9a-f]{1,4}:[0-9a-f]{1,4}:[0-9a-f]{1,4})$",
+                      "description": "IPv4 /24 as three octets (203.0.113) or IPv6 /48 as three hextets (2001:db8:85a3); never CIDR (the redaction pass would rewrite it)"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "country": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^[A-Z]{2}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "region": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9-]{1,8}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "city": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 80
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "asn": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 4294967295
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "cfRay": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^[A-Za-z0-9-]{1,40}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "ipHash",
+                "ipPrefix",
+                "country",
+                "region",
+                "city",
+                "asn",
+                "cfRay"
+              ],
+              "description": "never a raw IP"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "consent": {
+          "type": "object",
+          "properties": {
+            "analytics": {
+              "type": "boolean"
+            },
+            "source": {
+              "enum": [
+                "default-us",
+                "optout-link",
+                "gpc",
+                "config-optin"
+              ]
+            }
+          },
+          "required": [
+            "analytics",
+            "source"
+          ],
+          "description": "analytics false = session-only mode (no visitorId, no first-touch cookie, ipHash null)"
+        },
+        "bot": {
+          "type": "object",
+          "properties": {
+            "score": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "reason": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "ua_bot",
+                  "webdriver",
+                  "no_accept_language",
+                  "rate",
+                  "verified_bot",
+                  "headless",
+                  "no_cookie"
+                ]
+              },
+              "maxItems": 8,
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "score",
+            "reason"
+          ],
+          "description": "capture-time score; rows with score >= 70 are stored but left out of aggregates"
+        },
+        "lead": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "leadId": {
+                  "anyOf": [
+                    {
+                      "$ref": "common.json#/$defs/id"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "formId": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 40
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "placement": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 40
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "leadId",
+                "formId",
+                "placement"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "engagement": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "scrollPct": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                "visibleSec": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 86400
+                }
+              },
+              "required": [
+                "scrollPct",
+                "visibleSec"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cta": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "phone",
+                    "email",
+                    "directions",
+                    "quote",
+                    "other"
+                  ]
+                },
+                "placement": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 40
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "href": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 512,
+                      "description": "tel: → redacted:tel, mailto: → redacted:mailto, internal links keep the path, external links the origin"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "placement",
+                "href"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "vitals": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "lcpMs": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 600000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "inpMs": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 600000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "cls": {
+                  "anyOf": [
+                    {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 100
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "lcpMs",
+                "inpMs",
+                "cls"
+              ],
+              "description": "site addition: Core Web Vitals of the page view (rounded: ms integers, CLS to 3 decimals)"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "pagesBefore": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "pattern": "^/",
+                        "maxLength": 2048
+                      },
+                      "at": {
+                        "$ref": "common.json#/$defs/dateTime"
+                      }
+                    },
+                    "required": [
+                      "path",
+                      "at"
+                    ]
+                  },
+                  "maxItems": 20
+                },
+                "sessionsBefore": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "timeToLeadSec": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "sessionToLeadSec": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "pagesBefore",
+                "sessionsBefore",
+                "timeToLeadSec",
+                "sessionToLeadSec"
+              ],
+              "description": "lead_attributed only"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "collector": {
+          "type": "object",
+          "properties": {
+            "js": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^\\d+\\.\\d+\\.\\d+$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "server": {
+              "type": "string",
+              "pattern": "^\\d+\\.\\d+\\.\\d+$"
+            }
+          },
+          "required": [
+            "js",
+            "server"
+          ]
+        }
+      },
+      "required": [
+        "v",
+        "siteId",
+        "eventId",
+        "type",
+        "sessionId",
+        "visitorId",
+        "ts",
+        "tsLocal",
+        "tzOffset",
+        "tz",
+        "page",
+        "referrer",
+        "utm",
+        "clickIds",
+        "attribution",
+        "device",
+        "network",
+        "consent",
+        "bot",
+        "lead",
+        "engagement",
+        "cta",
+        "vitals",
+        "path",
+        "collector"
+      ],
+      "description": "v1.7.0 (§38.2): one visit signal. Every key is present (null = unknown) to keep the OS schema simple",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "visit"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "page": {
+                "type": "object"
+              },
+              "referrer": {
+                "type": "object"
+              },
+              "utm": {
+                "type": "object"
+              },
+              "clickIds": {
+                "type": "object"
+              },
+              "attribution": {
+                "type": "object"
+              },
+              "device": {
+                "type": "object"
+              },
+              "network": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "pageview"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "page": {
+                "type": "object"
+              },
+              "referrer": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "engagement"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "page": {
+                "type": "object"
+              },
+              "engagement": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "cta_click"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "page": {
+                "type": "object"
+              },
+              "cta": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "form_start"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "page": {
+                "type": "object"
+              },
+              "lead": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "vitals"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "page": {
+                "type": "object"
+              },
+              "vitals": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "lead_submitted",
+                  "lead_attributed"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "lead": {
+                "type": "object",
+                "properties": {
+                  "leadId": {
+                    "$ref": "common.json#/$defs/id"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "lead_attributed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "attribution": {
+                "type": "object"
+              },
+              "path": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "consent": {
+                "properties": {
+                  "analytics": {
+                    "const": false
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "visitorId": {
+                "type": "null"
+              },
+              "network": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "properties": {
+                      "ipHash": {
+                        "type": "null"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "signalsBatchData": {
+      "type": "object",
+      "properties": {
+        "batchId": {
+          "type": "string",
+          "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$",
+          "description": "ULID (Crockford base32), minted by the site server (the browser never mints ids)"
+        },
+        "table": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "description": "referrers.mjs table version of the site"
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "= events.length (the count at packing time when compacted)"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "common.json#/$defs/signalEvent"
+          },
+          "maxItems": 100
+        },
+        "compacted": {
+          "type": "boolean",
+          "description": "the site's stored copy of a delivered batch drops its events after 7 days (events-replay then returns events: [])"
+        }
+      },
+      "required": [
+        "batchId",
+        "table",
+        "count",
+        "events"
+      ],
+      "description": "v1.7.0 (§38.4): <= 100 signals and <= 262144 bytes of UTF-8 JSON. Inner eventIds are unique: the OS ignores inner duplicates"
+    },
+    "leadAttributedData": {
+      "type": "object",
+      "properties": {
+        "leadId": {
+          "$ref": "common.json#/$defs/id"
+        },
+        "attribution": {
+          "$ref": "common.json#/$defs/leadAttribution"
+        },
+        "path": {
+          "type": "object",
+          "properties": {
+            "pagesBefore": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "pattern": "^/",
+                    "maxLength": 2048
+                  },
+                  "at": {
+                    "$ref": "common.json#/$defs/dateTime"
+                  }
+                },
+                "required": [
+                  "path",
+                  "at"
+                ]
+              },
+              "maxItems": 20
+            },
+            "sessionsBefore": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "timeToLeadSec": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "sessionToLeadSec": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "pagesBefore",
+            "sessionsBefore",
+            "timeToLeadSec",
+            "sessionToLeadSec"
+          ]
+        }
+      },
+      "required": [
+        "leadId",
+        "attribution",
+        "path"
+      ],
+      "description": "v1.7.0 (§38.5): after lead.created (and when the attribution becomes known later); the OS upserts LeadAttribution.siteSnapshot"
+    },
+    "signalsErasedData": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "visitorId",
+            "leadId"
+          ]
+        },
+        "subjectHash": {
+          "$ref": "common.json#/$defs/sha256",
+          "description": "sha256 hex of the id (never the id)"
+        },
+        "rows": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reason": {
+          "enum": [
+            "subject_request",
+            "retention",
+            "other",
+            "visitor_reset"
+          ]
+        },
+        "at": {
+          "$ref": "common.json#/$defs/dateTime"
+        }
+      },
+      "required": [
+        "kind",
+        "subjectHash",
+        "rows"
+      ],
+      "description": "v1.7.0 (§38.7): after signals-erase or the privacy page \"Reset my id\" (reason visitor_reset)"
+    },
+    "signalsConfig": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "rev": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "compare-and-set token: signals-config-set baseRev must equal it; +1 per applied write"
+        },
+        "generatedAt": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "consentMode": {
+          "enum": [
+            "default-on-us",
+            "optin"
+          ]
+        },
+        "events": {
+          "type": "object",
+          "properties": {
+            "visit": {
+              "const": true
+            },
+            "pageview": {
+              "const": true
+            },
+            "engagement": {
+              "type": "boolean"
+            },
+            "cta_click": {
+              "type": "boolean"
+            },
+            "form_start": {
+              "type": "boolean"
+            },
+            "vitals": {
+              "type": "boolean"
+            },
+            "lead_submitted": {
+              "const": true
+            },
+            "lead_attributed": {
+              "const": true
+            }
+          },
+          "required": [
+            "visit",
+            "pageview",
+            "engagement",
+            "cta_click",
+            "form_start",
+            "vitals",
+            "lead_submitted",
+            "lead_attributed"
+          ]
+        },
+        "sampling": {
+          "type": "object",
+          "properties": {
+            "pageview": {
+              "type": "number",
+              "minimum": 0.1,
+              "maximum": 1
+            },
+            "engagement": {
+              "type": "number",
+              "minimum": 0.1,
+              "maximum": 1
+            }
+          },
+          "required": [
+            "pageview",
+            "engagement"
+          ],
+          "description": "share of sessions whose pageview / engagement rows are kept (visits are never sampled)"
+        },
+        "geoDetail": {
+          "enum": [
+            "country",
+            "region",
+            "city"
+          ]
+        },
+        "bufferDays": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30,
+          "description": "how long the site keeps unsent tier-A rows (B: at most 7 days, C: at most 2)"
+        },
+        "table": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$"
+        },
+        "lastChange": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "rev": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "at": {
+                  "$ref": "common.json#/$defs/dateTime"
+                },
+                "source": {
+                  "enum": [
+                    "os",
+                    "site-admin"
+                  ]
+                },
+                "by": {
+                  "$ref": "common.json#/$defs/siteActor"
+                }
+              },
+              "required": [
+                "rev",
+                "at",
+                "source",
+                "by"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "rev",
+        "generatedAt",
+        "enabled",
+        "consentMode",
+        "events",
+        "sampling",
+        "geoDetail",
+        "bufferDays",
+        "table",
+        "lastChange"
+      ],
+      "description": "v1.7.0 (§38.7): the site's visit-signal settings (the site is the source of truth)"
+    },
+    "signalsConfigChange": {
+      "type": "object",
+      "properties": {
+        "field": {
+          "enum": [
+            "enabled",
+            "consentMode",
+            "events.engagement",
+            "events.cta_click",
+            "events.form_start",
+            "events.vitals",
+            "sampling.pageview",
+            "sampling.engagement",
+            "geoDetail",
+            "bufferDays"
+          ]
+        },
+        "from": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "maxLength": 32
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "to": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "maxLength": 32
+            }
+          ]
+        }
+      },
+      "required": [
+        "field",
+        "from",
+        "to"
+      ]
+    },
+    "signalsConfigChangedData": {
+      "type": "object",
+      "properties": {
+        "rev": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "consecutive per site (a gap: pull signals-config-get)"
+        },
+        "at": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "source": {
+          "enum": [
+            "os",
+            "site-admin"
+          ]
+        },
+        "by": {
+          "$ref": "common.json#/$defs/siteActor"
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "$ref": "common.json#/$defs/signalsConfigChange"
+          },
+          "minItems": 1,
+          "maxItems": 10
+        },
+        "osRequest": {
+          "type": "object",
+          "properties": {
+            "route": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "idempotencyKey": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "route"
+          ]
+        }
+      },
+      "required": [
+        "rev",
+        "at",
+        "source",
+        "by",
+        "changes"
+      ]
+    },
+    "signalsSiteInfo": {
+      "type": "object",
+      "properties": {
+        "config": {
+          "$ref": "common.json#/$defs/signalsConfig"
+        },
+        "buffer": {
+          "type": "object",
+          "properties": {
+            "buffered": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "packed": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "droppedLast24h": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "oldestBufferedAt": {
+              "anyOf": [
+                {
+                  "$ref": "common.json#/$defs/dateTime"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "buffered",
+            "packed",
+            "droppedLast24h"
+          ]
+        }
+      },
+      "required": [
+        "config",
+        "buffer"
       ]
     }
   }

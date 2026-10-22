@@ -213,11 +213,14 @@ export async function siteSecurityView(project, { days = 90 } = {}) {
     return { ...a, active: ackMutes(a, c.state, now) && !disabled.has(c.checkId), byName: actorName(a.by, a.source, ackNames) };
   };
   // Counts from the stored checks without the disabled ones (the site's counts can predate a disable from the OS).
-  const counts = checks.length ? { ok: 0, warn: 0, fail: 0, unknown: 0, disabled: 0 } : status?.counts ?? null;
+  // n/a checks (§38.9, a feature switched off) are counted apart (na), never as ok / warn / fail / unknown.
+  const counts = checks.length ? { ok: 0, warn: 0, fail: 0, unknown: 0, disabled: 0, na: 0 } : status?.counts ?? null;
   if (checks.length) for (const c of checks) {
     if (disabled.has(c.checkId)) counts.disabled += 1;
+    else if (c.state === 'n/a') counts.na += 1;
     else counts[c.state] = (counts[c.state] || 0) + 1;
   }
+  if (checks.length && !counts.na) delete counts.na; // like the site's counts.na: present only when > 0
   return {
     available: hasSecurity(project) || hasBackups(project),
     capabilities: { security: hasSecurity(project), backups: hasBackups(project), securityConfig: hasSecurityConfig(project), logs: false },
@@ -262,6 +265,8 @@ export async function siteSecurityView(project, { days = 90 } = {}) {
       evidenceAt: iso(c.evidenceAt),
       refs: c.refs,
       disabled: disabled.has(c.checkId),
+      // §38.9: shown greyed out as "Not applicable (<reason>)" like disabled checks
+      notApplicable: c.state === 'n/a',
       acknowledged: ackView(c),
       note: c.pmNote ? { text: c.pmNote, eta: iso(c.pmNoteEta), by: names.get(c.pmNoteById) || null, at: iso(c.pmNoteAt) } : null,
     })),

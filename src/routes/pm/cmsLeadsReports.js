@@ -11,6 +11,7 @@ import { ensureProjectAccess } from '../../lib/ensureProjectAccess.js';
 import { CmsBridgeError } from '../../lib/siteAdapters/emdash.js';
 import { eraseLead, photoPath, parseErasedReason, SITE_ERASE_PENDING, SITE_ERASE_FAILED } from '../../lib/cmsLeads.js';
 import { pullSiteReports, listSiteReports } from '../../lib/cmsReports.js';
+import { staffAttribution } from '../../lib/signals/attribution.js';
 
 const LEAD_ROLES = ['OWNER', 'PM'];
 const STAFF = ['OWNER', 'PM', 'TEAM_MEMBER', 'CONTRACTOR'];
@@ -61,6 +62,8 @@ function formatLead(l) {
     // 'pending': erased in Agency OS, the erase on the site is retried automatically; 'failed': retries ran out.
     siteErase: erased.siteErase,
     photos: (l.photos || []).map((p) => ({ id: p.id, contentType: p.contentType, bytes: p.bytes, copied: !!p.copiedAt, error: p.error || null })),
+    // v1.7.0 §38.5 / plan §6.3: "Came from … → landed on … → … → quote form" + model / mismatch / session link.
+    attribution: l.erasedAt ? null : staffAttribution(l.attribution || null),
   };
 }
 
@@ -76,7 +79,7 @@ export async function pmCmsLeadsReportsRoutes(app) {
         where: { projectId: project.id, ...(request.query?.includeErased === 'true' ? {} : { erasedAt: null }) },
         orderBy: { receivedAt: 'desc' },
         take,
-        include: { photos: true },
+        include: { photos: true, attribution: true },
       });
       const [sitePending, siteFailed] = await Promise.all([
         prisma.cmsLead.count({ where: { projectId: project.id, erasedReason: { startsWith: SITE_ERASE_PENDING } } }),

@@ -81,6 +81,9 @@ import { clientHealthRoutes } from './routes/client/health.js';
 import { adminHealthRoutes } from './routes/admin/health.js';
 import { pmSiteMetricsRoutes } from './routes/pm/siteMetrics.js';
 import { clientSiteMetricsRoutes } from './routes/client/siteMetrics.js';
+import { pmSignalsRoutes } from './routes/pm/signals.js';
+import { clientSignalsRoutes } from './routes/client/signals.js';
+import { startSignalsJobs } from './lib/signals/jobs.js';
 import { pmDigestRoutes } from './routes/pm/digest.js';
 import { pmClientDashboardRoutes } from './routes/pm/clientDashboard.js';
 import { wpWebhookRoutes } from './routes/webhooks.js';
@@ -290,6 +293,8 @@ app.register(adminHealthRoutes, { prefix: '/api/admin' });
 // Site metrics (docs/ledger/features/site-metrics.md): page speed, backlinks / authority, uptime.
 app.register(pmSiteMetricsRoutes, { prefix: '/api/pm' });
 app.register(clientSiteMetricsRoutes, { prefix: '/api/client' });
+app.register(pmSignalsRoutes, { prefix: '/api/pm' });
+app.register(clientSignalsRoutes, { prefix: '/api/client' });
 app.register(pmDigestRoutes, { prefix: '/api/pm' });
 app.register(pmClientDashboardRoutes, { prefix: '/api/pm' });
 app.register(pmInputRequestRoutes, { prefix: '/api/pm' });
@@ -529,6 +534,9 @@ try {
       });
     }
   }
+  // First-party visit signals (EmDash contract v1.7.0 §38): sessionize / attribute every 5 min, nightly bots, rollup,
+  // retention and signals-summary. Leader only (lib/signals/jobs.js); SIGNALS_ENABLED=false turns the jobs off.
+  startSignalsJobs(app.log);
 
   // SEO Engine retention (OS-05 / OS-14): hourly purge of expired Idempotency-Key rows. Leader only
   // (NODE_APP_INSTANCE 0 / unset); the deletes are plain conditional deleteMany calls, so a double run is harmless.

@@ -1,0 +1,792 @@
+{
+  "contract": 1,
+  "siteId": "site_9f3c2a7b41d0",
+  "sentAt": "2026-10-22T14:08:00Z",
+  "events": [
+    {
+      "eventId": "01JB3QBATCH000000000000001",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "signals.batch",
+      "at": "2026-10-22T14:08:00Z",
+      "cursor": 901,
+      "actor": {
+        "kind": "plugin",
+        "id": null,
+        "name": "agency-os-bridge",
+        "role": null,
+        "source": "plugin",
+        "plugin": "agency-os-bridge"
+      },
+      "data": {
+        "batchId": "01JB3QBATCH00000000000000B",
+        "table": "1.0.0",
+        "count": 10,
+        "events": [
+          {
+            "v": 1,
+            "siteId": "site_9f3c2a7b41d0",
+            "sessionId": "s_01JB3Q7Z9F8K2M4N6P8R0T2V00",
+            "visitorId": "v_01JB2R1S3T5V7X9Z1B3D5F7H9K",
+            "tsLocal": "2026-10-22T09:03:11",
+            "tzOffset": -300,
+            "tz": "America/Chicago",
+            "page": {
+              "path": "/spa-services/",
+              "title": "Spa Services | Oasis Pool and Spa",
+              "canonical": "https://oasispoolspas.com/spa-services/",
+              "query": {
+                "utm_source": "chatgpt.com"
+              }
+            },
+            "referrer": {
+              "url": "https://chatgpt.com/",
+              "host": "chatgpt.com",
+              "class": "ai",
+              "source": "chatgpt",
+              "table": "1.0.0"
+            },
+            "utm": {
+              "source": "chatgpt.com",
+              "medium": null,
+              "campaign": null,
+              "term": null,
+              "content": null
+            },
+            "clickIds": {
+              "gclid": null,
+              "gbraid": null,
+              "wbraid": null,
+              "fbclid": null,
+              "msclkid": null,
+              "ttclid": null
+            },
+            "attribution": {
+              "firstTouch": {
+                "at": "2026-10-19T22:10:04Z",
+                "class": "search",
+                "source": "google",
+                "campaign": null,
+                "medium": null,
+                "landing": "/"
+              },
+              "lastTouch": {
+                "at": "2026-10-22T14:03:11Z",
+                "class": "ai",
+                "source": "chatgpt",
+                "campaign": null,
+                "medium": null,
+                "landing": "/spa-services/"
+              },
+              "model": "site-snapshot"
+            },
+            "device": {
+              "ua": "safari-mobile",
+              "os": "ios",
+              "formFactor": "phone",
+              "viewport": [
+                390,
+                844
+              ],
+              "language": "en-US"
+            },
+            "network": {
+              "ipHash": "9f3a0c71d41d8cd9",
+              "ipPrefix": "203.0.113",
+              "country": "US",
+              "region": "WI",
+              "city": "Waukesha",
+              "asn": null,
+              "cfRay": "8d3f1a2b3c4d5e6f-ORD"
+            },
+            "consent": {
+              "analytics": true,
+              "source": "default-us"
+            },
+            "bot": {
+              "score": 5,
+              "reason": []
+            },
+            "lead": null,
+            "engagement": null,
+            "cta": null,
+            "vitals": null,
+            "path": null,
+            "collector": {
+              "js": "1.0.0",
+              "server": "1.7.0"
+            },
+            "eventId": "01JB3Q7Z9F8K2M4N6P8R0T2V4X",
+            "type": "visit",
+            "ts": "2026-10-22T14:03:11.412Z"
+          },
+          {
+            "v": 1,
+            "siteId": "site_9f3c2a7b41d0",
+            "sessionId": "s_01JB3Q7Z9F8K2M4N6P8R0T2V00",
+            "visitorId": "v_01JB2R1S3T5V7X9Z1B3D5F7H9K",
+            "tsLocal": "2026-10-22T09:03:11",
+            "tzOffset": -300,
+            "tz": "America/Chicago",
+            "page": {
+              "path": "/spa-services/",
+              "title": "Spa Services | Oasis Pool and Spa",
+              "canonical": "https://oasispoolspas.com/spa-services/",
+              "query": {
+                "utm_source": "chatgpt.com"
+              }
+            },
+            "referrer": {
+              "url": "https://chatgpt.com/",
+              "host": "chatgpt.com",
+              "class": "ai",
+              "source": "chatgpt",
+              "table": "1.0.0"
+            },
+            "utm": {
+              "source": "chatgpt.com",
+              "medium": null,
+              "campaign": null,
+              "term": null,
+              "content": null
+            },
+            "clickIds": {
+              "gclid": null,
+              "gbraid": null,
+              "wbraid": null,
+              "fbclid": null,
+              "msclkid": null,
+              "ttclid": null
+            },
+            "attribution": null,
+            "device": {
+              "ua": "safari-mobile",
+              "os": "ios",
+              "formFactor": "phone",
+              "viewport": [
+                390,
+                844
+              ],
+              "language": "en-US"
+            },
+            "network": {
+              "ipHash": "9f3a0c71d41d8cd9",
+              "ipPrefix": "203.0.113",
+              "country": "US",
+              "region": "WI",
+              "city": "Waukesha",
+              "asn": null,
+              "cfRay": "8d3f1a2b3c4d5e6f-ORD"
+            },
+            "consent": {
+              "analytics": true,
+              "source": "default-us"
+            },
+            "bot": {
+              "score": 5,
+              "reason": []
+            },
+            "lead": null,
+            "engagement": null,
+            "cta": null,
+            "vitals": null,
+            "path": null,
+            "collector": {
+              "js": "1.0.0",
+              "server": "1.7.0"
+            },
+            "eventId": "01JB3Q7Z9F8K2M4N6P8R0T2V4Y",
+            "type": "pageview",
+            "ts": "2026-10-22T14:03:11.412Z"
+          },
+          {
+            "v": 1,
+            "siteId": "site_9f3c2a7b41d0",
+            "sessionId": "s_01JB3Q7Z9F8K2M4N6P8R0T2V00",
+            "visitorId": "v_01JB2R1S3T5V7X9Z1B3D5F7H9K",
+            "tsLocal": "2026-10-22T09:05:40",
+            "tzOffset": -300,
+            "tz": "America/Chicago",
+            "page": {
+              "path": "/spa-services/hot-tub-repair/",
+              "title": "Hot Tub Repair | Oasis Pool and Spa",
+              "canonical": "https://oasispoolspas.com/spa-services/hot-tub-repair/",
+              "query": {}
+            },
+            "referrer": {
+              "url": "https://oasispoolspas.com/spa-services/",
+              "host": "oasispoolspas.com",
+              "class": "internal",
+              "source": "self",
+              "table": "1.0.0"
+            },
+            "utm": null,
+            "clickIds": null,
+            "attribution": null,
+            "device": null,
+            "network": null,
+            "consent": {
+              "analytics": true,
+              "source": "default-us"
+            },
+            "bot": {
+              "score": 5,
+              "reason": []
+            },
+            "lead": null,
+            "engagement": null,
+            "cta": null,
+            "vitals": null,
+            "path": null,
+            "collector": {
+              "js": "1.0.0",
+              "server": "1.7.0"
+            },
+            "eventId": "01JB3QA1000000000000000002",
+            "type": "pageview",
+            "ts": "2026-10-22T14:05:40.000Z"
+          },
+          {
+            "v": 1,
+            "siteId": "site_9f3c2a7b41d0",
+            "sessionId": "s_01JB3Q7Z9F8K2M4N6P8R0T2V00",
+            "visitorId": "v_01JB2R1S3T5V7X9Z1B3D5F7H9K",
+            "tsLocal": "2026-10-22T09:06:01",
+            "tzOffset": -300,
+            "tz": "America/Chicago",
+            "page": {
+              "path": "/spa-services/hot-tub-repair/",
+              "title": "Hot Tub Repair | Oasis Pool and Spa",
+              "canonical": "https://oasispoolspas.com/spa-services/hot-tub-repair/",
+              "query": {}
+            },
+            "referrer": null,
+            "utm": null,
+            "clickIds": null,
+            "attribution": null,
+            "device": null,
+            "network": null,
+            "consent": {
+              "analytics": true,
+              "source": "default-us"
+            },
+            "bot": {
+              "score": 5,
+              "reason": []
+            },
+            "lead": null,
+            "engagement": {
+              "scrollPct": 50,
+              "visibleSec": 11
+            },
+            "cta": null,
+            "vitals": null,
+            "path": null,
+            "collector": {
+              "js": "1.0.0",
+              "server": "1.7.0"
+            },
+            "eventId": "01JB3QA1000000000000000003",
+            "type": "engagement",
+            "ts": "2026-10-22T14:06:01.000Z"
+          },
+          {
+            "v": 1,
+            "siteId": "site_9f3c2a7b41d0",
+            "sessionId": "s_01JB3Q7Z9F8K2M4N6P8R0T2V00",
+            "visitorId": "v_01JB2R1S3T5V7X9Z1B3D5F7H9K",
+            "tsLocal": "2026-10-22T09:06:20",
+            "tzOffset": -300,
+            "tz": "America/Chicago",
+            "page": {
+              "path": "/spa-services/hot-tub-repair/",
+              "title": "Hot Tub Repair | Oasis Pool and Spa",
+              "canonical": "https://oasispoolspas.com/spa-services/hot-tub-repair/",
+              "query": {}
+            },
+            "referrer": null,
+            "utm": null,
+            "clickIds": null,
+            "attribution": null,
+            "device": null,
+            "network": null,
+            "consent": {
+              "analytics": true,
+              "source": "default-us"
+            },
+            "bot": {
+              "score": 5,
+              "reason": []
+            },
+            "lead": null,
+            "engagement": null,
+            "cta": {
+              "kind": "phone",
+              "placement": "contact_panel",
+              "href": "redacted:tel"
+            },
+            "vitals": null,
+            "path": null,
+            "collector": {
+              "js": "1.0.0",
+              "server": "1.7.0"
+            },
+            "eventId": "01JB3QA1000000000000000004",
+            "type": "cta_click",
+            "ts": "2026-10-22T14:06:20.000Z"
+          },
+          {
+            "v": 1,
+            "siteId": "site_9f3c2a7b41d0",
+            "sessionId": "s_01JB3Q7Z9F8K2M4N6P8R0T2V00",
+            "visitorId": "v_01JB2R1S3T5V7X9Z1B3D5F7H9K",
+            "tsLocal": "2026-10-22T09:06:30",
+            "tzOffset": -300,
+            "tz": "America/Chicago",
+            "page": {
+              "path": "/spa-services/hot-tub-repair/",
+              "title": "Hot Tub Repair | Oasis Pool and Spa",
+              "canonical": "https://oasispoolspas.com/spa-services/hot-tub-repair/",
+              "query": {}
+            },
+            "referrer": null,
+            "utm": null,
+            "clickIds": null,
+            "attribution": null,
+            "device": null,
+            "network": null,
+            "consent": {
+              "analytics": true,
+              "source": "default-us"
+            },
+            "bot": {
+              "score": 5,
+              "reason": []
+            },
+            "lead": {
+              "leadId": null,
+              "formId": "quote",
+              "placement": "contact_panel"
+            },
+            "engagement": null,
+            "cta": null,
+            "vitals": null,
+            "path": null,
+            "collector": {
+              "js": "1.0.0",
+              "server": "1.7.0"
+            },
+            "eventId": "01JB3QA1000000000000000005",
+            "type": "form_start",
+            "ts": "2026-10-22T14:06:30.000Z"
+          },
+          {
+            "v": 1,
+            "siteId": "site_9f3c2a7b41d0",
+            "sessionId": "s_01JB3Q7Z9F8K2M4N6P8R0T2V00",
+            "visitorId": "v_01JB2R1S3T5V7X9Z1B3D5F7H9K",
+            "tsLocal": "2026-10-22T09:06:31",
+            "tzOffset": -300,
+            "tz": "America/Chicago",
+            "page": {
+              "path": "/spa-services/hot-tub-repair/",
+              "title": "Hot Tub Repair | Oasis Pool and Spa",
+              "canonical": "https://oasispoolspas.com/spa-services/hot-tub-repair/",
+              "query": {}
+            },
+            "referrer": null,
+            "utm": null,
+            "clickIds": null,
+            "attribution": null,
+            "device": null,
+            "network": null,
+            "consent": {
+              "analytics": true,
+              "source": "default-us"
+            },
+            "bot": {
+              "score": 5,
+              "reason": []
+            },
+            "lead": null,
+            "engagement": null,
+            "cta": null,
+            "vitals": {
+              "lcpMs": 1840,
+              "inpMs": 96,
+              "cls": 0.012
+            },
+            "path": null,
+            "collector": {
+              "js": "1.0.0",
+              "server": "1.7.0"
+            },
+            "eventId": "01JB3QA1000000000000000006",
+            "type": "vitals",
+            "ts": "2026-10-22T14:06:31.000Z"
+          },
+          {
+            "v": 1,
+            "siteId": "site_9f3c2a7b41d0",
+            "sessionId": "s_01JB3Q7Z9F8K2M4N6P8R0T2V00",
+            "visitorId": "v_01JB2R1S3T5V7X9Z1B3D5F7H9K",
+            "tsLocal": null,
+            "tzOffset": null,
+            "tz": null,
+            "page": null,
+            "referrer": null,
+            "utm": null,
+            "clickIds": null,
+            "attribution": null,
+            "device": null,
+            "network": null,
+            "consent": {
+              "analytics": true,
+              "source": "default-us"
+            },
+            "bot": {
+              "score": 0,
+              "reason": []
+            },
+            "lead": {
+              "leadId": "01JB3QLEAD0000000000000001",
+              "formId": "quote",
+              "placement": "contact_panel"
+            },
+            "engagement": null,
+            "cta": null,
+            "vitals": null,
+            "path": null,
+            "collector": {
+              "js": null,
+              "server": "1.7.0"
+            },
+            "eventId": "01JB3QA1000000000000000007",
+            "type": "lead_submitted",
+            "ts": "2026-10-22T14:07:12.000Z"
+          },
+          {
+            "v": 1,
+            "siteId": "site_9f3c2a7b41d0",
+            "sessionId": "s_01JB3Q7Z9F8K2M4N6P8R0T2V00",
+            "visitorId": "v_01JB2R1S3T5V7X9Z1B3D5F7H9K",
+            "tsLocal": null,
+            "tzOffset": null,
+            "tz": null,
+            "page": null,
+            "referrer": null,
+            "utm": null,
+            "clickIds": null,
+            "attribution": {
+              "firstTouch": {
+                "at": "2026-10-19T22:10:04Z",
+                "class": "search",
+                "source": "google",
+                "campaign": null,
+                "medium": null,
+                "landing": "/"
+              },
+              "lastTouch": {
+                "at": "2026-10-22T14:03:11Z",
+                "class": "ai",
+                "source": "chatgpt",
+                "campaign": null,
+                "medium": null,
+                "landing": "/spa-services/"
+              },
+              "model": "site-snapshot"
+            },
+            "device": null,
+            "network": null,
+            "consent": {
+              "analytics": true,
+              "source": "default-us"
+            },
+            "bot": {
+              "score": 0,
+              "reason": []
+            },
+            "lead": {
+              "leadId": "01JB3QLEAD0000000000000001",
+              "formId": "quote",
+              "placement": "contact_panel"
+            },
+            "engagement": null,
+            "cta": null,
+            "vitals": null,
+            "path": {
+              "pagesBefore": [
+                {
+                  "path": "/spa-services/",
+                  "at": "2026-10-22T14:03:11Z"
+                },
+                {
+                  "path": "/spa-services/hot-tub-repair/",
+                  "at": "2026-10-22T14:05:40Z"
+                }
+              ],
+              "sessionsBefore": 1,
+              "timeToLeadSec": 230828,
+              "sessionToLeadSec": 241
+            },
+            "collector": {
+              "js": null,
+              "server": "1.7.0"
+            },
+            "eventId": "01JB3QA1000000000000000008",
+            "type": "lead_attributed",
+            "ts": "2026-10-22T14:07:13.000Z"
+          },
+          {
+            "v": 1,
+            "siteId": "site_9f3c2a7b41d0",
+            "sessionId": "s_01JB3QB2000000000000000S01",
+            "visitorId": null,
+            "tsLocal": "2026-10-22T10:10:00",
+            "tzOffset": -300,
+            "tz": "America/Chicago",
+            "page": {
+              "path": "/",
+              "title": "Oasis Pool and Spa",
+              "canonical": "https://oasispoolspas.com/",
+              "query": {}
+            },
+            "referrer": {
+              "url": null,
+              "host": null,
+              "class": "direct",
+              "source": "none",
+              "table": "1.0.0"
+            },
+            "utm": {
+              "source": null,
+              "medium": null,
+              "campaign": null,
+              "term": null,
+              "content": null
+            },
+            "clickIds": {
+              "gclid": null,
+              "gbraid": null,
+              "wbraid": null,
+              "fbclid": null,
+              "msclkid": null,
+              "ttclid": null
+            },
+            "attribution": {
+              "firstTouch": {
+                "at": "2026-10-22T15:10:00Z",
+                "class": "direct",
+                "source": "none",
+                "campaign": null,
+                "medium": null,
+                "landing": "/"
+              },
+              "lastTouch": {
+                "at": "2026-10-22T15:10:00Z",
+                "class": "direct",
+                "source": "none",
+                "campaign": null,
+                "medium": null,
+                "landing": "/"
+              },
+              "model": "site-snapshot"
+            },
+            "device": {
+              "ua": "firefox-desktop",
+              "os": "windows",
+              "formFactor": "desktop",
+              "viewport": [
+                1440,
+                900
+              ],
+              "language": "en-US"
+            },
+            "network": {
+              "ipHash": null,
+              "ipPrefix": "198.51.100",
+              "country": "US",
+              "region": "IL",
+              "city": "Chicago",
+              "asn": null,
+              "cfRay": null
+            },
+            "consent": {
+              "analytics": false,
+              "source": "gpc"
+            },
+            "bot": {
+              "score": 5,
+              "reason": []
+            },
+            "lead": null,
+            "engagement": null,
+            "cta": null,
+            "vitals": null,
+            "path": null,
+            "collector": {
+              "js": "1.0.0",
+              "server": "1.7.0"
+            },
+            "eventId": "01JB3QB2000000000000000009",
+            "type": "visit",
+            "ts": "2026-10-22T15:10:00.000Z"
+          }
+        ]
+      }
+    },
+    {
+      "eventId": "01JB3QLATTR000000000000001",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "lead.attributed",
+      "at": "2026-10-22T14:07:13Z",
+      "cursor": 900,
+      "actor": {
+        "kind": "system",
+        "source": "plugin"
+      },
+      "data": {
+        "leadId": "01JB3QLEAD0000000000000001",
+        "attribution": {
+          "model": "site-snapshot",
+          "firstTouch": {
+            "at": "2026-10-19T22:10:04Z",
+            "class": "search",
+            "source": "google",
+            "campaign": null,
+            "medium": null,
+            "landing": "/"
+          },
+          "lastTouch": {
+            "at": "2026-10-22T14:03:11Z",
+            "class": "ai",
+            "source": "chatgpt",
+            "campaign": null,
+            "medium": null,
+            "landing": "/spa-services/"
+          },
+          "sessionId": "s_01JB3Q7Z9F8K2M4N6P8R0T2V00",
+          "visitorId": "v_01JB2R1S3T5V7X9Z1B3D5F7H9K",
+          "landing": "/spa-services/",
+          "formId": "quote",
+          "placement": "contact_panel"
+        },
+        "path": {
+          "pagesBefore": [
+            {
+              "path": "/spa-services/",
+              "at": "2026-10-22T14:03:11Z"
+            },
+            {
+              "path": "/spa-services/hot-tub-repair/",
+              "at": "2026-10-22T14:05:40Z"
+            }
+          ],
+          "sessionsBefore": 1,
+          "timeToLeadSec": 230828,
+          "sessionToLeadSec": 241
+        }
+      }
+    },
+    {
+      "eventId": "01JB3QCFG0000000000000001A",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "signals.config_changed",
+      "at": "2026-10-22T09:00:00Z",
+      "cursor": 880,
+      "actor": {
+        "kind": "human",
+        "id": null,
+        "name": null,
+        "role": "OWNER",
+        "osUserId": "0f1e2d3c-4b5a-4968-8776-655443322110",
+        "source": "os"
+      },
+      "data": {
+        "rev": 3,
+        "at": "2026-10-22T09:00:00Z",
+        "source": "os",
+        "by": {
+          "kind": "human",
+          "id": null,
+          "name": null,
+          "role": "OWNER",
+          "osUserId": "0f1e2d3c-4b5a-4968-8776-655443322110",
+          "source": "os"
+        },
+        "changes": [
+          {
+            "field": "enabled",
+            "from": false,
+            "to": true
+          },
+          {
+            "field": "geoDetail",
+            "from": "region",
+            "to": "city"
+          }
+        ],
+        "osRequest": {
+          "route": "signals-config-set",
+          "idempotencyKey": "4b2f7c1e-9a8d-4e3b-b6f5-2c1d0e9f8a7b"
+        }
+      }
+    },
+    {
+      "eventId": "01JB3QCFG0000000000000001B",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "signals.config_changed",
+      "at": "2026-10-22T10:00:00Z",
+      "cursor": 881,
+      "actor": {
+        "kind": "human",
+        "id": "01JB8ADM1N0000000000000001",
+        "name": null,
+        "role": "admin",
+        "osUserId": null,
+        "source": "admin-panel"
+      },
+      "data": {
+        "rev": 4,
+        "at": "2026-10-22T10:00:00Z",
+        "source": "site-admin",
+        "by": {
+          "kind": "human",
+          "id": "01JB8ADM1N0000000000000001",
+          "name": null,
+          "role": "admin",
+          "osUserId": null,
+          "source": "admin-panel"
+        },
+        "changes": [
+          {
+            "field": "events.vitals",
+            "from": true,
+            "to": false
+          }
+        ]
+      }
+    },
+    {
+      "eventId": "01JB3QERASE000000000000001",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "signals.erased",
+      "at": "2026-10-23T08:00:00Z",
+      "cursor": 950,
+      "actor": {
+        "kind": "human",
+        "id": null,
+        "name": null,
+        "role": "OWNER",
+        "osUserId": "0f1e2d3c-4b5a-4968-8776-655443322110",
+        "source": "os"
+      },
+      "data": {
+        "kind": "visitorId",
+        "subjectHash": "7d1a54127b222502f5b79b5fb0803061152a44f92b37e23c6527baf665d4da9a",
+        "rows": 14,
+        "reason": "subject_request",
+        "at": "2026-10-23T08:00:00Z"
+      }
+    }
+  ]
+}

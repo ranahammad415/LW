@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/signals-summary.request.json",
+  "title": "signals-summary (v1.7.0)",
+  "description": "Counts for the OS data-quality panel over the last `hours` (1-168, default 24).",
+  "type": "object",
+  "properties": {
+    "hours": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 168
+    }
+  },
+  "required": []
+}

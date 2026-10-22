@@ -52,6 +52,9 @@ export const MUTATION_ROUTES = new Set([
   'security-config-set',
   'security-run',
   'security-ack',
+  // v1.7.0 §38.1 (config-set: human OWNER / PM only; erase: a person or the OS erasure job)
+  'signals-config-set',
+  'signals-erase',
 ]);
 
 export class CmsBridgeError extends Error {
@@ -352,6 +355,11 @@ export const emdashRoutes = {
   securityConfigSet: (conn, body, opts) => siteRequest(conn, 'security-config-set', compact(body), opts),
   securityRun: (conn, body, opts) => siteRequest(conn, 'security-run', compact(body), opts),
   securityAck: (conn, body, opts) => siteRequest(conn, 'security-ack', compact(body), opts),
+  /** v1.7.0 §38.1 (served while site-info.signals is present, else 501). 60/min per key shared by the four. */
+  signalsConfigGet: (conn, opts) => siteRequest(conn, 'signals-config-get', {}, opts),
+  signalsConfigSet: (conn, body, opts) => siteRequest(conn, 'signals-config-set', compact(body), opts),
+  signalsSummary: (conn, q = {}, opts) => siteRequest(conn, 'signals-summary', compact({ hours: 24, ...q }), opts),
+  signalsErase: (conn, body, opts) => siteRequest(conn, 'signals-erase', compact(body), opts),
 };
 
 function siteCaps(project) {

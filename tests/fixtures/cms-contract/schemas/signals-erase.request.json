@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/signals-erase.request.json",
+  "title": "signals-erase (v1.7.0)",
+  "description": "Erase one visitor's buffered signals (visitorId) or one lead's attribution (leadId): exactly one id. A person or the OS erasure job (kind system); agents 403 HUMAN_ONLY.",
+  "type": "object",
+  "properties": {
+    "visitorId": {
+      "type": "string",
+      "pattern": "^v_[0-9A-HJKMNP-TV-Z]{26}$",
+      "description": "server-minted visitor id (cookie _oa_vid, 13 months rolling); null in session-only mode"
+    },
+    "leadId": {
+      "$ref": "common.json#/$defs/id"
+    },
+    "reason": {
+      "enum": [
+        "subject_request",
+        "retention",
+        "other"
+      ]
+    },
+    "actor": {
+      "$ref": "common.json#/$defs/osActor"
+    }
+  },
+  "required": [
+    "reason",
+    "actor"
+  ],
+  "oneOf": [
+    {
+      "required": [
+        "visitorId"
+      ]
+    },
+    {
+      "required": [
+        "leadId"
+      ]
+    }
+  ]
+}

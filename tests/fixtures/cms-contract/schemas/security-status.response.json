@@ -33,8 +33,10 @@
                   "ok",
                   "warn",
                   "fail",
-                  "unknown"
-                ]
+                  "unknown",
+                  "n/a"
+                ],
+                "description": "ok | warn | fail | unknown, or n/a (v1.7.0 errata §38.9): the feature is switched off by configuration; not scored"
               },
               {
                 "type": "null"
@@ -46,8 +48,10 @@
               "ok",
               "warn",
               "fail",
-              "unknown"
-            ]
+              "unknown",
+              "n/a"
+            ],
+            "description": "ok | warn | fail | unknown, or n/a (v1.7.0 errata §38.9): the feature is switched off by configuration; not scored"
           },
           "at": {
             "$ref": "common.json#/$defs/dateTime"

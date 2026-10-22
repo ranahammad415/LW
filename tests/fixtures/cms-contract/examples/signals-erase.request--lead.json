@@ -1,0 +1,9 @@
+{
+  "leadId": "01JB3QLEAD0000000000000001",
+  "reason": "retention",
+  "actor": {
+    "kind": "system",
+    "osUserId": "00000000-0000-4000-8000-000000000000",
+    "name": "Agency OS erasure job"
+  }
+}

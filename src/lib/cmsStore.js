@@ -320,6 +320,11 @@ export const prismaCmsStore = {
       if (prev?.cmsHealth?.serviceToken) data.cmsHealth.serviceToken = prev.cmsHealth.serviceToken;
     }
     await prisma.project.update({ where: { id: projectId }, data });
+    // v1.7.0 §38.1: site-info.signals (config + buffer) → SignalConfigMirror; a body without it changes nothing.
+    if (siteInfo?.signals && typeof siteInfo.signals === 'object') {
+      const { saveSignalsSiteInfo } = await import('./signals/config.js');
+      await saveSignalsSiteInfo(projectId, siteInfo.signals).catch(() => {});
+    }
   },
 
   /**
@@ -606,6 +611,23 @@ export const prismaCmsStore = {
   async applySecurityEvent(project, ev, log) {
     const { applySecurityEvent } = await import('./security/securityStore.js');
     return applySecurityEvent(project, ev, { log });
+  },
+
+  /** v1.7.0 §38: signals.batch (bulk insert), signals.erased (our copy follows), signals.config_changed (mirror). */
+  async applySignalsEvent(project, ev, log) {
+    if (ev.type === 'signals.batch') {
+      const { ingestSignalsBatch } = await import('./signals/ingest.js');
+      return ingestSignalsBatch(project, ev, { log });
+    }
+    if (ev.type === 'signals.erased') {
+      const { applySignalsErased } = await import('./signals/ingest.js');
+      return applySignalsErased(project, ev);
+    }
+    if (ev.type === 'signals.config_changed') {
+      const { applySignalsConfigChanged } = await import('./signals/config.js');
+      return applySignalsConfigChanged(project, ev, { log });
+    }
+    return 'stored';
   },
 
   async suggestionQuote(projectId, cmsSuggestionId) {

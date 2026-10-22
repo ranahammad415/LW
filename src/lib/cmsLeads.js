@@ -19,6 +19,8 @@ import { guardedFetch } from './siteAdapters/netGuard.js';
 import { leadToRow, leadAnalyticsMeta, leadPhotoUrlAllowed, LEAD_PHOTO_MAX_BYTES, LEAD_ERASE_REASONS } from './siteAdapters/leads.js';
 import { CmsBridgeError, emdashRoutes, INTERACTIVE_RETRY_DELAYS_MS } from './siteAdapters/emdash.js';
 import { loadEmdashConnection } from './cmsStore.js';
+import { upsertSiteAttribution, applyLeadAttributed, heardFromOf } from './signals/attribution.js';
+import { leadErasureOps } from './signals/erase.js';
 
 export function leadsDir() {
   return process.env.CMS_LEADS_DIR ? path.resolve(process.env.CMS_LEADS_DIR) : path.resolve(process.cwd(), 'private-uploads', 'cms-leads');
@@ -73,9 +75,17 @@ export async function applyLeadEvent(project, ev) {
       if (existing) return 'stale'; // known or erased (tombstone): never resurrect
       const created = await prisma.cmsLead.create({ data: { projectId: project.id, ...row } });
       for (const p of photos) await prisma.cmsLeadPhoto.create({ data: { leadRowId: created.id, ...p } });
+      // v1.7.0 §38.5: the site's attribution snapshot (+ the "How did you hear about us?" answer). No PII.
+      if (ev.lead.attribution || heardFromOf(row)) {
+        await upsertSiteAttribution({ ...created, projectId: project.id, leadId: row.leadId }, { attribution: ev.lead.attribution, heardFrom: heardFromOf(row) });
+      }
       await bumpLeadMetrics(project.id, row).catch(() => {});
       if (photos.some((p) => p.sourceUrl)) copyLeadPhotos(created.id, { busyRetries: LEAD_PHOTO_BUSY_RETRIES }).catch(() => {});
       return 'applied';
+    }
+    if (ev.type === 'lead.attributed') {
+      // Retryable (LEAD_NOT_STORED) when the CmsLead is not stored yet: the site's outbox parks and re-sends it.
+      return await applyLeadAttributed(project, ev);
     }
     if (ev.type === 'lead.erased') {
       const done = await eraseLocalLead(project.id, ev.leadId, 'site');
@@ -253,6 +263,8 @@ export async function eraseLocalLead(projectId, leadId, reason, { sitePending = 
   if (!lead) {
     // Unknown lead: record a tombstone so a late lead.created cannot create it.
     await prisma.cmsLead.create({ data: { projectId, leadId: String(leadId).slice(0, 64), erasedAt: new Date(), erasedReason: reason } }).catch(() => {});
+    // v1.7.0: no attribution can exist without its lead, but unlink any visit rows that named it.
+    await prisma.$transaction(leadErasureOps(prisma, projectId, String(leadId).slice(0, 64))).catch(() => {});
     return true;
   }
   if (lead.erasedAt) {
@@ -265,19 +277,24 @@ export async function eraseLocalLead(projectId, leadId, reason, { sitePending = 
     return false;
   }
   await deletePhotoFiles(lead.photos);
-  await prisma.cmsLeadPhoto.deleteMany({ where: { leadRowId: lead.id } });
-  await prisma.cmsLead.update({
-    where: { id: lead.id },
-    data: {
-      fields: null,
-      consent: null,
-      utm: sitePending ? { siteErase: { attempts: 0, nextAt: new Date(now.getTime() + SITE_ERASE_BASE_DELAY_MS).toISOString(), lastError: sitePending.code || 'ERROR', actor: sitePending.actor } } : null,
-      formName: null,
-      sourcePath: null,
-      erasedAt: now,
-      erasedReason: sitePending ? `${SITE_ERASE_PENDING}${reason}`.slice(0, 32) : reason,
-    },
-  });
+  // One transaction: photo rows, the lead's attribution (v1.7.0 §38.5, plan §5.5: deleted in the SAME transaction as
+  // the lead's erasure) and its links on visit rows, and the PII.
+  await prisma.$transaction([
+    prisma.cmsLeadPhoto.deleteMany({ where: { leadRowId: lead.id } }),
+    ...leadErasureOps(prisma, projectId, lead.leadId),
+    prisma.cmsLead.update({
+      where: { id: lead.id },
+      data: {
+        fields: null,
+        consent: null,
+        utm: sitePending ? { siteErase: { attempts: 0, nextAt: new Date(now.getTime() + SITE_ERASE_BASE_DELAY_MS).toISOString(), lastError: sitePending.code || 'ERROR', actor: sitePending.actor } } : null,
+        formName: null,
+        sourcePath: null,
+        erasedAt: now,
+        erasedReason: sitePending ? `${SITE_ERASE_PENDING}${reason}`.slice(0, 32) : reason,
+      },
+    }),
+  ]);
   return true;
 }
 
