@@ -13,6 +13,13 @@
 import { redactString, boundEvidence } from './redact.js';
 
 export const SECURITY_STATES = Object.freeze(['ok', 'warn', 'fail', 'unknown']);
+/** v1.7.0 §38.9 errata: a CHECK may be 'n/a' (feature switched off: not scored, not counted, never alerted).
+ *  overall.state / categories[].state stay SECURITY_STATES. */
+export const SECURITY_NA = 'n/a';
+export const SECURITY_CHECK_STATES = Object.freeze([...SECURITY_STATES, SECURITY_NA]);
+export const SECURITY_NA_REASONS = Object.freeze(['disabled', 'not_configured']);
+/** States that are "in play" (counted, scored, alertable): everything but n/a. */
+export const isApplicableState = (s) => s !== SECURITY_NA;
 export const SECURITY_SEVERITIES = Object.freeze(['critical', 'high', 'medium', 'low']);
 export const SECURITY_UNKNOWN_REASONS = Object.freeze(['not_configured', 'not_run', 'stale', 'error', 'no_data', 'not_instrumented']);
 export const SECURITY_CHECK_SOURCES = Object.freeze(['plugin', 'worker', 'ci']);
@@ -87,6 +94,8 @@ function counts(v) {
     if (n === null) return null;
     out[k] = n;
   }
+  // §38.9: optional, present only when > 0 (n/a checks are outside the four counted states)
+  if (nonNegInt(v.na)) out.na = v.na;
   return out;
 }
 
@@ -94,7 +103,7 @@ function counts(v) {
 export function sanitizeCheck(c, { withEvidence = true } = {}) {
   if (!isObj(c) || !isCheckId(c.id)) return null;
   const severity = oneOf(c.severity, SECURITY_SEVERITIES);
-  const state = oneOf(c.state, SECURITY_STATES);
+  const state = oneOf(c.state, SECURITY_CHECK_STATES);
   if (!severity || !state || typeof c.summary !== 'string') return null;
   if (typeof c.category !== 'string' || !CATEGORY_RE.test(c.category)) return null;
   const out = {
@@ -102,7 +111,7 @@ export function sanitizeCheck(c, { withEvidence = true } = {}) {
     category: c.category,
     severity,
     state,
-    reason: state === 'unknown' ? oneOf(c.reason, SECURITY_UNKNOWN_REASONS) : null,
+    reason: state === 'unknown' ? oneOf(c.reason, SECURITY_UNKNOWN_REASONS) : state === SECURITY_NA ? oneOf(c.reason, SECURITY_NA_REASONS) || 'disabled' : null,
     source: oneOf(c.source, SECURITY_CHECK_SOURCES),
     frequency: oneOf(c.frequency, SECURITY_FREQUENCIES),
     checkedAt: isoOrNull(c.checkedAt),
@@ -245,7 +254,7 @@ export function sanitizeHistory(points) {
     if (isObj(p.checks)) {
       checks = {};
       for (const [id, st] of Object.entries(p.checks).slice(0, SECURITY_LIMITS.checks)) {
-        if (isCheckId(id) && SECURITY_STATES.includes(st)) checks[id] = st;
+        if (isCheckId(id) && SECURITY_CHECK_STATES.includes(st)) checks[id] = st;
       }
     }
     out.push({ date: p.date, overallState, score: p.score, checks });
@@ -286,7 +295,7 @@ export function sanitizeSecurityEventData(type, raw) {
           remediation: safeText(d.remediation, SECURITY_LIMITS.remediation),
           at: isoOrNull(d.at),
           // Not in the 1.6.x schema: used when a site sends the previous state (O-R2-6), else the OS's stored state.
-          from: SECURITY_STATES.includes(d.from) ? d.from : SECURITY_STATES.includes(d.before) ? d.before : null,
+          from: SECURITY_CHECK_STATES.includes(d.from) ? d.from : SECURITY_CHECK_STATES.includes(d.before) ? d.before : null,
         },
       };
     }
@@ -297,8 +306,8 @@ export function sanitizeSecurityEventData(type, raw) {
       if (!before || !after || !Array.isArray(d.changes)) return { error: 'data.before, after and changes are required' };
       const changes = [];
       for (const c of d.changes.slice(0, SECURITY_LIMITS.changes)) {
-        if (!isObj(c) || !isCheckId(c.id) || !SECURITY_STATES.includes(c.to)) continue;
-        if (c.from !== null && !SECURITY_STATES.includes(c.from)) continue;
+        if (!isObj(c) || !isCheckId(c.id) || !SECURITY_CHECK_STATES.includes(c.to)) continue;
+        if (c.from !== null && !SECURITY_CHECK_STATES.includes(c.from)) continue;
         if (!SECURITY_SEVERITIES.includes(c.severity) || typeof c.summary !== 'string') continue;
         changes.push({
           id: c.id,

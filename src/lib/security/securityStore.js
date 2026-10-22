@@ -273,7 +273,8 @@ export async function recordStatusPull(projectId, rawStatus, { now = new Date() 
       const t = { checkId: c.id, from: prev?.state ?? null, to: c.state, at, severity: c.severity, summary: c.summary, clientSummary: c.clientSummary };
       if (await recordTransition(projectId, t, 'pull')) transitions.push(t);
     }
-    const nonOk = c.state !== 'ok';
+    // evidence only for checks that are in play (n/a = switched off, §38.9: nothing to show)
+    const nonOk = c.state !== 'ok' && c.state !== 'n/a';
     const data = {
       category: c.category,
       severity: c.severity,

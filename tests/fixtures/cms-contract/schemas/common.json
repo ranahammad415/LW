@@ -4915,8 +4915,10 @@
             "ok",
             "warn",
             "fail",
-            "unknown"
-          ]
+            "unknown",
+            "n/a"
+          ],
+          "description": "ok | warn | fail | unknown, or n/a (v1.7.0 errata §38.9): the feature is switched off by configuration; not scored"
         },
         "reason": {
           "anyOf": [
@@ -4927,9 +4929,10 @@
                 "stale",
                 "error",
                 "no_data",
-                "not_instrumented"
+                "not_instrumented",
+                "disabled"
               ],
-              "description": "why the state is unknown (absent / null otherwise)"
+              "description": "why the state is unknown or n/a (absent / null otherwise; n/a: disabled | not_configured)"
             },
             {
               "type": "null"
@@ -5548,6 +5551,11 @@
                 "unknown": {
                   "type": "integer",
                   "minimum": 0
+                },
+                "na": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "v1.7.0 errata (§38.9): checks that are n/a (present only when > 0)"
                 }
               },
               "required": [
@@ -5802,8 +5810,10 @@
                       "ok",
                       "warn",
                       "fail",
-                      "unknown"
-                    ]
+                      "unknown",
+                      "n/a"
+                    ],
+                    "description": "ok | warn | fail | unknown, or n/a (v1.7.0 errata §38.9): the feature is switched off by configuration; not scored"
                   },
                   {
                     "type": "null"
@@ -5815,8 +5825,10 @@
                   "ok",
                   "warn",
                   "fail",
-                  "unknown"
-                ]
+                  "unknown",
+                  "n/a"
+                ],
+                "description": "ok | warn | fail | unknown, or n/a (v1.7.0 errata §38.9): the feature is switched off by configuration; not scored"
               },
               "at": {
                 "$ref": "common.json#/$defs/dateTime"
@@ -5933,6 +5945,11 @@
             "unknown": {
               "type": "integer",
               "minimum": 0
+            },
+            "na": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "v1.7.0 errata (§38.9): checks that are n/a (present only when > 0)"
             }
           },
           "required": [

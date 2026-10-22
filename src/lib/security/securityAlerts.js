@@ -129,6 +129,8 @@ async function acknowledged(projectId, checkId, state, now) {
  * Returns what happened (for tests / logs).
  */
 export async function alertForTransition(project, t, { now = new Date(), log, env = process.env } = {}) {
+  // §38.9: a transition to or from n/a (a feature switched off / on) is never an alert.
+  if (t.to === 'n/a' || t.from === 'n/a') return { routed: 'not_applicable' };
   if (t.to !== 'fail') return { routed: 'digest_or_none' };
   if (t.severity !== 'critical' && t.severity !== 'high') return { routed: 'digest' };
   if (await acknowledged(project.id, t.checkId, t.to, now)) return { routed: 'acknowledged' };

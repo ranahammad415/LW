@@ -35,6 +35,7 @@ function stateWord(row, okWord = 'OK') {
   if (!row) return 'not measured';
   if (row.state === 'ok') return okWord;
   if (row.state === 'unknown') return 'not measured';
+  if (row.state === 'n/a') return 'not applicable';
   return row.state === 'fail' ? 'needs action' : 'needs attention';
 }
 
@@ -53,7 +54,7 @@ function trendSvg(points, { withScores }) {
   return `<svg width="${points.length * (w + 2)}" height="${h}" role="img" aria-label="Daily state">${bars}</svg>`;
 }
 
-const ITEM_STATE = { ok: 'resolved', warn: 'needs attention', fail: 'needs action', unknown: 'not measured' };
+const ITEM_STATE = { ok: 'resolved', warn: 'needs attention', fail: 'needs action', unknown: 'not measured', 'n/a': 'not applicable' };
 
 /**
  * The month's transitions grouped per check (pure, O-R2-5). `opened`: the check turned fail / warn this month with
