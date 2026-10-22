@@ -146,13 +146,20 @@ export function rollupRows(rows) {
   for (const pillar of PILLARS) {
     let num = 0;
     let den = 0;
+    let covNum = 0;
+    let covDen = 0;
     rows.forEach((r, i) => {
-      const s = r.pillars?.[pillar]?.score;
-      if (!isNum(s)) return;
-      num += projectWeights[i].weight * s;
-      den += projectWeights[i].weight;
+      const p = r.pillars?.[pillar];
+      const w = projectWeights[i].weight;
+      if (p && p.total > 0 && p.weight > 0) {
+        covNum += w * (100 * (p.scored || 0)) / p.total;
+        covDen += w;
+      }
+      if (!isNum(p?.score)) return;
+      num += w * p.score;
+      den += w;
     });
-    pillars[pillar] = { score: den > 0 ? Math.round(num / den) : null };
+    pillars[pillar] = { score: den > 0 ? Math.round(num / den) : null, coverage: covDen > 0 ? Math.round(covNum / covDen) : 0 };
   }
   return { score, coverage, pillars, projectWeights };
 }
