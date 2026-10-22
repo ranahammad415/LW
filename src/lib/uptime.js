@@ -673,20 +673,42 @@ export async function uptimeFleetView(user, { now = new Date() } = {}) {
  * Client view (allow-list): 30-day availability, up / down / unknown and the last 90 days of incidents as
  * { startedAt, durationText }. No cause, error text, status code, IP, header or URL.
  */
+/** Share of the expected home probes that exist (O-R3-4): below this the client sees no percentage. */
+export const CLIENT_MIN_PROBE_COVERAGE = 0.6;
+
+/**
+ * Probe coverage of the 30-day window: stored home probes / probes expected since monitoring started (the first
+ * probe in the window) at one per UPTIME_INTERVAL_MIN. 0..1, or 0 without any probe.
+ */
+export function uptimeCoverage({ checks = 0, firstAt = null, now = new Date(), intervalMin = uptimeIntervalMin() } = {}) {
+  if (!firstAt || !checks) return 0;
+  const since30 = utcDayStart(now).getTime() - 29 * DAY_MS;
+  const start = Math.max(new Date(firstAt).getTime(), since30);
+  const expected = Math.floor(Math.max(0, now.getTime() - start) / (intervalMin * 60_000)) + 1;
+  return Math.min(1, checks / expected);
+}
+
 export async function clientUptimeView(project, { now = new Date() } = {}) {
   const since90 = new Date(utcDayStart(now).getTime() - 89 * DAY_MS);
-  const [daily, incidents, open, last] = await Promise.all([
+  const since30 = new Date(utcDayStart(now).getTime() - 29 * DAY_MS);
+  const [daily, incidents, open, last, first, recent] = await Promise.all([
     prisma.uptimeDaily.findMany({ where: { projectId: project.id, date: { gte: since90 } }, select: { date: true, checks: true, okChecks: true } }),
     prisma.uptimeIncident.findMany({ where: { projectId: project.id, openedAt: { gte: since90 } }, select: { openedAt: true, closedAt: true, durationSec: true }, orderBy: { openedAt: 'desc' }, take: 10 }),
     prisma.uptimeIncident.findUnique({ where: { openProjectId: project.id }, select: { openedAt: true } }),
     prisma.uptimeCheck.findFirst({ where: { projectId: project.id, target: 'home' }, select: { at: true }, orderBy: { at: 'desc' } }),
+    prisma.uptimeCheck.findFirst({ where: { projectId: project.id, target: 'home', at: { gte: since30 } }, select: { at: true }, orderBy: { at: 'asc' } }),
+    prisma.uptimeCheck.count({ where: { projectId: project.id, target: 'home', at: { gte: since30 } } }),
   ]);
   const availability30 = uptimeAvailability(daily, 30, now);
   if (availability30 == null && !last) return { available: false };
   const { state } = uptimeStatus({ openIncident: open, lastCheckAt: last?.at, availability30, now });
+  // O-R3-4: with sparse probes (C: a few probes, then the prober went quiet) a percentage is misleading. Below 60 % of
+  // the expected probes the client gets no figure and the "starting to monitor" sentence; never both.
+  const enough = availability30 != null && uptimeCoverage({ checks: recent, firstAt: first?.at, now }) >= CLIENT_MIN_PROBE_COVERAGE;
   return {
     available: true,
-    availability30: availability30 == null ? null : Number(availability30.toFixed(2)),
+    availability30: enough ? Number(availability30.toFixed(2)) : null,
+    monitoring: enough ? 'active' : 'starting',
     state,
     incidents: incidents.map((i) => ({
       startedAt: new Date(i.openedAt).toISOString(),

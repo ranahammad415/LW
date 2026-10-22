@@ -266,15 +266,29 @@ describe('uptime routes', () => {
     db.overrides['uptimeIncident.findMany'] = async () => [
       { openedAt: new Date(now - 3600_000), closedAt: new Date(now - 3000_000), durationSec: 600, cause: 'http_5xx', lastError: 'server error (HTTP 503)' },
     ];
-    db.overrides['uptimeCheck.findFirst'] = async () => ({ at: new Date() });
+    // last probe now, first probe 24 h ago, 720 of the 721 expected probes (every 2 min) stored
+    db.overrides['uptimeCheck.findFirst'] = async (a) => ({ at: a.orderBy.at === 'asc' ? new Date(now - 86_400_000) : new Date() });
+    db.overrides['uptimeCheck.count'] = async () => 720;
     const res = await app.inject({ method: 'GET', url: '/api/client/projects/p1/uptime' });
     expect(res.headers['cache-control']).toBe('no-store');
     const body = res.json();
-    expect(body).toEqual({ available: true, availability30: 99.86, state: 'up', incidents: [{ startedAt: new Date(now - 3600_000).toISOString(), durationText: 'about 10 minutes' }] });
+    expect(body).toEqual({ available: true, availability30: 99.86, monitoring: 'active', state: 'up', incidents: [{ startedAt: new Date(now - 3600_000).toISOString(), durationText: 'about 10 minutes' }] });
     expect(res.body).not.toMatch(/cause|lastError|http|503|errorClass|"ms"|header/i);
 
     db.overrides['project.findUnique'] = async () => ({ id: 'p1', clientId: 'other' });
     expect((await app.inject({ method: 'GET', url: '/api/client/projects/p1/uptime' })).statusCode).toBe(404);
+  });
+
+  it('client view: sparse probes give no percentage, only "starting" (O-R3-4)', async () => {
+    who = { user: { id: 'u1', role: 'CLIENT' }, clientIds: ['c1'] };
+    db.overrides['project.findUnique'] = async () => ({ id: 'p1', clientId: 'c1' });
+    const now = Date.now();
+    // e2e project C: 8 probes (4 ok) in the first minutes, then the prober went quiet for a day
+    db.overrides['uptimeDaily.findMany'] = async () => [{ date: new Date(now), checks: 8, okChecks: 4 }];
+    db.overrides['uptimeCheck.findFirst'] = async (a) => ({ at: a.orderBy.at === 'asc' ? new Date(now - 86_400_000) : new Date(now - 86_400_000 + 900_000) });
+    db.overrides['uptimeCheck.count'] = async () => 8;
+    const body = (await app.inject({ method: 'GET', url: '/api/client/projects/p1/uptime' })).json();
+    expect(body).toMatchObject({ available: true, availability30: null, monitoring: 'starting', state: 'unknown' });
   });
 });
 

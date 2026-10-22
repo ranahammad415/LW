@@ -81,6 +81,8 @@ import {
   USER_AGENT,
   SCHEDULER_STALE,
   staffUptimeView,
+  uptimeCoverage,
+  CLIENT_MIN_PROBE_COVERAGE,
 } from '../../../src/lib/uptime.js';
 
 const err = (code, extra = {}) => Object.assign(new Error(code), { code, ...extra });
@@ -358,3 +360,16 @@ describe('rollup, retention, helpers', () => {
 
 // Every Prisma call made by the code under test must match the real schema (tests/helpers/prismaShape.js).
 afterEach(() => expect(takeShapeViolations()).toEqual([]));
+
+describe('client probe coverage (O-R3-4)', () => {
+  const now = new Date('2026-10-22T12:00:00Z');
+  it('probes stored / probes expected since the first probe in the 30-day window', () => {
+    expect(uptimeCoverage({ checks: 0, firstAt: null, now, intervalMin: 2 })).toBe(0);
+    expect(uptimeCoverage({ checks: 721, firstAt: new Date(now.getTime() - 86_400_000), now, intervalMin: 2 })).toBe(1);
+    expect(uptimeCoverage({ checks: 8, firstAt: new Date(now.getTime() - 86_400_000), now, intervalMin: 2 })).toBeLessThan(CLIENT_MIN_PROBE_COVERAGE);
+    expect(uptimeCoverage({ checks: 450, firstAt: new Date(now.getTime() - 86_400_000), now, intervalMin: 2 })).toBeGreaterThanOrEqual(CLIENT_MIN_PROBE_COVERAGE);
+    // a first probe older than the window counts from the window start (30 UTC days)
+    const old = uptimeCoverage({ checks: 21_000, firstAt: new Date('2026-01-01T00:00:00Z'), now, intervalMin: 2 });
+    expect(old).toBeGreaterThan(0.95);
+  });
+});
