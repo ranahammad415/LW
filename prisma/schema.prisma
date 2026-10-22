@@ -614,8 +614,42 @@ model Project {
   gmbAccountId       String?       @db.VarChar(100)
   gmbLocationId      String?       @db.VarChar(200)
   gmbLocationName    String?       @db.VarChar(255)
+  /// Normalised Google CID (digits only) when known. Legacy rows may still hold "cid:<n>" or a business-name keyword
+  /// (normalizeGmbIdentifier keeps reading both). place_id lives in gmbPlaceId (features/local-seo.md).
   gmbCid             String?       @db.VarChar(200)
   gmbLastSyncedAt    DateTime?
+  /// Local SEO identity (features/local-seo.md): persisted from every DataForSEO my_business_info response.
+  gmbPlaceId            String?   @db.VarChar(255)
+  gmbFeatureId          String?   @db.VarChar(100)
+  gmbLat                Float?
+  gmbLng                Float?
+  gmbAddress            String?   @db.VarChar(500)
+  gmbPhone              String?   @db.VarChar(50)
+  gmbCategory           String?   @db.VarChar(255)
+  gmbWebsite            String?   @db.VarChar(500)
+  /// Public profile rating / total review count (DataForSEO or native). Used for rating and total count everywhere.
+  gmbRating             Float?
+  gmbReviewsCount       Int?
+  gmbProfileSyncedAt    DateTime?
+  /// native | dataforseo | manual
+  gmbIdentitySource     String?   @db.VarChar(16)
+  gmbIdentityVerifiedAt DateTime?
+  /// Last GMB / DataForSEO sync problem (OS-written text, staff only); null after a clean sync.
+  gmbSyncError          String?   @db.VarChar(300)
+  /// Last full (depth-100) review refresh; the daily run fetches only the newest reviews.
+  gmbReviewsFullAt      DateTime?
+  /// Pending DataForSEO reviews task, collected with task_get on the next run instead of paying for a new task_post.
+  gmbReviewsTaskId      String?   @db.VarChar(64)
+  gmbReviewsTaskAt      DateTime?
+  gmbReviewsTaskDepth   Int?
+  /// Per-project local search location: DataForSEO location_code (city level), display name, language.
+  localLocationCode     Int?
+  localLocationName     String?   @db.VarChar(255)
+  localLanguageCode     String    @default("en") @db.VarChar(8)
+  /// Weekly geo-grid (LOCAL_GRID_ENABLED must also be on): N×N points (max 7), spacing in km.
+  localGridEnabled      Boolean   @default(false)
+  localGridSize         Int       @default(5)
+  localGridSpacingKm    Float     @default(1.5)
   dataforseoDomain   String?       @db.VarChar(255)
   /// Local market for AI Visibility query rewrites (e.g. "Milwaukee")
   targetMarket       String?       @db.VarChar(120)
@@ -709,6 +743,8 @@ model Project {
   uptimeChecks          UptimeCheck[]
   uptimeIncidents       UptimeIncident[]
   uptimeDaily           UptimeDaily[]
+  localRanks            LocalRankDaily[]
+  localRankGrids        LocalRankGrid[]
 
   @@map("project")
 }
@@ -838,12 +874,20 @@ model KeywordTrack {
   suggestedKeyword   String?
   suggestedTargetUrl String?
   suggestedNotes     String?  @db.LongText
+  /// Local SEO: also track this keyword in Google Maps (LocalRankDaily). Off by default.
+  trackLocal         Boolean  @default(false)
+  /// Last organic rank check: ok | not_found | error (an error keeps the previous currentRank).
+  rankStatus         String?  @db.VarChar(16)
+  rankCheckedAt      DateTime?
+  rankError          String?  @db.VarChar(200)
   updatedAt          DateTime @default(now()) @updatedAt
 
   project     Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   sitemapNode SitemapNode?     @relation(fields: [sitemapNodeId], references: [id], onDelete: SetNull)
   comments    KeywordComment[]
   rankDaily   KeywordRankDaily[]
+  localRanks  LocalRankDaily[]
+  localGrids  LocalRankGrid[]
 
   @@map("keywordtrack")
 }
@@ -2035,6 +2079,83 @@ model KeywordRankDaily {
   @@map("keywordrankdaily")
 }
 
+/// Local SEO (features/local-seo.md): one Google Maps rank check per tracked-local keyword per UTC day.
+/// rank null = not found within the checked depth. competitors = top 3 other listings {title, rating, votes, cid}
+/// (staff only; the client view sends names only). costUsd is staff-only (CLIENT_DROP_KEYS).
+model LocalRankDaily {
+  id           String   @id @default(uuid())
+  projectId    String
+  keywordId    String
+  date         DateTime @db.Date
+  rank         Int?
+  rankAbsolute Int?
+  inPack       Boolean  @default(false)
+  /// cid | place_id | weak (title + domain); null when not found
+  matchedBy    String?  @db.VarChar(12)
+  competitors  Json?
+  /// coordinate | location_code
+  locationMode String?  @db.VarChar(16)
+  depth        Int?
+  costUsd      Decimal? @db.Decimal(10, 5)
+  /// ok | not_found | error
+  status       String   @db.VarChar(12)
+  errorCode    String?  @db.VarChar(40)
+  fetchedAt    DateTime @default(now())
+
+  project Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  keyword KeywordTrack @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+
+  @@unique([keywordId, date])
+  @@index([projectId, date])
+  @@map("localrankdaily")
+}
+
+/// Local SEO geo-grid run (weekly; LOCAL_GRID_ENABLED + Project.localGridEnabled): N×N Maps checks around the business.
+/// points = [{lat, lng, rank}] (rank null = not in the checked depth). coverage = share of points where found (0–1).
+model LocalRankGrid {
+  id        String   @id @default(uuid())
+  projectId String
+  keywordId String
+  runAt     DateTime @default(now())
+  gridSize  Int
+  spacingKm Float
+  centerLat Float
+  centerLng Float
+  points    Json
+  avgRank   Float?
+  coverage  Float?
+  costUsd   Decimal? @db.Decimal(10, 5)
+  /// ok | partial | error
+  status    String   @db.VarChar(12)
+  errorCode String?  @db.VarChar(40)
+
+  project Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  keyword KeywordTrack @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, runAt])
+  @@index([keywordId, runAt])
+  @@map("localrankgrid")
+}
+
+/// Background analytics / local SEO job (a manual sync answers 202 with this id; the UI polls it from any instance).
+/// kind: integrations_sync | local_rank | local_grid. status: queued | running | done | error.
+model AnalyticsSyncRun {
+  id            String    @id @default(uuid())
+  kind          String    @db.VarChar(32)
+  projectId     String?
+  status        String    @db.VarChar(12)
+  requestedById String?
+  summary       Json?
+  error         String?   @db.VarChar(500)
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([kind, createdAt])
+  @@index([projectId, kind, createdAt])
+  @@map("analyticssyncrun")
+}
+
 /// Daily GA4 sessions referred by AI assistants (chatgpt | claude | gemini | perplexity | copilot | other).
 model LlmReferralDaily {
   id        String   @id @default(uuid())
@@ -2242,11 +2363,19 @@ model GmbReview {
   createTime   DateTime?
   updateTime   DateTime?
   createdAt    DateTime  @default(now())
+  /// google | dataforseo (the last source that returned this review)
+  source       String?   @db.VarChar(16)
+  /// sha256(author | rating | text) for cross-source dedupe; createTime is compared with a tolerance (features/local-seo.md)
+  fingerprint  String?   @db.VarChar(64)
+  lastSeenAt   DateTime?
+  /// Soft flag: missing from a full fetch. History is never hard-deleted; views and health ignore removed reviews.
+  removedAt    DateTime?
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@unique([projectId, reviewId])
   @@index([projectId, createTime])
+  @@index([projectId, fingerprint])
   @@map("gmbreview")
 }
 
