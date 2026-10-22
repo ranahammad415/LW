@@ -9,6 +9,7 @@
  */
 import { prisma } from '../prisma.js';
 import { hasSecurity, hasBackups } from './securitySync.js';
+import { gatherSignalsReport, renderSignalsSection } from '../signals/report.js';
 
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 export const isReportMonth = (m) => typeof m === 'string' && MONTH_RE.test(m);
@@ -99,12 +100,14 @@ export async function gatherReportData(projectId, month) {
     prisma.securityCheckState.findMany({ where: { projectId } }),
     prisma.securityIncident.findMany({ where: { projectId, lastAt: { gte: start } }, orderBy: { lastAt: 'asc' } }),
   ]);
-  return { project, status, points, transitions, runs, checks, incidents, month, days };
+  // v1.7.0 plan §6.4: "Where your enquiries came from" (sites with capabilities.signals only).
+  const signals = project ? await gatherSignalsReport(project, month).catch(() => null) : null;
+  return { project, status, points, transitions, runs, checks, incidents, month, days, signals };
 }
 
 /** Build both editions (pure). */
 export function renderSecurityReport(data, { planNote = null, agencyName = 'Your agency' } = {}) {
-  const { project, status, points, transitions, runs, checks, incidents, month, days } = data;
+  const { project, status, points, transitions, runs, checks, incidents, month, days, signals = null } = data;
   const byId = new Map((checks || []).map((c) => [c.checkId, c]));
   const endState = points.length ? points[points.length - 1].overallState : status?.overallState || 'unknown';
   const counts = { ok: 0, warn: 0, fail: 0, unknown: 0 };
@@ -185,6 +188,8 @@ ${admin && points.length ? `<p class="small muted">Score ${esc(points[0].score)}
     parts.push(`<h2>7. Items this month</h2><p><strong>Needed attention</strong></p>${li(opened, (i) => `${esc(i.clientSummary)} <span class="muted small">(first seen ${esc(fmtDay(i.firstAt))}; ${esc(ITEM_STATE[i.lastState] || 'not measured')} at month end${i.changes > 1 ? `; changed ${esc(i.changes)} times` : ''})</span>${admin ? ` <span class="small">[${esc(i.checkId)}]</span>` : ''}`)}
 <p><strong>Resolved</strong></p>${li(closed, (i) => `${esc(i.resolvedSummary)} <span class="muted small">(${esc(fmtDay(i.resolvedAt))})</span>`)}
 <p><strong>Still open</strong></p>${li(carried, (c) => `${esc(c.clientSummary)}${c.pmNote ? ` · The agency: ${esc(c.pmNote)}` : ''}${c.pmNoteEta ? ` · expected by ${esc(fmtDay(c.pmNoteEta))}` : ''}`)}`);
+    const enquiries = renderSignalsSection(signals, { admin, esc });
+    if (enquiries) parts.push(enquiries);
     parts.push(`<h2>8. Next month</h2><p>${planNote ? esc(planNote) : 'The agency keeps watching your website every day and will tell you if anything needs your attention.'}</p>`);
     if (admin) {
       const all = [...(checks || [])].sort((a, b) => a.checkId.localeCompare(b.checkId));

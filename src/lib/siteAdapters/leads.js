@@ -5,7 +5,7 @@
 
 import { allowInsecureDev } from './netGuard.js';
 
-export const LEAD_EVENT_TYPES = Object.freeze(['lead.created', 'lead.erased']);
+export const LEAD_EVENT_TYPES = Object.freeze(['lead.created', 'lead.erased', 'lead.attributed']);
 export const LEAD_LIMITS = Object.freeze({ photos: 5, message: 2000, siteRetentionDaysDefault: 30, osRetentionMonthsDefault: 24, photoUrlTtlDays: 7 });
 export const LEAD_ERASE_REASONS = Object.freeze(['subject_request', 'retention', 'spam', 'other']);
 export const LEAD_PHOTO_MAX_BYTES = 10 * 1024 * 1024;
@@ -53,6 +53,11 @@ export function validateLeadEvent(ev) {
     if (l.photos !== undefined && (!Array.isArray(l.photos) || l.photos.length > LEAD_LIMITS.photos)) return 'lead.photos must hold at most 5 items';
   }
   if (ev.type === 'lead.erased' && (typeof ev.leadId !== 'string' || !ULID.test(ev.leadId))) return 'leadId is required';
+  // v1.7.0 §38.5: { leadId, attribution, path } (no PII); the attribution itself is checked on apply.
+  if (ev.type === 'lead.attributed') {
+    if (!ev.data || typeof ev.data !== 'object' || typeof ev.data.leadId !== 'string' || !ULID.test(ev.data.leadId)) return 'data.leadId is required';
+    if (!ev.data.attribution || typeof ev.data.attribution !== 'object') return 'data.attribution is required';
+  }
   return null;
 }
 

@@ -7,8 +7,8 @@
  *                    index (PM2-safe); per-review seq ordering with gap heal via pipeline-get.
  *
  * No JWT: authentication is the HMAC signature. The raw body is hashed BEFORE JSON parsing
- * (scoped content-type parser below, this plugin only). Bodies over 1 MiB → 413
- * PAYLOAD_TOO_LARGE (non-retryable) in the contract envelope.
+ * (scoped content-type parser below, this plugin only). Bodies over 1 MiB (handshake) / 1.5 MiB (events, v1.7.0
+ * §38.4: signals.batch) → 413 PAYLOAD_TOO_LARGE (non-retryable) in the contract envelope.
  *
  * The persistence layer is injected (`opts.store`, default lib/cmsStore.js prismaCmsStore)
  * so tests can run against an in-memory store.
@@ -19,6 +19,7 @@ import {
   SUPPORTED_CONTRACTS,
   HEADERS,
   MAX_EVENTS_BODY_BYTES,
+  MAX_EVENTS_ROUTE_BODY_BYTES,
   MAX_EVENTS_PER_BATCH,
   MAX_SNAPSHOT_CHARS,
   NOT_PAIRED,
@@ -37,6 +38,7 @@ import { suggestionEventMessage, clientActorFromEvent } from '../../lib/siteAdap
 import { validateLeadEvent } from '../../lib/siteAdapters/leads.js';
 import { validateSecurityEvent, isSecurityEventType } from '../../lib/siteAdapters/security.js';
 import { REOPEN_EVENT, reopenEventMessage, reopenNotice } from '../../lib/siteAdapters/reopen.js';
+import { validateSignalsEvent, isSignalsEventType } from '../../lib/signals/validate.js';
 import { isMigrationActive } from '../../lib/cmsMigration.js';
 
 export const OS_VERSION = '2026.10.16';
@@ -101,6 +103,10 @@ export function validateEvent(ev) {
   } else if (ev.type.startsWith('lead.')) {
     const leadErr = validateLeadEvent(ev);
     if (leadErr) return leadErr;
+  } else if (isSignalsEventType(ev.type)) {
+    // v1.7.0 §38.4: signals.batch / signals.erased / signals.config_changed (inner signals are validated on apply).
+    const sigErr = validateSignalsEvent(ev);
+    if (sigErr) return sigErr;
   } else if (isSecurityEventType(ev.type)) {
     // v1.6.0 §36.4 / v1.6.1 §37.6: typed data, validated, bounded and redacted (lib/siteAdapters/security.js).
     const secErr = validateSecurityEvent(ev);
@@ -166,7 +172,8 @@ export async function emdashWebhookRoutes(app, opts = {}) {
 
   app.setErrorHandler((err, request, reply) => {
     if (err?.code === 'FST_ERR_CTP_BODY_TOO_LARGE' || err?.statusCode === 413) {
-      return sendError(reply, 'PAYLOAD_TOO_LARGE', `Request body exceeds ${MAX_EVENTS_BODY_BYTES} bytes; split the batch`);
+      const limit = String(request.raw?.url || '').includes('/events') ? MAX_EVENTS_ROUTE_BODY_BYTES : MAX_EVENTS_BODY_BYTES;
+      return sendError(reply, 'PAYLOAD_TOO_LARGE', `Request body exceeds ${limit} bytes; split the batch`);
     }
     const status = err?.statusCode;
     if (status === 429) {
@@ -194,6 +201,9 @@ export async function emdashWebhookRoutes(app, opts = {}) {
       rateLimit: opts.routeRateLimit || { max: Number(process.env.CMS_WEBHOOK_IP_RATE_PER_MIN) || 1200, timeWindow: '1 minute' },
     },
   };
+
+  // v1.7.0 §38.4: /events (signals.batch) accepts up to 1.5 MiB; the handshake keeps 1 MiB.
+  const eventsRouteOpts = { ...routeOpts, bodyLimit: MAX_EVENTS_ROUTE_BODY_BYTES };
 
   const resolveOutbound = async (siteId, keyId, now) => {
     const project = await store.findProjectBySiteId(siteId);
@@ -440,12 +450,12 @@ export async function emdashWebhookRoutes(app, opts = {}) {
   }
 
   // ── POST /events ──────────────────────────────────────────────────────────
-  app.post('/events', routeOpts, async (request, reply) => {
+  app.post('/events', eventsRouteOpts, async (request, reply) => {
     const now = nowFn();
     const path = rawPath(request);
     const body = request.body ?? Buffer.alloc(0);
-    if (body.length > MAX_EVENTS_BODY_BYTES) {
-      return sendError(reply, 'PAYLOAD_TOO_LARGE', `Event batch exceeds ${MAX_EVENTS_BODY_BYTES} bytes; split the batch`);
+    if (body.length > MAX_EVENTS_ROUTE_BODY_BYTES) {
+      return sendError(reply, 'PAYLOAD_TOO_LARGE', `Event batch exceeds ${MAX_EVENTS_ROUTE_BODY_BYTES} bytes; split the batch`);
     }
 
     let v;
@@ -666,6 +676,9 @@ export async function processEventBatch({ store, project, events, log }) {
         outcome = (await store.applyLeadEvent?.(project, ev)) || 'stored';
       } else if (ev.type.startsWith('seo.')) {
         outcome = (await store.applySeoEvent?.(project, ev)) || 'stored';
+      } else if (isSignalsEventType(ev.type)) {
+        // v1.7.0 §38: visit signals (bulk insert, no session logic here), site erasures, settings mirror.
+        outcome = (await store.applySignalsEvent?.(project, ev, log)) || 'stored';
       } else if (isSecurityEventType(ev.type)) {
         // v1.6.0 §36 / v1.6.1 §37: security status, backups and settings (stored + alerts; never shown raw).
         outcome = (await store.applySecurityEvent?.(project, ev, log)) || 'stored';
