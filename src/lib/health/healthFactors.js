@@ -102,26 +102,33 @@ export function E1(s, cfg) {
   return volumeTrend('E1', cfg, s.ga4, (x) => x.sessions);
 }
 
-/** E2: session-weighted average engagement time (seconds). Level only. */
-export function E2(s, cfg) {
-  if (!s.ga4.linked) return unlinked('E2', cfg);
-  const fc = cfg.factors.E2;
-  const v = (x) => (x.sessions > 0 ? x.engW / x.sessions : null);
-  const raw = { cur: r1(v(s.ga4.cur)), prev: r1(v(s.ga4.prev)), yoy: null };
-  if (!s.ga4.cur.rows) return result('E2', cfg, { raw, reason: 'no_data' });
-  if (s.ga4.cur.sessions < fc.minSessions) return result('E2', cfg, { raw, reason: 'min_volume' });
-  return result('E2', cfg, { l: pl(v(s.ga4.cur), fc.level), raw });
+/**
+ * Level (pl curve on the current 28 days) + trend (Δ% vs the prior 28 days, `invert` when lower is better) of a
+ * session-weighted GA4 rate. Both halves need minSessions in their window; blend 0.6 / 0.4 when both exist.
+ */
+function ga4RateFactor(key, s, cfg, weighted, { invert = false } = {}) {
+  if (!s.ga4.linked) return unlinked(key, cfg);
+  const fc = cfg.factors[key];
+  const v = (x) => (x.sessions > 0 ? x[weighted] / x.sessions : null);
+  const cur = v(s.ga4.cur);
+  const prev = v(s.ga4.prev);
+  const raw = { cur: r1(cur), prev: r1(prev), yoy: null };
+  if (!s.ga4.cur.rows) return result(key, cfg, { raw, reason: 'no_data' });
+  if (s.ga4.cur.sessions < fc.minSessions) return result(key, cfg, { raw, reason: 'min_volume' });
+  const l = pl(cur, fc.level);
+  const d = s.ga4.prev.sessions >= fc.minSessions ? pctDelta(cur, prev) : null;
+  const t = d == null ? null : trend(invert ? -d : d, cfg.trendK);
+  return result(key, cfg, { t, l, raw });
 }
 
-/** E3: session-weighted bounce rate (%; GA4 0–1 fractions normalised). Level only. */
+/** E2: engagement quality, session-weighted average engagement time (s): level + trend. */
+export function E2(s, cfg) {
+  return ga4RateFactor('E2', s, cfg, 'engW');
+}
+
+/** E3: session-weighted bounce rate (%; GA4 0–1 fractions normalised): level + inverted trend (a drop is good). */
 export function E3(s, cfg) {
-  if (!s.ga4.linked) return unlinked('E3', cfg);
-  const fc = cfg.factors.E3;
-  const v = (x) => (x.sessions > 0 ? x.bounceW / x.sessions : null);
-  const raw = { cur: r1(v(s.ga4.cur)), prev: r1(v(s.ga4.prev)), yoy: null };
-  if (!s.ga4.cur.rows) return result('E3', cfg, { raw, reason: 'no_data' });
-  if (s.ga4.cur.sessions < fc.minSessions) return result('E3', cfg, { raw, reason: 'min_volume' });
-  return result('E3', cfg, { l: pl(v(s.ga4.cur), fc.level), raw });
+  return ga4RateFactor('E3', s, cfg, 'bounceW', { invert: true });
 }
 
 // ── Leads ──
@@ -144,10 +151,10 @@ export function L2(s, cfg) {
   return result('L2', cfg, { l: pl(rate(s.leads.cur, s.ga4.cur), fc.level), raw });
 }
 
-/** L3: Google Business Profile actions (calls + directions + website clicks), trend. */
+/** L3: GA4 conversions, 28 vs prior 28, trend only (often null: many properties report 0 conversions). */
 export function L3(s, cfg) {
-  if (!s.gmb.linked) return unlinked('L3', cfg);
-  return volumeTrend('L3', cfg, s.gmb, (x) => (x.calls || 0) + (x.directions || 0) + (x.websiteClicks || 0));
+  if (!s.ga4.linked) return unlinked('L3', cfg);
+  return volumeTrend('L3', cfg, s.ga4, (x) => x.conversions || 0, { yoy: false });
 }
 
 // ── Reputation (Google Business Profile reviews) ──
@@ -194,10 +201,10 @@ export function R3(s, cfg) {
   return result('R3', cfg, { l: pl(rate, fc.level), raw });
 }
 
-/** R4: Google Business Profile views (impressions), trend. */
+/** R4: Google Business Profile actions (calls + directions + website clicks), 28 vs prior 28 + YoY blend. */
 export function R4(s, cfg) {
   if (!s.gmb.linked) return unlinked('R4', cfg);
-  return volumeTrend('R4', cfg, s.gmb, (x) => x.impressions || 0);
+  return volumeTrend('R4', cfg, s.gmb, (x) => (x.calls || 0) + (x.directions || 0) + (x.websiteClicks || 0));
 }
 
 // ── Website & security ──

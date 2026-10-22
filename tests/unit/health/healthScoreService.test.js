@@ -86,6 +86,7 @@ import {
   profileFor, scoreFromPillars, computeProjectHealth, runHealthScoreDaily, rollupRows, rollupClient, backfillProject, projectWeight,
 } from '../../../src/lib/health/healthScoreService.js';
 import { DEFAULT_CONFIG_V1 } from '../../../src/lib/health/defaultConfig.js';
+import { pillarScore } from '../../../src/lib/health/healthMath.js';
 
 const CFG = JSON.parse(JSON.stringify(DEFAULT_CONFIG_V1));
 const NOW = Date.parse('2026-10-22T07:00:00Z');
@@ -117,7 +118,19 @@ describe('worked example (Harbor Dental, LOCAL)', () => {
     expect(row.pillars.aiVisibility.score).toBeNull();
     expect(row.pillars.content.score).toBeNull();
     expect(row.pillars.leads.score).toBe(35);
+    expect(row.pillars.engagement.score).toBe(64);
+    expect(row.pillars.reputation.score).toBe(75);
+    expect(row.factors.find((f) => f.key === 'L3').score).toBeNull();
     expect(row.factors).toHaveLength(17);
+  });
+});
+
+describe('worked example at factor level (design §1)', () => {
+  it('E1 64, E2 60, E3 67 → Engagement 64; R1 92, R2 91, R3 52, R4 66 → Reputation 75; L1 21, L2 48, L3 null → Leads 35', () => {
+    const f = (pillar, score) => ({ pillar, score, weight: 1 });
+    expect(pillarScore([f('e', 64), f('e', 60), f('e', 67)], CFG.pillarFloor)).toBe(64);
+    expect(pillarScore([f('r', 92), f('r', 91), f('r', 52), f('r', 66)], CFG.pillarFloor)).toBe(75);
+    expect(pillarScore([f('l', 21), f('l', 48), f('l', null)], CFG.pillarFloor)).toBe(35);
   });
 });
 

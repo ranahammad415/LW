@@ -19,9 +19,9 @@ export const PILLAR_LABELS = Object.freeze({
 
 export const FACTOR_LABELS = Object.freeze({
   V1: 'Google clicks', V2: 'Search impressions', V3: 'Average position', V4: 'CTR vs expected',
-  E1: 'Sessions', E2: 'Engagement time', E3: 'Bounce rate',
-  L1: 'Leads (forms, calls, emails)', L2: 'Lead conversion rate', L3: 'Google Business actions',
-  R1: 'Average rating', R2: 'New reviews', R3: 'Review reply rate', R4: 'Google Business views',
+  E1: 'Sessions', E2: 'Engagement quality', E3: 'Bounce rate',
+  L1: 'Leads (forms, calls, emails)', L2: 'Lead conversion rate', L3: 'GA4 conversions',
+  R1: 'Average rating', R2: 'New reviews', R3: 'Review reply rate', R4: 'Google Business actions',
   S1: 'Security state', S2: 'Backups', S3: 'Site connection',
 });
 
@@ -116,7 +116,7 @@ export const SENTENCES = {
   E3: (f) => level(f, 'Most visitors go on to view more of your website', 'Many visitors leave after viewing one page'),
   L1: (f) => moveSentence(f, 'Enquiries (forms, calls and emails) are'),
   L2: (f) => level(f, 'A healthy share of website visitors get in touch', 'Few website visitors get in touch yet'),
-  L3: (f) => moveSentence(f, 'Calls, direction requests and website clicks from your Google Business Profile are'),
+  L3: (f) => moveSentence(f, 'Website conversions are'),
   R1: (f) => level(f, 'Your reviews have a strong average rating', 'Your average review rating is below where it should be'),
   R2: (f) => {
     if (!isNum(f.raw?.cur)) return null;
@@ -125,7 +125,7 @@ export const SENTENCES = {
     return null;
   },
   R3: (f) => level(f, 'Recent reviews are being answered', 'Some recent reviews have no reply yet'),
-  R4: (f) => moveSentence(f, 'Views of your Google Business Profile are'),
+  R4: (f) => moveSentence(f, 'Calls, direction requests and website clicks from your Google Business Profile are'),
   S1: (f) => {
     if (!isNum(f.score)) return null;
     if (f.raw?.cur === 'ok') return { kind: 'up', weight: 5, text: 'Your website is protected' };

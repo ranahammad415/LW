@@ -45,7 +45,7 @@ describe('client sentences', () => {
   it('fixed templates from factor values', () => {
     const s = clientSentences(rowFor().factors, { limit: 10 });
     expect(s.improving).toContain('Google clicks are up 11% versus the previous 4 weeks');
-    expect(s.attention).toContain('Enquiries (forms, calls and emails) are down 20% versus the previous 4 weeks');
+    expect(s.attention).toContain('Enquiries (forms, calls and emails) are down 17% versus the previous 4 weeks');
     expect(clientSentences(rowFor().factors).improving.length).toBeLessThanOrEqual(3);
     expect(clientSentences(rowFor().factors).attention.length).toBeLessThanOrEqual(3);
   });

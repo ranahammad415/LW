@@ -28,7 +28,13 @@ const inPrev = (date) => date >= '2026-08-26' && date <= '2026-09-22';
 describe('Harbor Dental fixture: every factor', () => {
   it('scores all 17 factors with reason ok', () => {
     const out = Object.fromEntries(computeFactors(slice(), CFG).map((f) => [f.key, f.score]));
-    expect(out).toEqual({ V1: 81, V2: 61, V3: 62, V4: 39, E1: 61, E2: 70, E3: 76, L1: 17, L2: 70, L3: 17, R1: 84, R2: 83, R3: 77, R4: 50, S1: 100, S2: 85, S3: 100 });
+    expect(out).toEqual({ V1: 81, V2: 61, V3: 62, V4: 39, E1: 64, E2: 62, E3: 66, L1: 21, L2: 48, L3: null, R1: 92, R2: 91, R3: 52, R4: 65, S1: 100, S2: 85, S3: 100 });
+  });
+  it('design §1 raw values', () => {
+    expect(run('E2').raw).toMatchObject({ cur: 48, prev: 44 });
+    expect(run('E3').raw).toMatchObject({ cur: 52, prev: 55 });
+    expect(run('R4').raw).toMatchObject({ cur: 410, prev: 380 });
+    expect(run('L3')).toMatchObject({ raw: { cur: 0, prev: 0 }, score: null, reason: 'min_volume' });
   });
   it('factor contract shape', () => {
     const f = run('V1');
@@ -87,8 +93,25 @@ describe('engagement', () => {
   it('E3 bounce accepts fractions and percents alike', () => {
     expect(bouncePct(0.5)).toBe(50);
     expect(bouncePct(50)).toBe(50);
-    const pct = run('E3', bundle((b) => b.ga4.forEach((r) => { r.bounceRate = 50; })));
+    const pct = run('E3', bundle((b) => b.ga4.forEach((r) => { r.bounceRate = Math.round(r.bounceRate * 100); })));
     expect(pct.score).toBe(run('E3').score);
+  });
+  it('E2: level on the current 28 days + trend vs the prior 28, blended 0.6 / 0.4', () => {
+    const f = run('E2');
+    expect(f.parts.level).toBe(55); // pl(48 s)
+    expect(f.parts.trend).toBeCloseTo(50 + 50 * Math.tanh(((48 - 44) / 44) * 100 / 25), 1);
+    expect(f.score).toBe(Math.round(0.6 * f.parts.trend + 0.4 * f.parts.level));
+  });
+  it('E3: a drop in bounce is a positive (inverted) trend', () => {
+    const f = run('E3');
+    expect(f.parts.trend).toBeGreaterThan(50);
+    expect(f.parts.trend).toBeCloseTo(50 + 50 * Math.tanh(((55 - 52) / 55) * 100 / 25), 1);
+    const worse = run('E3', bundle((b) => b.ga4.forEach((r) => { r.bounceRate = r.bounceRate === 0.52 ? 0.6 : r.bounceRate; })));
+    expect(worse.parts.trend).toBeLessThan(50);
+  });
+  it('E2/E3 trend half needs minSessions in the prior window (level only otherwise)', () => {
+    const f = run('E2', bundle((b) => b.ga4.forEach((r) => { if (inPrev(r.date)) r.sessions = 1; })));
+    expect(f.parts).toEqual({ trend: null, level: 55 });
   });
   it('E2 below minSessions → min_volume', () => {
     const f = run('E2', bundle((b) => b.ga4.forEach((r) => { r.sessions = 1; })));
@@ -98,11 +121,14 @@ describe('engagement', () => {
 
 describe('leads', () => {
   it('L1 total = leads + phone clicks + email clicks', () => {
-    expect(run('L1').raw).toMatchObject({ cur: 28, prev: 35 });
+    expect(run('L1').raw).toMatchObject({ cur: 20, prev: 24 });
   });
-  it('L3 all zeros → null (min_volume)', () => {
-    const f = run('L3', bundle((b) => b.gmb.forEach((r) => { r.calls = 0; r.directions = 0; r.websiteClicks = 0; })));
-    expect(f).toMatchObject({ score: null, reason: 'min_volume' });
+  it('L3: GA4 conversions trend; zeros → null (min_volume); no YoY', () => {
+    expect(run('L3')).toMatchObject({ score: null, reason: 'min_volume' });
+    const f = run('L3', bundle((b) => b.ga4.forEach((r) => { r.conversions = inCur(r.date) ? 2 : 1; })));
+    expect(f.raw).toEqual({ cur: 56, prev: 28, yoy: null });
+    expect(f.parts.trend).toBeCloseTo(50 + 50 * Math.tanh(100 / 25), 1);
+    expect(run('L3', bundle((b) => { b.project.ga4PropertyId = null; b.ga4 = null; })).reason).toBe('unlinked');
   });
   it('no lead rows ever → unlinked', () => {
     expect(run('L1', bundle((b) => { b.leads = []; })).reason).toBe('unlinked');
@@ -115,20 +141,31 @@ describe('reputation', () => {
     const f = run('R1', bundle((b) => { b.reviews = b.reviews.slice(0, 2); }));
     expect(f).toMatchObject({ score: null, reason: 'min_volume' });
   });
-  it('R2 falls back to the level when prev < minPrior, blends when enough', () => {
-    expect(run('R2').parts).toEqual({ trend: null, level: 82.5 });
-    const f = run('R2', bundle((b) => {
-      b.reviews.push(...['2026-09-01', '2026-09-02', '2026-09-03'].map((d) => ({ starRating: 5, replied: false, createTime: `${d}T09:00:00.000Z` })));
+  it('R2 blends trend and level when prev ≥ minPrior, falls back to the level otherwise', () => {
+    expect(run('R2').raw).toMatchObject({ cur: 11, prev: 9 });
+    expect(run('R2').parts.trend).not.toBeNull();
+    const f = run('R2', bundle((b) => { b.reviews = b.reviews.filter((r) => !inPrev(r.createTime.slice(0, 10))).concat(b.reviews.filter((r) => inPrev(r.createTime.slice(0, 10))).slice(0, 2)); }));
+    expect(f.raw).toMatchObject({ cur: 11, prev: 2 });
+    expect(f.parts).toEqual({ trend: null, level: 100 });
+  });
+  it('R4: GBP actions (calls + directions + website clicks) with the YoY blend when a year of rows exists', () => {
+    const plain = run('R4');
+    expect(plain.parts.trend).toBeCloseTo(50 + 50 * Math.tanh(((410 - 380) / 380) * 100 / 25), 1);
+    const withYoy = run('R4', bundle((b) => {
+      for (let t = Date.parse('2025-09-24T00:00:00Z'); t <= Date.parse('2025-10-21T00:00:00Z'); t += 86400000) {
+        b.gmb.push({ date: new Date(t).toISOString().slice(0, 10), impressions: 300, calls: 10, directions: 0, websiteClicks: 0 });
+      }
     }));
-    expect(f.parts.trend).not.toBeNull();
-    expect(f.raw).toMatchObject({ cur: 3, prev: 5 });
+    expect(withYoy.raw.yoy).toBe(280);
+    expect(withYoy.parts.trend).toBeGreaterThan(plain.parts.trend);
   });
   it('R3 response rate over the last 90 days', () => {
-    expect(run('R3').raw.cur).toBe(66.7);
+    expect(run('R3').raw.cur).toBe(40);
   });
   it('no GMB location → reputation factors unlinked', () => {
     const b = bundle((x) => { x.project.gmbLocationId = null; x.reviews = null; x.gmb = null; });
-    for (const k of ['R1', 'R2', 'R3', 'R4', 'L3']) expect(run(k, b).reason).toBe('unlinked');
+    for (const k of ['R1', 'R2', 'R3', 'R4']) expect(run(k, b).reason).toBe('unlinked');
+    expect(run('L3', b).reason).toBe('min_volume'); // L3 is GA4, not GBP
   });
 });
 
