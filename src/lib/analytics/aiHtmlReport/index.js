@@ -67,7 +67,9 @@ export async function generateAiHtmlReport(opts) {
     meta: {
       brandName: facts.brandName,
       sources: facts.sources,
-      healthScore: facts.healthScore,
+      healthScore: facts.healthScore ?? null,
+      healthCoverage: facts.healthCoverage ?? null,
+      healthBand: facts.healthBand ?? null,
       winCount: facts.wins?.length ?? 0,
       weakCount: facts.weaks?.length ?? 0,
     },

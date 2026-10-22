@@ -113,6 +113,22 @@ export async function loadProjectClientView(projectId) {
   return clientHealthView({ ...latest, pillars: projectPillars(latest), factors: latest.factors, history: hist }, cfg);
 }
 
+/**
+ * The client's health as of a date (reports, frozen snapshots): latest ClientHealthDaily on or before `endDate`.
+ * Summary only (score, coverage, band, trend28, date): safe for client-facing reports.
+ */
+export async function clientHealthAt(clientId, endDate) {
+  const end = typeof endDate === 'string' ? endDate.slice(0, 10) : new Date(endDate).toISOString().slice(0, 10);
+  const row = await prisma.clientHealthDaily.findFirst({
+    where: { clientId, date: { lte: end } },
+    orderBy: { date: 'desc' },
+    select: { date: true, score: true, coverage: true, trend28: true },
+  });
+  if (!row) return null;
+  const cfg = await getActiveConfig();
+  return { date: row.date, score: row.score ?? null, coverage: row.coverage ?? 0, trend28: row.trend28 ?? null, band: bandFor(row.score, cfg.bands) };
+}
+
 // ── staff ──
 
 /** Pure: the staff view of one project row (factors as healthFactors, with labels and contributions). */

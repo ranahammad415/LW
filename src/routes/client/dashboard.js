@@ -2,6 +2,9 @@ import { prisma } from '../../lib/prisma.js';
 import { safeReviewLinks } from '../../lib/siteLinks.js';
 import { ensureCurrentCycle } from '../../lib/workCycle.js';
 import { reviewDisplayUpdatedAt } from '../../lib/pipelineFormat.js';
+import { getActiveConfig } from '../../lib/health/healthConfig.js';
+import { bandInfo } from '../../lib/health/healthViews.js';
+import { trendArrow } from '../../lib/health/healthMath.js';
 
 export async function clientDashboardRoutes(app) {
   app.get(
@@ -21,6 +24,17 @@ export async function clientDashboardRoutes(app) {
                   healthScore: { type: 'integer', nullable: true },
                   onboardingStatus: { type: 'string', nullable: true },
                   onboardingStep: { type: 'integer' },
+                },
+              },
+              // Health score v2 summary (full card: GET /api/client/health). Allow-list: no factors or notes.
+              health: {
+                type: 'object',
+                properties: {
+                  score: { type: 'integer', nullable: true },
+                  band: { type: 'string', nullable: true },
+                  label: { type: 'string', nullable: true },
+                  coverage: { type: 'integer', nullable: true },
+                  arrow: { type: 'string', nullable: true },
                 },
               },
               pmUpdate: {
@@ -204,13 +218,24 @@ export async function clientDashboardRoutes(app) {
         }
       }
 
+      const healthCfg = await getActiveConfig();
+      const band = bandInfo(primaryClient.healthScore, healthCfg);
+
       return reply.send({
         client: {
           id: primaryClient.id,
           agencyName: primaryClient.agencyName,
+          // kept for compatibility; written only by the health score v2 service
           healthScore: primaryClient.healthScore,
           onboardingStatus: primaryClient.onboardingStatus,
           onboardingStep: primaryClient.onboardingStep,
+        },
+        health: {
+          score: primaryClient.healthScore ?? null,
+          band: band.band,
+          label: band.clientLabel,
+          coverage: primaryClient.healthCoverage ?? null,
+          arrow: trendArrow(primaryClient.healthTrend28, healthCfg.trendArrowDelta ?? 3),
         },
         setupProjects,
         currentCycle: {

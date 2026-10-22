@@ -10,7 +10,6 @@ import { syncProject } from '../../lib/gscSync.js';
  *   GET  /clients/:clientId/roi           — get ROI configuration
  *   POST /clients/:clientId/pm-update     — post a new PM update message
  *   GET  /clients/:clientId/pm-updates    — list recent PM update messages
- *   PUT  /clients/:clientId/health-score  — manually set health score
  */
 export async function pmClientDashboardRoutes(app) {
 
@@ -293,42 +292,8 @@ export async function pmClientDashboardRoutes(app) {
     }
   );
 
-  // ─── HEALTH SCORE ────────────────────────────────────────
-
-  app.put(
-    '/clients/:clientId/health-score',
-    {
-      onRequest: [app.verifyJwt, app.requirePM],
-      schema: {
-        params: {
-          type: 'object',
-          properties: { clientId: { type: 'string' } },
-          required: ['clientId'],
-        },
-        body: {
-          type: 'object',
-          properties: {
-            healthScore: { type: 'integer', minimum: 0, maximum: 100 },
-          },
-          required: ['healthScore'],
-        },
-      },
-    },
-    async (request, reply) => {
-      await verifyPmClientAccess(request, reply);
-      if (reply.sent) return;
-
-      const { clientId } = request.params;
-      const { healthScore } = request.body;
-
-      await prisma.clientAccount.update({
-        where: { id: clientId },
-        data: { healthScore },
-      });
-
-      return reply.send({ healthScore });
-    }
-  );
+  // PUT /clients/:clientId/health-score (manual override) was removed by health score v2: the score is computed by
+  // lib/health/healthScoreService.js; staff add context with PUT /api/pm/clients/:clientId/health-note (routes/pm/health.js).
 
   // ─── GSC CONFIGURATION ────────────────────────────────────
 

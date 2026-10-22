@@ -55,6 +55,14 @@ function formatVal(card) {
 /**
  * @param {{ facts: object, narrative: object }} opts
  */
+/** Health score v2 client wording (same as lib/health/healthViews.js BAND_LABELS.clientLabel). */
+const HEALTH_CLIENT_LABELS = {
+  excellent: 'Thriving',
+  healthy: 'On track',
+  at_risk: 'Needs attention',
+  critical: 'Needs urgent attention',
+};
+
 export function renderPerformanceHtml({ facts, narrative }) {
   const brand = facts.brandName || 'Performance Report';
   const site = facts.websiteUrl || '';
@@ -62,9 +70,16 @@ export function renderPerformanceHtml({ facts, narrative }) {
   const prevLabel = facts.prevRange?.label || '';
   const sub = [site, rangeLabel, prevLabel ? `vs ${prevLabel}` : null].filter(Boolean).join(' · ');
   const sources = (facts.sources || []).join(' + ') || 'Analytics';
-  const health = Math.max(0, Math.min(100, Number(facts.healthScore) || 50));
-  const healthCls = health >= 55 ? 'g' : 'a';
-  const healthLabel = narrative.healthLabel || (health >= 55 ? 'Positive impact leading' : 'Mixed period — review context');
+  // Health score v2: the stored client score (never a default). null → "n/a".
+  const hasHealth = facts.healthScore != null && Number.isFinite(Number(facts.healthScore));
+  const health = hasHealth ? Math.max(0, Math.min(100, Math.round(Number(facts.healthScore)))) : null;
+  const healthCls = hasHealth && health >= 60 ? 'g' : 'a';
+  const bandLabel = HEALTH_CLIENT_LABELS[facts.healthBand] || null;
+  const coverageNote = hasHealth && facts.healthCoverage != null ? ` · ${facts.healthCoverage}% of data sources` : '';
+  const healthLabel = hasHealth
+    ? `${narrative.healthLabel || bandLabel || 'Health score'}${coverageNote}`
+    : 'Not enough data yet';
+  const healthText = hasHealth ? `${health}/100` : 'n/a';
 
   const kpiCards = (facts.kpiCards || [])
     .map((card, i) => {
@@ -310,12 +325,12 @@ ${
 <div class="score-bar-wrap">
   <div><div class="score-label">Overall Performance</div><div style="font-size:12px;color:var(--muted2)">${esc(healthLabel)}</div></div>
   <div style="flex:1;min-width:220px">
-    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted2);margin-bottom:6px"><span>Positive Impact</span></div>
+    <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted2);margin-bottom:6px"><span>Health score</span></div>
     <div style="height:16px;border-radius:20px;overflow:hidden;display:flex;gap:2px">
-      <div style="width:${health}%;background:linear-gradient(90deg,var(--green),var(--teal));border-radius:20px 0 0 20px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:#fff">${health}%</div>
+      ${hasHealth ? `<div style="width:${health}%;background:linear-gradient(90deg,var(--green),var(--teal));border-radius:20px 0 0 20px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:#fff">${health}</div>` : ''}
     </div>
   </div>
-  <div style="text-align:right"><div class="score-pct ${healthCls}">${health}/100</div></div>
+  <div style="text-align:right"><div class="score-pct ${healthCls}">${healthText}</div></div>
 </div>
 
 <div class="exec">

@@ -9,6 +9,7 @@
 import { prisma } from '../prisma.js';
 import { getClientTrafficSeries } from './gscSeries.js';
 import { stripTrailingIncomplete } from './seriesUtils.js';
+import { clientHealthAt } from '../health/healthViews.js';
 
 /** First/last day (UTC) of a cycle's calendar month. */
 function cycleRange(cycle) {
@@ -324,6 +325,9 @@ export async function buildClientAnalytics(clientId, cycle, opts = {}) {
     },
   });
 
+  // Health score v2 as of the period end (summary only: score, coverage, band, trend28). null before the first run.
+  const health = await clientHealthAt(clientId, end).catch(() => null);
+
   const trafficKeys = ['clicks', 'impressions', 'ctr', 'position'];
   const trafficSeries = stripTrailingIncomplete(
     attachYoySeries(
@@ -356,6 +360,7 @@ export async function buildClientAnalytics(clientId, cycle, opts = {}) {
     aiVisibility,
     ga4,
     gmb,
+    health,
     links: {
       gsc: links.some((l) => !!l.gscSiteUrl),
       ga4: links.some((l) => !!l.ga4PropertyId),

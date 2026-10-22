@@ -1,4 +1,10 @@
 import { prisma } from '../../lib/prisma.js';
+import { computeDeliveryHealthMany } from '../../lib/health/deliveryHealth.js';
+import { getActiveConfig } from '../../lib/health/healthConfig.js';
+import { bandFor } from '../../lib/health/healthMath.js';
+
+/** Health score v2: a client is at risk below the "healthy" band (60), only when it has a score. */
+export const AT_RISK_BELOW = 60;
 
 export async function adminDashboardRoutes(app) {
   app.get(
@@ -28,6 +34,10 @@ export async function adminDashboardRoutes(app) {
                     id: { type: 'string' },
                     agencyName: { type: 'string' },
                     healthScore: { type: 'integer', nullable: true },
+                    coverage: { type: 'integer', nullable: true },
+                    trend28: { type: 'integer', nullable: true },
+                    band: { type: 'string', nullable: true },
+                    deliveryHealth: { type: 'object', nullable: true },
                   },
                 },
               },
@@ -58,7 +68,7 @@ export async function adminDashboardRoutes(app) {
         prisma.clientAccount.count({ where: { isActive: true } }),
         prisma.clientAccount.findMany({
           where: { isActive: true },
-          select: { id: true, agencyName: true, healthScore: true },
+          select: { id: true, agencyName: true, healthScore: true, healthCoverage: true, healthTrend28: true },
           orderBy: { agencyName: 'asc' },
         }),
         prisma.clientIssue.findMany({
@@ -106,7 +116,8 @@ export async function adminDashboardRoutes(app) {
         teamOnTimeRate = Math.round((onTimeCount / tasksWithDates.length) * 100);
       }
 
-      const atRiskClients = clients.filter((c) => c.healthScore != null && c.healthScore < 40).length;
+      const atRiskClients = clients.filter((c) => c.healthScore != null && c.healthScore < AT_RISK_BELOW).length;
+      const [delivery, healthCfg] = await Promise.all([computeDeliveryHealthMany(clients.map((c) => c.id), { now }), getActiveConfig()]);
 
       const metrics = {
         activeClients: activeClientsCount,
@@ -122,6 +133,10 @@ export async function adminDashboardRoutes(app) {
           id: c.id,
           agencyName: c.agencyName,
           healthScore: c.healthScore,
+          coverage: c.healthCoverage ?? null,
+          trend28: c.healthTrend28 ?? null,
+          band: bandFor(c.healthScore, healthCfg.bands),
+          deliveryHealth: delivery.get(c.id) || null,
         })),
         openIssues: openIssues.map((i) => ({
           id: i.id,

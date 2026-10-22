@@ -109,92 +109,9 @@ export async function adminAutomationRoutes(app) {
     }
   );
 
-  app.post(
-    '/automation/calculate-health',
-    {
-      onRequest: [app.verifyJwt, app.requireOwner],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              updatedCount: { type: 'integer' },
-            },
-          },
-        },
-      },
-    },
-    async (request, reply) => {
-      const now = new Date();
-      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      const stagnantThreshold = daysAgo(STAGNANT_DAYS);
-
-      const clients = await prisma.clientAccount.findMany({
-        select: { id: true, agencyName: true, leadPmId: true, healthScore: true },
-      });
-
-      let updatedCount = 0;
-
-      for (const client of clients) {
-        const [overdueCount, stagnantCount] = await Promise.all([
-          prisma.task.count({
-            where: {
-              project: { clientId: client.id },
-              status: { not: 'COMPLETED' },
-              dueDate: { lt: todayStart },
-            },
-          }),
-          prisma.task.count({
-            where: {
-              project: { clientId: client.id },
-              status: { in: ['IN_PROGRESS', 'NEEDS_REVIEW'] },
-              updatedAt: { lt: stagnantThreshold },
-            },
-          }),
-        ]);
-
-        const onboarding = await prisma.clientAccount.findUnique({
-          where: { id: client.id },
-          select: { onboardingStatus: true },
-        });
-
-        let score = 100;
-        score -= overdueCount * 10;
-        score -= stagnantCount * 5;
-        if (onboarding?.onboardingStatus !== 'COMPLETE') {
-          score -= 15;
-        }
-        score = Math.max(0, score);
-
-        await prisma.clientAccount.update({
-          where: { id: client.id },
-          data: { healthScore: score },
-        });
-
-        // Notify if health score dropped below 40
-        if (score < 40 && (client.healthScore === null || client.healthScore >= 40)) {
-          const recipients = [];
-          if (client.leadPmId) recipients.push(client.leadPmId);
-          // Also notify owner(s)
-          const owners = await prisma.user.findMany({ where: { role: 'OWNER', isActive: true }, select: { id: true } });
-          recipients.push(...owners.map((o) => o.id));
-          if (recipients.length > 0) {
-            notify({
-              slug: 'client_health_critical',
-              recipientIds: recipients,
-              variables: { clientName: client.agencyName, healthScore: String(score) },
-              actionUrl: `/portal/admin/clients/${client.id}`,
-              metadata: { clientId: client.id, healthScore: score },
-            }).catch(() => {});
-          }
-        }
-
-        updatedCount += 1;
-      }
-
-      return reply.send({ updatedCount });
-    }
-  );
+  // POST /automation/calculate-health was removed by health score v2 (docs/ledger/features/health-score.md):
+  // the task formula is now the read-only "Delivery health" (lib/health/deliveryHealth.js) and ClientAccount.healthScore
+  // is written only by lib/health/healthScoreService.js.
 
   // ── AEO Automation: Run all active AEO projects ────────────────────
   app.post(

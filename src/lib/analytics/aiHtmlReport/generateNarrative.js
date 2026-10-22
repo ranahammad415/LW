@@ -25,6 +25,8 @@ Return ONLY valid JSON with exactly these keys:
   "healthLabel": "short subtitle under the health score e.g. Clicks up, engagement improving"
 }
 
+Health score: facts.healthScore is the agency's stored health score (0-100) with facts.healthCoverage (% of data sources behind it); it is null when there is not enough data. Never invent or estimate a health score; when it is null, keep healthLabel about the period's KPIs.
+
 Rules:
 - achievements: 4-6 items drawn only from wins / strong facts. If few wins, still write honest achievements from available positives or stability.
 - weakContext: one entry per weak metric in facts.weaks (or empty array if none). Reasons must be plausible from the data (e.g. impressions down while CTR/position improved = efficiency, not ranking collapse).

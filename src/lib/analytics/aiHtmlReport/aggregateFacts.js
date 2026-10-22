@@ -10,6 +10,7 @@ import {
   buildSeoView,
   buildLlmView,
 } from '../sectionBuilders.js';
+import { clientHealthAt } from '../../health/healthViews.js';
 
 const TOP_N = 18;
 
@@ -211,9 +212,12 @@ export async function aggregateReportFacts({ clientIds, start, end, compare = tr
   const wins = kpiCards.filter((k) => k.tag === 'win');
   const weaks = kpiCards.filter((k) => k.tag === 'context');
 
-  const scored = kpiCards.filter((k) => k.positive !== null);
-  const winCount = scored.filter((k) => k.positive).length;
-  const healthScore = scored.length ? Math.round((winCount / scored.length) * 100) : 50;
+  // Health score v2 (docs/ledger/features/health-score.md): the stored client score as of the report end, else the
+  // frozen month snapshot's health block. Never a made-up value: null when there is no score.
+  const health = await reportHealth(clientIds[0], end);
+  const healthScore = health?.score ?? null;
+  const healthCoverage = health?.coverage ?? null;
+  const healthBand = health?.band ?? null;
 
   // Page / query rows for table + chart
   const pageRows = landingPages.length
@@ -325,6 +329,8 @@ export async function aggregateReportFacts({ clientIds, start, end, compare = tr
     range: { current: range, previous: prevRange, yoy: yoyRange },
     sources,
     healthScore,
+    healthCoverage,
+    healthBand,
     wins: wins.map((w) => ({
       source: w.source,
       label: w.label,
@@ -382,6 +388,8 @@ export async function aggregateReportFacts({ clientIds, start, end, compare = tr
       prevRange,
       yoyRange,
       healthScore,
+      healthCoverage,
+      healthBand,
       kpiCards,
       wins,
       weaks,
@@ -393,6 +401,24 @@ export async function aggregateReportFacts({ clientIds, start, end, compare = tr
       factsForAi,
     },
   };
+}
+
+/** Stored health as of `end` (YYYY-MM-DD or Date), else the frozen snapshot of that month; null when neither. */
+async function reportHealth(clientId, end) {
+  if (!clientId || !end) return null;
+  try {
+    const live = await clientHealthAt(clientId, end);
+    if (live) return live;
+    const d = new Date(typeof end === 'string' ? `${end.slice(0, 10)}T00:00:00Z` : end);
+    const snap = await prisma.workCycleAnalyticsSnapshot.findFirst({
+      where: { clientId, workCycle: { month: d.getUTCMonth() + 1, year: d.getUTCFullYear() } },
+      select: { data: true },
+    });
+    const h = snap?.data?.health;
+    return h && typeof h === 'object' ? h : null;
+  } catch {
+    return null;
+  }
 }
 
 function shortenLabel(s, max = 36) {

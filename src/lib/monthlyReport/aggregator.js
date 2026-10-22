@@ -45,7 +45,8 @@ export async function aggregateProject({ projectId, from, to, month = null }) {
   const project = await prisma.project.findUnique({
     where: { id: projectId },
     include: {
-      client: { select: { id: true, agencyName: true, healthScore: true } },
+      // health score v2 fields (ClientAccount.health* are written only by lib/health/healthScoreService.js)
+      client: { select: { id: true, agencyName: true, healthScore: true, healthCoverage: true, healthTrend28: true } },
       leadPm: { select: { id: true, name: true, email: true } },
     },
   });
