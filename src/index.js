@@ -76,6 +76,8 @@ import { pmCmsLeadsReportsRoutes } from './routes/pm/cmsLeadsReports.js';
 import { pmSecurityRoutes } from './routes/pm/security.js';
 import { clientSecurityRoutes } from './routes/client/security.js';
 import { adminSecuritySettingsRoutes } from './routes/admin/securitySettings.js';
+import { pmSiteMetricsRoutes } from './routes/pm/siteMetrics.js';
+import { clientSiteMetricsRoutes } from './routes/client/siteMetrics.js';
 import { pmDigestRoutes } from './routes/pm/digest.js';
 import { pmClientDashboardRoutes } from './routes/pm/clientDashboard.js';
 import { wpWebhookRoutes } from './routes/webhooks.js';
@@ -278,6 +280,9 @@ app.register(pmCmsLeadsReportsRoutes, { prefix: '/api/pm' });
 app.register(pmSecurityRoutes, { prefix: '/api/pm' });
 app.register(clientSecurityRoutes, { prefix: '/api/client' });
 app.register(adminSecuritySettingsRoutes, { prefix: '/api/admin' });
+// Site metrics (docs/ledger/features/site-metrics.md): page speed, backlinks / authority, uptime.
+app.register(pmSiteMetricsRoutes, { prefix: '/api/pm' });
+app.register(clientSiteMetricsRoutes, { prefix: '/api/client' });
 app.register(pmDigestRoutes, { prefix: '/api/pm' });
 app.register(pmClientDashboardRoutes, { prefix: '/api/pm' });
 app.register(pmInputRequestRoutes, { prefix: '/api/pm' });
@@ -445,6 +450,28 @@ try {
       app.log.info(out, 'Monthly security reports generated');
     } catch (err) {
       app.log.error({ err }, 'Monthly security reports failed');
+    }
+  });
+
+  // Site metrics (docs/ledger/features/site-metrics.md), leader only. 02:30 UTC daily: PageSpeed Insights (mobile +
+  // desktop per site, capped, stops on 429, 400-day retention; PAGESPEED_ENABLED). 04:30 UTC on the 1st: backlink
+  // snapshots (paid DataForSEO call, off unless BACKLINKS_SNAPSHOT_ENABLED=true, capped). Both skip work already done.
+  cron.schedule('30 2 * * *', async () => {
+    if (!isLeader()) return;
+    try {
+      const { runPageSpeedJob } = await import('./lib/pageSpeed.js');
+      app.log.info(await runPageSpeedJob({ log: app.log }), 'PageSpeed nightly run complete');
+    } catch (err) {
+      app.log.error({ err }, 'PageSpeed nightly run failed');
+    }
+  });
+  cron.schedule('30 4 1 * *', async () => {
+    if (!isLeader()) return;
+    try {
+      const { runBacklinkSnapshotJob } = await import('./lib/backlinkSnapshots.js');
+      app.log.info(await runBacklinkSnapshotJob({ log: app.log }), 'Backlink snapshot monthly run complete');
+    } catch (err) {
+      app.log.error({ err }, 'Backlink snapshot monthly run failed');
     }
   });
 

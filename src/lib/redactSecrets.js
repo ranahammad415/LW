@@ -33,8 +33,9 @@ function isPlainObject(v) {
 /**
  * The PM preview link is a token-only capability that can approve the PM stage: clients must never receive it. Dropped
  * from every response to a CLIENT user and from every /api/client/* response (also an OWNER acting through X-Client-Id).
+ * `costUsd` (vendor cost of site-metrics snapshots, lib/backlinkSnapshots.js) is staff-only for the same audiences.
  */
-export const CLIENT_DROP_KEYS = new Set(['pmPreviewUrl']);
+export const CLIENT_DROP_KEYS = new Set(['pmPreviewUrl', 'costUsd']);
 
 /**
  * The agent flag (User.isAgent, SEO Engine OS-01) is server-side only: an agent must look exactly like a human
