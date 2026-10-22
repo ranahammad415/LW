@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/signals-erase.response.json",
+  "title": "signals-erase response (v1.7.0)",
+  "description": "rows = buffer rows deleted plus batch envelopes scrubbed (and the lead entry's attribution, for leadId).",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
+    "rows": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "alreadyGone": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "ok",
+    "rows",
+    "alreadyGone"
+  ]
+}

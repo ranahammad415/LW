@@ -668,11 +668,23 @@ describe('POST /events', () => {
     expect(store.contentApplied[0].type).toBe('content.deleted');
   });
 
-  it('a body over 1 MiB → 413 PAYLOAD_TOO_LARGE (not retryable) in the contract envelope', async () => {
-    const big = eventsBody([{ ...ex('events.request').events[2], snapshotText: 'x'.repeat(1024 * 1024) }]);
+  it('a body over 1.5 MiB → 413 PAYLOAD_TOO_LARGE (not retryable) in the contract envelope', async () => {
+    const big = eventsBody([{ ...ex('events.request').events[2], snapshotText: 'x'.repeat(1536 * 1024) }]);
     const res = await post(EV, big, { secret: keys.outbound, keyId: 1 });
     expect(res.statusCode).toBe(413);
     expect(res.json()).toMatchObject({ ok: false, error: { code: 'PAYLOAD_TOO_LARGE', retryable: false } });
+    expect(res.json().error.message).toContain(String(1536 * 1024));
+  });
+
+  it('v1.7.0 §38.4: /events accepts a 1.2 MiB body (signals.batch); the handshake keeps its 1 MiB limit', async () => {
+    const filler = 'x'.repeat(1200 * 1024);
+    const events = eventsBody([{ ...ex('events.request').events[2], padding: filler }]);
+    const ok = await post(EV, events, { secret: keys.outbound, keyId: 1 });
+    expect(ok.statusCode).toBe(200);
+    const hs = await post(HS, handshakeBody('heartbeat', { padding: filler }), { secret: keys.outbound, keyId: 1 });
+    expect(hs.statusCode).toBe(413);
+    expect(hs.json().error).toMatchObject({ code: 'PAYLOAD_TOO_LARGE' });
+    expect(hs.json().error.message).toContain(String(1024 * 1024));
   });
 
   it('a query string → 400 VALIDATION; body siteId mismatch → 400', async () => {

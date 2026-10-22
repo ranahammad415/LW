@@ -1,0 +1,8 @@
+{
+  "ok": false,
+  "error": {
+    "code": "HUMAN_ONLY",
+    "message": "Changing the visit-signal settings is done by a person (OWNER or PM), not by an agent or automation",
+    "retryable": false
+  }
+}

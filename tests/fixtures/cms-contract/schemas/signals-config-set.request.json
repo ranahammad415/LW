@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/signals-config-set.request.json",
+  "title": "signals-config-set (v1.7.0)",
+  "description": "Compare-and-set on baseRev (else 409 CONFLICT_REV with details.config). At least one field in changes. Human OWNER / PM only (other kinds 403 HUMAN_ONLY, other roles 403 FORBIDDEN).",
+  "type": "object",
+  "properties": {
+    "baseRev": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "changes": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "consentMode": {
+          "enum": [
+            "default-on-us",
+            "optin"
+          ]
+        },
+        "events": {
+          "type": "object",
+          "properties": {
+            "engagement": {
+              "type": "boolean"
+            },
+            "cta_click": {
+              "type": "boolean"
+            },
+            "form_start": {
+              "type": "boolean"
+            },
+            "vitals": {
+              "type": "boolean"
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "anyOf": [
+            {
+              "required": [
+                "engagement"
+              ]
+            },
+            {
+              "required": [
+                "cta_click"
+              ]
+            },
+            {
+              "required": [
+                "form_start"
+              ]
+            },
+            {
+              "required": [
+                "vitals"
+              ]
+            }
+          ]
+        },
+        "sampling": {
+          "type": "object",
+          "properties": {
+            "pageview": {
+              "type": "number",
+              "minimum": 0.1,
+              "maximum": 1
+            },
+            "engagement": {
+              "type": "number",
+              "minimum": 0.1,
+              "maximum": 1
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "anyOf": [
+            {
+              "required": [
+                "pageview"
+              ]
+            },
+            {
+              "required": [
+                "engagement"
+              ]
+            }
+          ]
+        },
+        "geoDetail": {
+          "enum": [
+            "country",
+            "region",
+            "city"
+          ]
+        },
+        "bufferDays": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30
+        }
+      },
+      "required": [],
+      "anyOf": [
+        {
+          "required": [
+            "enabled"
+          ]
+        },
+        {
+          "required": [
+            "consentMode"
+          ]
+        },
+        {
+          "required": [
+            "events"
+          ]
+        },
+        {
+          "required": [
+            "sampling"
+          ]
+        },
+        {
+          "required": [
+            "geoDetail"
+          ]
+        },
+        {
+          "required": [
+            "bufferDays"
+          ]
+        }
+      ]
+    },
+    "actor": {
+      "$ref": "common.json#/$defs/osActor"
+    }
+  },
+  "required": [
+    "baseRev",
+    "changes",
+    "actor"
+  ]
+}

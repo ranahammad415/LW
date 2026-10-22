@@ -1,0 +1,29 @@
+{
+  "ok": true,
+  "hours": 24,
+  "enabled": true,
+  "accepted": 612,
+  "rejected": {
+    "invalid": 3,
+    "too_large": 0,
+    "rate_limited": 0,
+    "not_ready": 2,
+    "editor": 41,
+    "disabled": 0
+  },
+  "dropped": {
+    "cap": 0,
+    "age": 0,
+    "sampled": 0
+  },
+  "packed": 598,
+  "buffered": 14,
+  "pendingBatches": 1,
+  "visits": 188,
+  "sessionOnlyVisits": 9,
+  "botVisits": 21,
+  "botShare": 0.112,
+  "consentShare": 0.952,
+  "lastBeaconAt": "2026-10-22T14:07:59Z",
+  "oldestBufferedAt": "2026-10-22T14:07:01Z"
+}

@@ -17,7 +17,7 @@ import crypto from 'node:crypto';
 export const CONTRACT_NAME = 'agency-os-bridge';
 export const CONTRACT_VERSION = 1;
 /** Errata level implemented by this OS (informational; X-AOS-Contract stays 1). */
-export const CONTRACT_REVISION = '1.6.1';
+export const CONTRACT_REVISION = '1.7.0';
 
 /**
  * True when the site's reported errata level (site-info / handshake `contractRevision`, e.g. "1.5.4") is at least
@@ -63,6 +63,9 @@ export const KEY_ROTATION_OVERLAP_SEC = 86_400;
 export const PAIRING_CODE_TTL_SEC = 900;
 export const PAIRING_MAX_FAILED_ATTEMPTS = 5;
 export const MAX_EVENTS_BODY_BYTES = 1024 * 1024;
+/** v1.7.0 §38.4: the /events route only accepts up to 1.5 MiB (50 maximal signals.batch events are about 1 MiB of data
+ *  plus the envelope). The handshake route keeps MAX_EVENTS_BODY_BYTES. */
+export const MAX_EVENTS_ROUTE_BODY_BYTES = 1536 * 1024;
 export const MAX_EVENTS_PER_BATCH = 50;
 export const MAX_SNAPSHOT_CHARS = 100_000;
 export const PAIRING_KEY_ID = 'pairing';

@@ -1,0 +1,40 @@
+{
+  "ok": true,
+  "config": {
+    "schemaVersion": 1,
+    "rev": 4,
+    "generatedAt": "2026-10-22T10:00:00Z",
+    "enabled": true,
+    "consentMode": "default-on-us",
+    "events": {
+      "visit": true,
+      "pageview": true,
+      "engagement": true,
+      "cta_click": true,
+      "form_start": true,
+      "vitals": false,
+      "lead_submitted": true,
+      "lead_attributed": true
+    },
+    "sampling": {
+      "pageview": 1,
+      "engagement": 1
+    },
+    "geoDetail": "city",
+    "bufferDays": 30,
+    "table": "1.0.0",
+    "lastChange": {
+      "rev": 4,
+      "at": "2026-10-22T10:00:00Z",
+      "source": "site-admin",
+      "by": {
+        "kind": "human",
+        "id": "01JB8ADM1N0000000000000001",
+        "name": null,
+        "role": "admin",
+        "osUserId": null,
+        "source": "admin-panel"
+      }
+    }
+  }
+}

@@ -1,0 +1,881 @@
+{
+  "version": 1,
+  "table": "1.0.0",
+  "description": "contract v1.7.0 §38.3: classify({ referrerUrl, landingUrl, siteHost }) must return { class, source } as listed (siteHost = the site's own host). Both the site (at capture) and the OS (re-classification) test against these.",
+  "siteHost": "oasispoolspas.com",
+  "cases": [
+    {
+      "name": "ChatGPT referrer",
+      "referrerUrl": "https://chatgpt.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "ai",
+        "source": "chatgpt"
+      }
+    },
+    {
+      "name": "ChatGPT legacy host",
+      "referrerUrl": "https://chat.openai.com/c/abc",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "ai",
+        "source": "chatgpt"
+      }
+    },
+    {
+      "name": "ChatGPT utm only (no referrer)",
+      "referrerUrl": null,
+      "landingUrl": "https://oasispoolspas.com/spa-services/?utm_source=chatgpt.com",
+      "expected": {
+        "class": "ai",
+        "source": "chatgpt"
+      }
+    },
+    {
+      "name": "ChatGPT utm upper-case",
+      "referrerUrl": null,
+      "landingUrl": "https://oasispoolspas.com/spa-services/?utm_source=ChatGPT.com",
+      "expected": {
+        "class": "ai",
+        "source": "chatgpt"
+      }
+    },
+    {
+      "name": "utm_source=openai",
+      "referrerUrl": null,
+      "landingUrl": "https://oasispoolspas.com/spa-services/?utm_source=openai",
+      "expected": {
+        "class": "ai",
+        "source": "chatgpt"
+      }
+    },
+    {
+      "name": "Perplexity",
+      "referrerUrl": "https://www.perplexity.ai/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "ai",
+        "source": "perplexity"
+      }
+    },
+    {
+      "name": "Perplexity short host",
+      "referrerUrl": "https://pplx.ai/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "ai",
+        "source": "perplexity"
+      }
+    },
+    {
+      "name": "utm_source=perplexity",
+      "referrerUrl": null,
+      "landingUrl": "https://oasispoolspas.com/spa-services/?utm_source=perplexity",
+      "expected": {
+        "class": "ai",
+        "source": "perplexity"
+      }
+    },
+    {
+      "name": "Claude",
+      "referrerUrl": "https://claude.ai/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "ai",
+        "source": "claude"
+      }
+    },
+    {
+      "name": "Claude .com",
+      "referrerUrl": "https://claude.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "ai",
+        "source": "claude"
+      }
+    },
+    {
+      "name": "utm_source=claude",
+      "referrerUrl": null,
+      "landingUrl": "https://oasispoolspas.com/spa-services/?utm_source=claude",
+      "expected": {
+        "class": "ai",
+        "source": "claude"
+      }
+    },
+    {
+      "name": "Gemini",
+      "referrerUrl": "https://gemini.google.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "ai",
+        "source": "gemini"
+      }
+    },
+    {
+      "name": "Bard (old Gemini host)",
+      "referrerUrl": "https://bard.google.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "ai",
+        "source": "gemini"
+      }
+    },
+    {
+      "name": "utm_source=gemini",
+      "referrerUrl": null,
+      "landingUrl": "https://oasispoolspas.com/spa-services/?utm_source=gemini",
+      "expected": {
+        "class": "ai",
+        "source": "gemini"
+      }
+    },
+    {
+      "name": "Copilot",
+      "referrerUrl": "https://copilot.microsoft.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "ai",
+        "source": "copilot"
+      }
+    },
+    {
+      "name": "Copilot in Edge",
+      "referrerUrl": "https://edgeservices.bing.com/edgesvc/chat",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "ai",
+        "source": "copilot"
+      }
+    },
+    {
+      "name": "Bing chat path",
+      "referrerUrl": "https://www.bing.com/chat?q=x",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "ai",
+        "source": "copilot"
+      }
+    },
+    {
+      "name": "utm_source=copilot",
+      "referrerUrl": null,
+      "landingUrl": "https://oasispoolspas.com/spa-services/?utm_source=copilot",
+      "expected": {
+        "class": "ai",
+        "source": "copilot"
+      }
+    },
+    {
+      "name": "You.com",
+      "referrerUrl": "https://you.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "ai",
+        "source": "you"
+      }
+    },
+    {
+      "name": "Meta AI",
+      "referrerUrl": "https://www.meta.ai/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "ai",
+        "source": "meta-ai"
+      }
+    },
+    {
+      "name": "DuckDuckGo AI (duck.ai)",
+      "referrerUrl": "https://duck.ai/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "ai",
+        "source": "duckduckgo-ai"
+      }
+    },
+    {
+      "name": "DuckDuckGo AI (duckchat path)",
+      "referrerUrl": "https://duckduckgo.com/duckchat/v1",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "ai",
+        "source": "duckduckgo-ai"
+      }
+    },
+    {
+      "name": "Grok",
+      "referrerUrl": "https://grok.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "ai",
+        "source": "grok"
+      }
+    },
+    {
+      "name": "x.ai",
+      "referrerUrl": "https://x.ai/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "ai",
+        "source": "grok"
+      }
+    },
+    {
+      "name": "Mistral",
+      "referrerUrl": "https://chat.mistral.ai/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "ai",
+        "source": "mistral"
+      }
+    },
+    {
+      "name": "DeepSeek",
+      "referrerUrl": "https://chat.deepseek.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "ai",
+        "source": "deepseek"
+      }
+    },
+    {
+      "name": "Poe",
+      "referrerUrl": "https://poe.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "ai",
+        "source": "poe"
+      }
+    },
+    {
+      "name": "HuggingChat",
+      "referrerUrl": "https://huggingface.co/chat/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "ai",
+        "source": "huggingchat"
+      }
+    },
+    {
+      "name": "Hugging Face (not chat) is a referral",
+      "referrerUrl": "https://huggingface.co/models",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "referral",
+        "source": "huggingface.co"
+      }
+    },
+    {
+      "name": "ChatGPT Android app",
+      "referrerUrl": "android-app://com.openai.chatgpt/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "ai",
+        "source": "chatgpt"
+      }
+    },
+    {
+      "name": "Google (AI Mode looks the same)",
+      "referrerUrl": "https://www.google.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "search",
+        "source": "google"
+      }
+    },
+    {
+      "name": "Google UK",
+      "referrerUrl": "https://www.google.co.uk/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "search",
+        "source": "google"
+      }
+    },
+    {
+      "name": "Google Australia",
+      "referrerUrl": "https://www.google.com.au/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "search",
+        "source": "google"
+      }
+    },
+    {
+      "name": "Google upper-case + trailing dot",
+      "referrerUrl": "https://WWW.GOOGLE.COM./",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "search",
+        "source": "google"
+      }
+    },
+    {
+      "name": "Google app (Android)",
+      "referrerUrl": "android-app://com.google.android.googlequicksearchbox/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "search",
+        "source": "google"
+      }
+    },
+    {
+      "name": "Bing",
+      "referrerUrl": "https://www.bing.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "search",
+        "source": "bing"
+      }
+    },
+    {
+      "name": "Yahoo Search",
+      "referrerUrl": "https://search.yahoo.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "search",
+        "source": "yahoo"
+      }
+    },
+    {
+      "name": "Yahoo Search regional",
+      "referrerUrl": "https://uk.search.yahoo.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "search",
+        "source": "yahoo"
+      }
+    },
+    {
+      "name": "DuckDuckGo",
+      "referrerUrl": "https://duckduckgo.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "search",
+        "source": "duckduckgo"
+      }
+    },
+    {
+      "name": "Brave Search",
+      "referrerUrl": "https://search.brave.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "search",
+        "source": "brave"
+      }
+    },
+    {
+      "name": "Ecosia",
+      "referrerUrl": "https://www.ecosia.org/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "search",
+        "source": "ecosia"
+      }
+    },
+    {
+      "name": "Yandex",
+      "referrerUrl": "https://yandex.ru/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "search",
+        "source": "yandex"
+      }
+    },
+    {
+      "name": "Baidu",
+      "referrerUrl": "https://www.baidu.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "search",
+        "source": "baidu"
+      }
+    },
+    {
+      "name": "Google Business Profile (utm_campaign=gbp)",
+      "referrerUrl": "https://www.google.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/?utm_source=google&utm_medium=organic&utm_campaign=gbp",
+      "expected": {
+        "class": "search",
+        "source": "gbp"
+      }
+    },
+    {
+      "name": "Google Business Profile (utm_source=gbp)",
+      "referrerUrl": null,
+      "landingUrl": "https://oasispoolspas.com/spa-services/?utm_source=gbp",
+      "expected": {
+        "class": "search",
+        "source": "gbp"
+      }
+    },
+    {
+      "name": "Facebook",
+      "referrerUrl": "https://www.facebook.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "social",
+        "source": "facebook"
+      }
+    },
+    {
+      "name": "Facebook mobile",
+      "referrerUrl": "https://m.facebook.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "social",
+        "source": "facebook"
+      }
+    },
+    {
+      "name": "Facebook link shim",
+      "referrerUrl": "https://l.facebook.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "social",
+        "source": "facebook"
+      }
+    },
+    {
+      "name": "Facebook lm shim",
+      "referrerUrl": "https://lm.facebook.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "social",
+        "source": "facebook"
+      }
+    },
+    {
+      "name": "Instagram",
+      "referrerUrl": "https://www.instagram.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "social",
+        "source": "instagram"
+      }
+    },
+    {
+      "name": "Instagram link shim",
+      "referrerUrl": "https://l.instagram.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "social",
+        "source": "instagram"
+      }
+    },
+    {
+      "name": "X short links",
+      "referrerUrl": "https://t.co/abc",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "social",
+        "source": "x"
+      }
+    },
+    {
+      "name": "X",
+      "referrerUrl": "https://x.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "social",
+        "source": "x"
+      }
+    },
+    {
+      "name": "Twitter",
+      "referrerUrl": "https://twitter.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "social",
+        "source": "x"
+      }
+    },
+    {
+      "name": "LinkedIn",
+      "referrerUrl": "https://www.linkedin.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "social",
+        "source": "linkedin"
+      }
+    },
+    {
+      "name": "LinkedIn short links",
+      "referrerUrl": "https://lnkd.in/x",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "social",
+        "source": "linkedin"
+      }
+    },
+    {
+      "name": "Pinterest",
+      "referrerUrl": "https://www.pinterest.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "social",
+        "source": "pinterest"
+      }
+    },
+    {
+      "name": "Pinterest regional",
+      "referrerUrl": "https://pinterest.co.uk/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "social",
+        "source": "pinterest"
+      }
+    },
+    {
+      "name": "Reddit",
+      "referrerUrl": "https://www.reddit.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "social",
+        "source": "reddit"
+      }
+    },
+    {
+      "name": "Reddit out links",
+      "referrerUrl": "https://out.reddit.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "social",
+        "source": "reddit"
+      }
+    },
+    {
+      "name": "YouTube",
+      "referrerUrl": "https://www.youtube.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "social",
+        "source": "youtube"
+      }
+    },
+    {
+      "name": "YouTube mobile",
+      "referrerUrl": "https://m.youtube.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "social",
+        "source": "youtube"
+      }
+    },
+    {
+      "name": "youtu.be",
+      "referrerUrl": "https://youtu.be/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "social",
+        "source": "youtube"
+      }
+    },
+    {
+      "name": "TikTok",
+      "referrerUrl": "https://www.tiktok.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "social",
+        "source": "tiktok"
+      }
+    },
+    {
+      "name": "Nextdoor",
+      "referrerUrl": "https://nextdoor.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "social",
+        "source": "nextdoor"
+      }
+    },
+    {
+      "name": "Facebook app (Android)",
+      "referrerUrl": "android-app://com.facebook.katana/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "social",
+        "source": "facebook"
+      }
+    },
+    {
+      "name": "utm_medium=social without referrer",
+      "referrerUrl": null,
+      "landingUrl": "https://oasispoolspas.com/spa-services/?utm_source=facebook-bio&utm_medium=social",
+      "expected": {
+        "class": "social",
+        "source": "facebook-bio"
+      }
+    },
+    {
+      "name": "Gmail web",
+      "referrerUrl": "https://mail.google.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "email",
+        "source": "gmail"
+      }
+    },
+    {
+      "name": "Gmail app (Android)",
+      "referrerUrl": "android-app://com.google.android.gm/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "email",
+        "source": "gmail"
+      }
+    },
+    {
+      "name": "Outlook web",
+      "referrerUrl": "https://outlook.live.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "email",
+        "source": "outlook"
+      }
+    },
+    {
+      "name": "Outlook Microsoft 365",
+      "referrerUrl": "https://outlook.office.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "email",
+        "source": "outlook"
+      }
+    },
+    {
+      "name": "Yahoo Mail",
+      "referrerUrl": "https://mail.yahoo.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "email",
+        "source": "yahoo-mail"
+      }
+    },
+    {
+      "name": "utm_medium=email",
+      "referrerUrl": null,
+      "landingUrl": "https://oasispoolspas.com/spa-services/?utm_source=signature&utm_medium=email",
+      "expected": {
+        "class": "email",
+        "source": "signature"
+      }
+    },
+    {
+      "name": "utm_medium=email without a source",
+      "referrerUrl": null,
+      "landingUrl": "https://oasispoolspas.com/spa-services/?utm_medium=email",
+      "expected": {
+        "class": "email",
+        "source": "other"
+      }
+    },
+    {
+      "name": "gclid",
+      "referrerUrl": "https://www.google.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/?gclid=abc123",
+      "expected": {
+        "class": "ads",
+        "source": "google-ads"
+      }
+    },
+    {
+      "name": "gbraid",
+      "referrerUrl": null,
+      "landingUrl": "https://oasispoolspas.com/spa-services/?gbraid=x",
+      "expected": {
+        "class": "ads",
+        "source": "google-ads"
+      }
+    },
+    {
+      "name": "wbraid",
+      "referrerUrl": null,
+      "landingUrl": "https://oasispoolspas.com/spa-services/?wbraid=x",
+      "expected": {
+        "class": "ads",
+        "source": "google-ads"
+      }
+    },
+    {
+      "name": "msclkid",
+      "referrerUrl": "https://www.bing.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/?msclkid=x",
+      "expected": {
+        "class": "ads",
+        "source": "microsoft-ads"
+      }
+    },
+    {
+      "name": "ttclid",
+      "referrerUrl": null,
+      "landingUrl": "https://oasispoolspas.com/spa-services/?ttclid=x",
+      "expected": {
+        "class": "ads",
+        "source": "tiktok-ads"
+      }
+    },
+    {
+      "name": "fbclid alone is social",
+      "referrerUrl": "https://l.facebook.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/?fbclid=IwAR0x",
+      "expected": {
+        "class": "social",
+        "source": "facebook"
+      }
+    },
+    {
+      "name": "fbclid with utm_medium=paid_social",
+      "referrerUrl": "https://l.facebook.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/?fbclid=IwAR0x&utm_medium=paid_social",
+      "expected": {
+        "class": "ads",
+        "source": "meta-ads"
+      }
+    },
+    {
+      "name": "fbclid with utm_medium=cpc",
+      "referrerUrl": null,
+      "landingUrl": "https://oasispoolspas.com/spa-services/?fbclid=x&utm_medium=cpc",
+      "expected": {
+        "class": "ads",
+        "source": "meta-ads"
+      }
+    },
+    {
+      "name": "click id beats an AI utm_source",
+      "referrerUrl": null,
+      "landingUrl": "https://oasispoolspas.com/spa-services/?gclid=x&utm_source=chatgpt.com",
+      "expected": {
+        "class": "ads",
+        "source": "google-ads"
+      }
+    },
+    {
+      "name": "utm_medium=cpc without click id",
+      "referrerUrl": null,
+      "landingUrl": "https://oasispoolspas.com/spa-services/?utm_source=nextdoor&utm_medium=cpc",
+      "expected": {
+        "class": "ads",
+        "source": "nextdoor"
+      }
+    },
+    {
+      "name": "Yelp",
+      "referrerUrl": "https://www.yelp.com/biz/oasis",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "referral",
+        "source": "yelp.com"
+      }
+    },
+    {
+      "name": "Angi",
+      "referrerUrl": "https://www.angi.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "referral",
+        "source": "angi.com"
+      }
+    },
+    {
+      "name": "Houzz mobile",
+      "referrerUrl": "https://m.houzz.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "referral",
+        "source": "houzz.com"
+      }
+    },
+    {
+      "name": "BBB",
+      "referrerUrl": "https://www.bbb.org/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "referral",
+        "source": "bbb.org"
+      }
+    },
+    {
+      "name": "registrable domain of a .co.uk host",
+      "referrerUrl": "https://news.bbc.co.uk/x",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "referral",
+        "source": "bbc.co.uk"
+      }
+    },
+    {
+      "name": "IDN host (punycode)",
+      "referrerUrl": "https://bücher.de/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "referral",
+        "source": "xn--bcher-kva.de"
+      }
+    },
+    {
+      "name": "unknown Android app",
+      "referrerUrl": "android-app://com.example.reader/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "referral",
+        "source": "app-com.example.reader"
+      }
+    },
+    {
+      "name": "print / QR tag",
+      "referrerUrl": null,
+      "landingUrl": "https://oasispoolspas.com/spa-services/?utm_source=truck&utm_medium=qr&utm_campaign=wrap-2026",
+      "expected": {
+        "class": "referral",
+        "source": "truck"
+      }
+    },
+    {
+      "name": "own site",
+      "referrerUrl": "https://oasispoolspas.com/pool-services/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "internal",
+        "source": "self"
+      }
+    },
+    {
+      "name": "own site with www",
+      "referrerUrl": "https://www.oasispoolspas.com/",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "internal",
+        "source": "self"
+      }
+    },
+    {
+      "name": "no referrer, no utm",
+      "referrerUrl": null,
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "direct",
+        "source": "none"
+      }
+    },
+    {
+      "name": "empty referrer string",
+      "referrerUrl": "",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "direct",
+        "source": "none"
+      }
+    },
+    {
+      "name": "unparseable referrer",
+      "referrerUrl": "not a url",
+      "landingUrl": "https://oasispoolspas.com/spa-services/",
+      "expected": {
+        "class": "unknown",
+        "source": "unknown"
+      }
+    }
+  ]
+}

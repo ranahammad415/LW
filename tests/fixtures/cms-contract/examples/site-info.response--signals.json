@@ -1,0 +1,522 @@
+{
+  "ok": true,
+  "contract": 1,
+  "supportedContracts": [
+    1
+  ],
+  "siteId": "site_9f3c2a7b41d0",
+  "siteUrl": "https://oasispoolspas.com",
+  "siteName": "Oasis Pool and Spa",
+  "plugin": {
+    "id": "agency-os-bridge",
+    "version": "1.0.0"
+  },
+  "platform": {
+    "emdash": "1.2.0",
+    "astro": "7.3.8",
+    "framework": "1.0.0",
+    "node": "24.19.0"
+  },
+  "collections": [
+    {
+      "name": "pages",
+      "hasSeo": true,
+      "routed": true,
+      "parentOptions": [
+        "None",
+        "pool-services",
+        "spa-services",
+        "equipment-diagnosis-repair",
+        "service-areas"
+      ],
+      "hasBylines": false,
+      "taxonomies": []
+    },
+    {
+      "name": "posts",
+      "hasSeo": true,
+      "routed": true,
+      "hasBylines": true,
+      "taxonomies": [
+        "category"
+      ]
+    }
+  ],
+  "contentTypes": [
+    "landing_page",
+    "pillar_page",
+    "cluster_page",
+    "article",
+    "service_page",
+    "location_page",
+    "home_page",
+    "product_page"
+  ],
+  "capabilities": {
+    "pushDrafts": true,
+    "createEntries": true,
+    "mediaImport": true,
+    "seoPanel": true,
+    "seoProfiles": false,
+    "publishFromOs": false,
+    "scheduleFromOs": false,
+    "previewLinks": true,
+    "rotateLinks": true,
+    "clientReviewFromOs": false,
+    "nativeDraftRevisions": true,
+    "autoLogin": false,
+    "leads": false,
+    "timeline": true,
+    "draftPushFromOs": true,
+    "seoGateOnPush": true,
+    "signals": true
+  },
+  "health": {
+    "schedulerLastRunAgoMin": 3,
+    "outbox": {
+      "pending": 0,
+      "failed": 0,
+      "oldestPendingAt": null
+    },
+    "reviews": {
+      "active": 4
+    },
+    "lastEventAt": "2026-10-15T12:00:00Z",
+    "lastCursor": 57
+  },
+  "framework": {
+    "version": "1.0.0",
+    "blocks": [
+      "page_hero",
+      "content_section",
+      "card_grid",
+      "faq",
+      "cta_banner",
+      "related_links"
+    ],
+    "blockSchemas": {
+      "page_hero": {
+        "version": 1,
+        "fields": [
+          {
+            "slug": "variant",
+            "type": "select",
+            "options": [
+              "Standard",
+              "Homepage"
+            ]
+          },
+          {
+            "slug": "eyebrow",
+            "type": "string",
+            "maxLength": 60
+          },
+          {
+            "slug": "heading",
+            "type": "string",
+            "required": true,
+            "maxLength": 70
+          },
+          {
+            "slug": "heading_accent",
+            "type": "string",
+            "maxLength": 40
+          },
+          {
+            "slug": "intro",
+            "type": "text",
+            "maxLength": 420
+          },
+          {
+            "slug": "tagline",
+            "type": "string",
+            "maxLength": 80
+          },
+          {
+            "slug": "image",
+            "type": "image"
+          },
+          {
+            "slug": "primary_label",
+            "type": "string",
+            "maxLength": 32
+          },
+          {
+            "slug": "primary_url",
+            "type": "string",
+            "maxLength": 200
+          },
+          {
+            "slug": "show_call_button",
+            "type": "boolean"
+          }
+        ]
+      },
+      "content_section": {
+        "version": 1,
+        "fields": [
+          {
+            "slug": "eyebrow",
+            "type": "string",
+            "maxLength": 60
+          },
+          {
+            "slug": "heading",
+            "type": "string",
+            "required": true,
+            "maxLength": 90
+          },
+          {
+            "slug": "heading_accent",
+            "type": "string",
+            "maxLength": 40
+          },
+          {
+            "slug": "body",
+            "type": "portableText"
+          },
+          {
+            "slug": "image",
+            "type": "image"
+          },
+          {
+            "slug": "image_side",
+            "type": "select",
+            "options": [
+              "Right",
+              "Left"
+            ]
+          },
+          {
+            "slug": "image_badge",
+            "type": "string",
+            "maxLength": 60
+          },
+          {
+            "slug": "buttons",
+            "type": "repeater",
+            "maxItems": 2,
+            "subFields": [
+              {
+                "slug": "label",
+                "type": "string",
+                "required": true
+              },
+              {
+                "slug": "url",
+                "type": "string",
+                "required": true
+              }
+            ]
+          },
+          {
+            "slug": "tone",
+            "type": "select",
+            "options": [
+              "Light",
+              "Tinted",
+              "Navy"
+            ]
+          }
+        ]
+      },
+      "card_grid": {
+        "version": 1,
+        "fields": [
+          {
+            "slug": "eyebrow",
+            "type": "string",
+            "maxLength": 60
+          },
+          {
+            "slug": "heading",
+            "type": "string",
+            "required": true,
+            "maxLength": 90
+          },
+          {
+            "slug": "intro",
+            "type": "text",
+            "maxLength": 300
+          },
+          {
+            "slug": "style",
+            "type": "select",
+            "options": [
+              "Cards",
+              "Numbered steps"
+            ]
+          },
+          {
+            "slug": "cards",
+            "type": "repeater",
+            "minItems": 1,
+            "maxItems": 6,
+            "subFields": [
+              {
+                "slug": "title",
+                "type": "string",
+                "required": true
+              },
+              {
+                "slug": "text",
+                "type": "text"
+              },
+              {
+                "slug": "image",
+                "type": "image"
+              },
+              {
+                "slug": "link_label",
+                "type": "string"
+              },
+              {
+                "slug": "link_url",
+                "type": "string"
+              }
+            ]
+          },
+          {
+            "slug": "tone",
+            "type": "select",
+            "options": [
+              "Light",
+              "Tinted",
+              "Navy"
+            ]
+          }
+        ]
+      },
+      "faq": {
+        "version": 1,
+        "fields": [
+          {
+            "slug": "eyebrow",
+            "type": "string",
+            "maxLength": 60
+          },
+          {
+            "slug": "heading",
+            "type": "string",
+            "required": true,
+            "maxLength": 90
+          },
+          {
+            "slug": "intro",
+            "type": "text",
+            "maxLength": 300
+          },
+          {
+            "slug": "items",
+            "type": "repeater",
+            "minItems": 1,
+            "maxItems": 14,
+            "subFields": [
+              {
+                "slug": "question",
+                "type": "string",
+                "required": true
+              },
+              {
+                "slug": "answer",
+                "type": "text",
+                "required": true
+              }
+            ]
+          },
+          {
+            "slug": "tone",
+            "type": "select",
+            "options": [
+              "Light",
+              "Tinted",
+              "Navy"
+            ]
+          }
+        ]
+      },
+      "cta_banner": {
+        "version": 1,
+        "fields": [
+          {
+            "slug": "eyebrow",
+            "type": "string",
+            "maxLength": 40
+          },
+          {
+            "slug": "heading",
+            "type": "string",
+            "maxLength": 60
+          },
+          {
+            "slug": "text",
+            "type": "text",
+            "maxLength": 160
+          }
+        ]
+      },
+      "related_links": {
+        "version": 1,
+        "fields": [
+          {
+            "slug": "heading",
+            "type": "string",
+            "maxLength": 60
+          },
+          {
+            "slug": "links",
+            "type": "repeater",
+            "minItems": 1,
+            "maxItems": 6,
+            "subFields": [
+              {
+                "slug": "label",
+                "type": "string",
+                "required": true
+              },
+              {
+                "slug": "url",
+                "type": "string",
+                "required": true
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "plugins": [
+    {
+      "id": "emdash-seo",
+      "version": "0.9.0"
+    },
+    {
+      "id": "agency-os-bridge",
+      "version": "1.0.0"
+    },
+    {
+      "id": "oasis-cache",
+      "version": "0.1.0"
+    }
+  ],
+  "counts": {
+    "pages": {
+      "draft": 3,
+      "published": 58,
+      "scheduled": 0
+    },
+    "posts": {
+      "draft": 1,
+      "published": 12,
+      "scheduled": 1
+    }
+  },
+  "contractRevision": "1.7.0",
+  "previewConfigured": true,
+  "navigation": [
+    "/",
+    "/pool-services/",
+    "/spa-services/",
+    "/about/",
+    "/contact/",
+    "/privacy-policy/"
+  ],
+  "sitemapUrl": "https://oasispoolspas.com/sitemap.xml",
+  "bylines": [
+    {
+      "slug": "oasis-team",
+      "name": "Oasis Pool and Spa team",
+      "team": true,
+      "osUserId": null
+    },
+    {
+      "slug": "jane-pm",
+      "name": "Jane PM",
+      "team": false,
+      "osUserId": "8f14e45f-ceea-467a-9575-5f3c1b2a7d90"
+    }
+  ],
+  "taxonomies": {
+    "category": {
+      "label": "Category",
+      "terms": [
+        {
+          "slug": "pool-care",
+          "label": "Pool care"
+        },
+        {
+          "slug": "spa-care",
+          "label": "Spa & hot tub care"
+        },
+        {
+          "slug": "equipment",
+          "label": "Equipment"
+        }
+      ]
+    }
+  },
+  "media": {
+    "maxBytes": 1048576,
+    "maxDimension": 4000,
+    "types": [
+      "image/jpeg",
+      "image/png",
+      "image/webp",
+      "image/avif"
+    ],
+    "allowedSourceHosts": [
+      "old.oasispoolspas.com",
+      "*.localwaves-cdn.example"
+    ],
+    "itemsPerCall": 20,
+    "uploadsPerCall": 1,
+    "allowedSourcePathPrefixes": [
+      "https://account.localwaves.ai/uploads/cms-staging/"
+    ]
+  },
+  "signals": {
+    "config": {
+      "schemaVersion": 1,
+      "rev": 4,
+      "generatedAt": "2026-10-22T10:00:00Z",
+      "enabled": true,
+      "consentMode": "default-on-us",
+      "events": {
+        "visit": true,
+        "pageview": true,
+        "engagement": true,
+        "cta_click": true,
+        "form_start": true,
+        "vitals": false,
+        "lead_submitted": true,
+        "lead_attributed": true
+      },
+      "sampling": {
+        "pageview": 1,
+        "engagement": 1
+      },
+      "geoDetail": "city",
+      "bufferDays": 30,
+      "table": "1.0.0",
+      "lastChange": {
+        "rev": 4,
+        "at": "2026-10-22T10:00:00Z",
+        "source": "site-admin",
+        "by": {
+          "kind": "human",
+          "id": "01JB8ADM1N0000000000000001",
+          "name": null,
+          "role": "admin",
+          "osUserId": null,
+          "source": "admin-panel"
+        }
+      }
+    },
+    "buffer": {
+      "buffered": 14,
+      "packed": 598,
+      "droppedLast24h": 0,
+      "oldestBufferedAt": "2026-10-22T14:07:01Z"
+    }
+  }
+}

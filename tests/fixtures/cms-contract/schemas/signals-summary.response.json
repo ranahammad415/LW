@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/signals-summary.response.json",
+  "title": "signals-summary response (v1.7.0)",
+  "description": "Counts only (no ids, no paths). botShare / consentShare are null without visits.",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
+    "hours": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 168
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "accepted": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "signals stored in the buffer"
+    },
+    "rejected": {
+      "type": "object",
+      "properties": {
+        "invalid": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "too_large": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rate_limited": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "not_ready": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "editor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "disabled": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "invalid",
+        "too_large",
+        "rate_limited",
+        "not_ready",
+        "editor",
+        "disabled"
+      ]
+    },
+    "dropped": {
+      "type": "object",
+      "properties": {
+        "cap": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "age": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sampled": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "cap",
+        "age",
+        "sampled"
+      ]
+    },
+    "packed": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "signals packed into signals.batch events in the window"
+    },
+    "buffered": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "rows waiting now"
+    },
+    "pendingBatches": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "visits": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "sessionOnlyVisits": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "botVisits": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "botShare": {
+      "anyOf": [
+        {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "consentShare": {
+      "anyOf": [
+        {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "share of visits with full consent (not session-only)"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "lastBeaconAt": {
+      "anyOf": [
+        {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "oldestBufferedAt": {
+      "anyOf": [
+        {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "ok",
+    "hours",
+    "accepted",
+    "rejected",
+    "dropped",
+    "packed",
+    "buffered",
+    "botShare",
+    "consentShare",
+    "lastBeaconAt"
+  ]
+}
