@@ -745,6 +745,10 @@ model Project {
   uptimeDaily           UptimeDaily[]
   localRanks            LocalRankDaily[]
   localRankGrids        LocalRankGrid[]
+  localRankTasks        LocalRankTask[]
+  seoCitations          SeoCitationMirror[]
+  seoCitationState      SeoCitationState?
+  seoCitationRuns       SeoCitationCheckRun[]
 
   @@map("project")
 }
@@ -888,6 +892,7 @@ model KeywordTrack {
   rankDaily   KeywordRankDaily[]
   localRanks  LocalRankDaily[]
   localGrids  LocalRankGrid[]
+  localTasks  LocalRankTask[]
 
   @@map("keywordtrack")
 }
@@ -2097,7 +2102,7 @@ model LocalRankDaily {
   locationMode String?  @db.VarChar(16)
   depth        Int?
   costUsd      Decimal? @db.Decimal(10, 5)
-  /// ok | not_found | error
+  /// ok | not_found | error | pending (contract-180: a standard-queue task is posted; LocalRankTask collects it)
   status       String   @db.VarChar(12)
   errorCode    String?  @db.VarChar(40)
   fetchedAt    DateTime @default(now())
@@ -2125,7 +2130,7 @@ model LocalRankGrid {
   avgRank   Float?
   coverage  Float?
   costUsd   Decimal? @db.Decimal(10, 5)
-  /// ok | partial | error
+  /// ok | partial | error | pending (standard-queue tasks still being collected)
   status    String   @db.VarChar(12)
   errorCode String?  @db.VarChar(40)
 
@@ -2135,6 +2140,128 @@ model LocalRankGrid {
   @@index([projectId, runAt])
   @@index([keywordId, runAt])
   @@map("localrankgrid")
+}
+
+/// Local SEO standard queue (contract-180 owner decision): one DataForSEO serp/google/maps task_post per Maps check.
+/// The collector (leader, every 10 min) reads task_get/advanced/{taskId} until done or 24 h old (then expired).
+/// kind daily → LocalRankDaily (keywordId, date); kind grid → LocalRankGrid gridId, points[pointIndex].
+model LocalRankTask {
+  id           String    @id @default(uuid())
+  projectId    String
+  keywordId    String
+  /// daily | grid
+  kind         String    @db.VarChar(8)
+  date         DateTime  @db.Date
+  gridId       String?   @db.VarChar(191)
+  pointIndex   Int?
+  taskId       String    @unique @db.VarChar(64)
+  /// coordinate | location_code
+  locationMode String?   @db.VarChar(16)
+  depth        Int?
+  /// pending | done | failed | expired
+  status       String    @db.VarChar(12)
+  postedAt     DateTime  @default(now())
+  collectedAt  DateTime?
+  polls        Int       @default(0)
+  costUsd      Decimal?  @db.Decimal(10, 5)
+  errorCode    String?   @db.VarChar(40)
+
+  project Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  keyword KeywordTrack @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+
+  @@index([status, postedAt])
+  @@index([projectId, kind, date])
+  @@index([gridId])
+  @@map("localranktask")
+}
+
+/// EmDash contract 1.8.0 §39 (features/local-seo.md §Citations): mirror of the site's citation list, one row per
+/// listing (siteCitationId = the site's id: a domain or a slug). Mirrored by rev (seo.citation_changed; a gap → pull
+/// seo-citations-list and replace). note / utm / rank are site-owned and agency-only (never sent to clients).
+model SeoCitationMirror {
+  id             String    @id @default(uuid())
+  projectId      String
+  siteCitationId String    @db.VarChar(100)
+  name           String    @db.VarChar(120)
+  url            String?   @db.Text
+  /// directory | social | maps | review-site | industry-list
+  kind           String    @db.VarChar(16)
+  listed         Boolean   @default(false)
+  /// missing | wrong | correct | unknown
+  napStatus      String    @default("unknown") @db.VarChar(10)
+  nameSeen       String?   @db.VarChar(200)
+  phoneSeen      String?   @db.VarChar(200)
+  zipSeen        String?   @db.VarChar(200)
+  hoursSeen      String?   @db.VarChar(200)
+  /// {name, phone, zip, hours, areas, site_link} each true | false | null, or null
+  checks         Json?
+  lastChecked    DateTime?
+  /// human | os
+  checkedBy      String    @default("human") @db.VarChar(8)
+  note           String?   @db.Text
+  utm            String?   @db.VarChar(300)
+  rank           Int?
+  siteUpdatedAt  DateTime?
+  /// list revision at which this row was last written (event or pull)
+  rev            Int       @default(0)
+  lastOsCheckAt  DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @default(now()) @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, siteCitationId])
+  @@index([projectId, napStatus])
+  @@map("seocitationmirror")
+}
+
+/// Per-project citation list state: the mirrored list rev, the staff canonical NAP override and monitor bookkeeping.
+model SeoCitationState {
+  id               String    @id @default(uuid())
+  projectId        String    @unique
+  rev              Int?
+  stale            Boolean   @default(false)
+  fetchedAt        DateTime?
+  /// staff-confirmed canonical NAP {name, phone, address, zip, city, hours, website}; null = derived (GBP identity)
+  canonicalNap     Json?
+  canonicalNapById String?   @db.VarChar(191)
+  canonicalNapAt   DateTime?
+  lastMonitorAt    DateTime?
+  updatedAt        DateTime  @default(now()) @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("seocitationstate")
+}
+
+/// One listing-monitor run for a project (monthly leader job or a staff "Check now"). costUsd = the DataForSEO cost.
+/// period = YYYY-MM for scheduled runs (one per project per month); null for manual runs.
+model SeoCitationCheckRun {
+  id            String    @id @default(uuid())
+  projectId     String
+  /// scheduled | manual
+  trigger       String    @db.VarChar(12)
+  requestedById String?   @db.VarChar(191)
+  /// running | ok | partial | error | skipped
+  status        String    @db.VarChar(12)
+  period        String?   @db.VarChar(7)
+  dfsCalls      Int       @default(0)
+  pageFetches   Int       @default(0)
+  costUsd       Decimal?  @db.Decimal(10, 5)
+  checked       Int       @default(0)
+  written       Int       @default(0)
+  /// [{id, napStatus, source: dfs|page, checks}] (staff only)
+  results       Json?
+  warnings      Json?
+  errorCode     String?   @db.VarChar(40)
+  startedAt     DateTime  @default(now())
+  finishedAt    DateTime?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, period])
+  @@index([projectId, startedAt])
+  @@map("seocitationcheckrun")
 }
 
 /// Background analytics / local SEO job (a manual sync answers 202 with this id; the UI polls it from any instance).
@@ -2397,6 +2524,12 @@ model AiVisibilityRun {
   isDemo           Boolean   @default(false)
   /// sha256 of normalized probe list (live runs only)
   probeFingerprint String?   @db.VarChar(64)
+  /// admin (staff-triggered) | scheduled (monthly leader job over the site's seo-ai-prompts, contract 1.8.0 §39.5)
+  source           String    @default("admin") @db.VarChar(16)
+  /// YYYY-MM for scheduled runs (one per project per month); null for admin runs
+  period           String?   @db.VarChar(7)
+  /// Sum of the provider-reported per-cell LLM costs (USD; null = unknown). Staff only.
+  costUsd          Decimal?  @db.Decimal(10, 5)
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @default(now()) @updatedAt
 
@@ -2408,6 +2541,7 @@ model AiVisibilityRun {
   @@index([clientId, createdAt])
   @@index([status])
   @@index([projectId, probeFingerprint])
+  @@unique([projectId, period])
   @@map("aivisibilityrun")
 }
 
@@ -2423,6 +2557,15 @@ model AiVisibilityResult {
   citationType    String?  @db.VarChar(30)
   responseText    String?  @db.LongText
   competitorsJson Json?
+  /// contract 1.8.0 §39.5 prompt id (scheduled runs) with its town / service / branded flag
+  promptId        String?  @db.VarChar(120)
+  town            String?  @db.VarChar(100)
+  service         String?  @db.VarChar(200)
+  branded         Boolean?
+  /// 1-based position of the first brand mention among the answer's listed items (null = not cited / not in a list)
+  mentionPosition Int?
+  /// provider-reported cost of this cell (USD); staff only
+  costUsd         Decimal? @db.Decimal(10, 6)
   createdAt       DateTime @default(now())
 
   run AiVisibilityRun @relation(fields: [runId], references: [id], onDelete: Cascade)

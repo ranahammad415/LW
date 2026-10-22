@@ -45,5 +45,28 @@ export const DEFAULT_CONFIG_V1 = Object.freeze({
   alerts: { sustainedDropPoints: 10, sustainedDays: 7, consecutiveRuns: 2, dedupeDays: 7, minCoverage: 60 },
 });
 
+/**
+ * Config version 2 (EmDash contract 1.8.0, branch contract-180): version 1 plus two factors, weight 1 each.
+ * - R5 "Listings consistency" (reputation): level = pl(consistencyPct) from the citation mirror
+ *   (correct / (correct + wrong) of the checked listings); null when fewer than `minChecked` listings were checked.
+ * - A1 "AI citation rate" (aiVisibility): level = pl(cited / answered cells, %) of the latest AI-visibility run
+ *   finished at most `maxAgeDays` before the score date; trend = trend(Δ percentage points vs the previous run);
+ *   null when there is no such run or fewer than `minCells` answered cells.
+ * The migration 20261108_contract_180 inserts exactly this object as version 2 (INSERT IGNORE) and activates it only
+ * while version 1 is the active one (an OWNER-edited config is never replaced). Version 1 stays intact.
+ */
+export const DEFAULT_CONFIG_V2 = Object.freeze({
+  ...JSON.parse(JSON.stringify(DEFAULT_CONFIG_V1)),
+  version: 2,
+  factors: {
+    ...JSON.parse(JSON.stringify(DEFAULT_CONFIG_V1.factors)),
+    R5: { pillar: 'reputation', weight: 1, level: [[50, 20], [80, 60], [100, 100]], minChecked: 3 },
+    A1: { pillar: 'aiVisibility', weight: 1, level: [[0, 15], [25, 60], [60, 100]], maxAgeDays: 45, minCells: 5 },
+  },
+});
+
+/** The newest built-in defaults (used when the config table is empty or not migrated yet). */
+export const DEFAULT_CONFIG = DEFAULT_CONFIG_V2;
+
 export const PILLARS = Object.freeze(['visibility', 'engagement', 'leads', 'reputation', 'aiVisibility', 'site', 'content']);
 export const PROFILES = Object.freeze(['SEO', 'LOCAL', 'AEO', 'WEBSITE']);
