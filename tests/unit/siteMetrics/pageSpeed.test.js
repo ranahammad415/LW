@@ -36,6 +36,8 @@ import {
   isPageSpeedEnabled,
   pageSpeedMaxPerRun,
   utcDay,
+  staffPageSpeedView,
+  clientPageSpeedView,
 } from '../../../src/lib/pageSpeed.js';
 
 const PSI = JSON.parse(readFileSync(new URL('../../fixtures/site-metrics/psi-mobile.json', import.meta.url), 'utf8'));
@@ -174,7 +176,7 @@ describe('runPageSpeedJob', () => {
     expect(db.calls.some((c) => c.key === 'pageSpeedDaily.deleteMany')).toBe(true);
   });
 
-  it('stops the whole run on the first 429 and writes nothing for it (no retry)', async () => {
+  it('stops the whole run on the first 429, no retry; the 429 is kept as a RATE_LIMITED error row (O-R3-6)', async () => {
     db.overrides['project.findMany'] = async () => projects;
     let n = 0;
     const out = await runPageSpeedJob({
@@ -184,7 +186,20 @@ describe('runPageSpeedJob', () => {
     });
     expect(n).toBe(2);
     expect(out).toMatchObject({ attempted: 1, ok: 1, stopped: 'RATE_LIMITED' });
-    expect(db.calls.filter((c) => c.key === 'pageSpeedDaily.upsert')).toHaveLength(1);
+    const upserts = db.calls.filter((c) => c.key === 'pageSpeedDaily.upsert');
+    expect(upserts).toHaveLength(2);
+    expect(upserts[1].args.create).toMatchObject({ strategy: 'desktop', status: 'error', errorCode: 'RATE_LIMITED' });
+  });
+
+  it('staff view flags the quota (with or without an API key); the client view never sees it (O-R3-6)', async () => {
+    const at = new Date('2026-10-22T02:30:00Z');
+    db.overrides['pageSpeedDaily.findMany'] = async (a) =>
+      a.where.status === 'ok' ? [] : [{ date: at, strategy: 'mobile', url: 'https://e.com/', status: 'error', errorCode: 'RATE_LIMITED', fetchedAt: at }];
+    const p = { id: 'p1', wpUrl: 'https://e.com' };
+    const v = await staffPageSpeedView(p, { now: at, env: {} });
+    expect(v.quota).toEqual({ reached: true, at, keyConfigured: false });
+    expect((await staffPageSpeedView(p, { now: at, env: { PAGESPEED_API_KEY: 'k' } })).quota.keyConfigured).toBe(true);
+    expect(await clientPageSpeedView(p, { now: at })).toEqual({ available: false });
   });
 
   it('an error never overwrites an ok row of the same day', async () => {

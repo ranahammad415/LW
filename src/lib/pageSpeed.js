@@ -219,7 +219,9 @@ async function storeResult(projectId, date, strategy, url, result, now) {
 
 /**
  * Run PSI for one project. `parallel` (manual refresh) runs both strategies at once; the nightly job is sequential.
- * A rate-limited strategy writes nothing. Returns { url, results: { mobile, desktop }, rateLimited }.
+ * A rate-limited strategy is stored as an error row (errorCode RATE_LIMITED; never over an ok row of the day) so the
+ * staff panel can say why there is no data (release-3 e2e O-R3-6); the other strategy is not tried.
+ * Returns { url, results: { mobile, desktop }, rateLimited }.
  */
 export async function runPageSpeedForProject(project, { now = new Date(), fetchImpl, env = process.env, lookup, parallel = false } = {}) {
   const target = await pageSpeedTargetUrl(project, { lookup });
@@ -231,10 +233,7 @@ export async function runPageSpeedForProject(project, { now = new Date(), fetchI
     if (rateLimited) return;
     const r = await fetchPageSpeed(target.url, strategy, { fetchImpl, env });
     results[strategy] = r.ok ? 'ok' : r.errorCode;
-    if (r.rateLimited) {
-      rateLimited = true;
-      return;
-    }
+    if (r.rateLimited) rateLimited = true;
     await storeResult(project.id, date, strategy, target.url, r, now);
   };
   if (parallel) await Promise.all(STRATEGIES.map(one));
@@ -350,6 +349,8 @@ export async function staffPageSpeedView(project, { now = new Date(), env = proc
     latest,
     overall: worstPageSpeedStatus(latestRows),
     lastError: lastRow && lastRow.status !== 'ok' ? { strategy: lastRow.strategy, errorCode: lastRow.errorCode, at: lastRow.fetchedAt } : null,
+    // Staff only (O-R3-6): the newest attempt hit Google's quota; the panel says "add PAGESPEED_API_KEY" when none is set.
+    quota: lastRow && lastRow.status !== 'ok' && lastRow.errorCode === 'RATE_LIMITED' ? { reached: true, at: lastRow.fetchedAt, keyConfigured: Boolean(env.PAGESPEED_API_KEY) } : null,
     lastFetchedAt: lastRow?.fetchedAt || null,
     history: rows.map((r) => ({ ...r, date: dayKey(r.date), status: r.status, rating: pageSpeedStatus(r).status })),
   };
