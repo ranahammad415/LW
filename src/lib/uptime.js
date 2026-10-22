@@ -208,10 +208,16 @@ export async function probeWithRetry(url, { retries = PROBE_RETRIES, backoffMs =
 }
 
 const BAD_MARKERS = new Set(['down', 'error', 'fail', 'failed', 'degraded', 'critical']);
+/** errorClass of an ok status row whose scheduler is stale: a staff warning, never an incident (O-R3-3). */
+export const SCHEDULER_STALE = 'sched_stale';
 
 /**
  * EmDash `/_agency/status`. Returns null when the endpoint is missing (404 / non-JSON / redirect), else
- * { ok, httpStatus, ms, errorClass } (marker when the JSON reports a bad state or a failing db / scheduler).
+ * { ok, httpStatus, ms, errorClass }.
+ * Reachable = HTTP 200 and `uptime.db === 'ok'` (else errorClass marker); a failing scheduler (down / error) is a marker
+ * too. `uptime.scheduler === 'stale'` stays ok with errorClass `sched_stale` (a warning on the staff panel only).
+ * `state` is the site's SECURITY roll-up (a failing SPF or backup check makes it `fail`), not an uptime signal: it is
+ * never read here (release-3 e2e O-R3-3).
  */
 export async function probeStatusEndpoint(origin, { request = httpsGetOnce, clock = Date.now } = {}) {
   const url = `${origin.replace(/\/$/, '')}/_agency/status`;
@@ -234,9 +240,11 @@ export async function probeStatusEndpoint(origin, { request = httpsGetOnce, cloc
     return null;
   }
   if (!json || typeof json !== 'object') return null;
-  const bad = (v) => v === false || BAD_MARKERS.has(String(v ?? '').toLowerCase());
-  const marker = bad(json.state) || bad(json.uptime?.db) || bad(json.uptime?.scheduler);
-  return { ok: !marker, httpStatus: r.status, ms, errorClass: marker ? 'marker' : null };
+  const lc = (v) => String(v ?? '').toLowerCase();
+  const scheduler = lc(json.uptime?.scheduler);
+  const marker = r.status !== 200 || lc(json.uptime?.db) !== 'ok' || json.uptime?.scheduler === false || BAD_MARKERS.has(scheduler);
+  if (marker) return { ok: false, httpStatus: r.status, ms, errorClass: 'marker' };
+  return { ok: true, httpStatus: r.status, ms, errorClass: scheduler === 'stale' ? SCHEDULER_STALE : null };
 }
 
 // ── Incidents + alerts ─────────────────────────────────────────────────────
@@ -622,7 +630,8 @@ export async function staffUptimeView(project, { now = new Date(), env = process
     tls: lastTls?.tlsExpiresAt
       ? { expiresAt: lastTls.tlsExpiresAt, daysLeft: Math.floor((new Date(lastTls.tlsExpiresAt).getTime() - now.getTime()) / DAY_MS), checkedAt: lastTls.at }
       : null,
-    statusEndpoint: lastStatus,
+    // warning (O-R3-3): 'scheduler_stale' when the last status row was ok with a stale scheduler. Never an incident.
+    statusEndpoint: lastStatus ? { ...lastStatus, warning: lastStatus.ok && lastStatus.errorClass === SCHEDULER_STALE ? 'scheduler_stale' : null } : null,
   };
 }
 

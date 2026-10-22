@@ -79,6 +79,8 @@ import {
   uptimeCron,
   _resetUptimeState,
   USER_AGENT,
+  SCHEDULER_STALE,
+  staffUptimeView,
 } from '../../../src/lib/uptime.js';
 
 const err = (code, extra = {}) => Object.assign(new Error(code), { code, ...extra });
@@ -176,6 +178,35 @@ describe('probe classification', () => {
     expect(ok).toMatchObject({ ok: true, errorClass: null });
     const bad = await probeStatusEndpoint('https://a.com/', { request: async () => resp(200, { body: Buffer.from('{"state":"ok","uptime":{"db":"down"}}') }) });
     expect(bad).toMatchObject({ ok: false, errorClass: 'marker' });
+  });
+
+  it('O-R3-3: state is the security roll-up, never an uptime signal; reachable = 200 + db ok; stale scheduler = warning', async () => {
+    const body = (o) => async () => resp(200, { body: Buffer.from(JSON.stringify(o)) });
+    // A healthy, reachable site whose security roll-up is failing (e.g. a stale backup check) is ok.
+    expect(await probeStatusEndpoint('https://a.com/', { request: body({ state: 'fail', uptime: { db: 'ok', scheduler: 'ok' } }) })).toMatchObject({ ok: true, errorClass: null });
+    expect(await probeStatusEndpoint('https://a.com/', { request: body({ state: 'critical', uptime: { db: 'ok' } }) })).toMatchObject({ ok: true });
+    // db must say ok
+    expect(await probeStatusEndpoint('https://a.com/', { request: body({ state: 'ok', uptime: {} }) })).toMatchObject({ ok: false, errorClass: 'marker' });
+    expect(await probeStatusEndpoint('https://a.com/', { request: body({ state: 'ok', uptime: { db: 'error', scheduler: 'ok' } }) })).toMatchObject({ ok: false, errorClass: 'marker' });
+    // a down scheduler is a marker; a stale one is ok with the warning class
+    expect(await probeStatusEndpoint('https://a.com/', { request: body({ uptime: { db: 'ok', scheduler: 'down' } }) })).toMatchObject({ ok: false, errorClass: 'marker' });
+    expect(await probeStatusEndpoint('https://a.com/', { request: body({ state: 'fail', uptime: { db: 'ok', scheduler: 'stale' } }) })).toMatchObject({ ok: true, errorClass: SCHEDULER_STALE });
+    // not HTTP 200 → not reachable in the status sense
+    expect(await probeStatusEndpoint('https://a.com/', { request: async () => resp(203, { body: Buffer.from('{"uptime":{"db":"ok"}}') }) })).toMatchObject({ ok: false, errorClass: 'marker' });
+  });
+
+  it('O-R3-3: a stale scheduler is stored as an ok status row, opens no incident and shows as a staff warning', async () => {
+    const project = { id: 'p9', name: 'Site', wpUrl: 'https://site.example', cmsType: 'EMDASH' };
+    const request = async (u) =>
+      u.endsWith('/_agency/status') ? resp(200, { body: Buffer.from('{"state":"fail","uptime":{"db":"ok","scheduler":"stale"}}') }) : resp(200);
+    const out = await probeProject(project, { now: new Date('2026-10-22T08:00:00Z'), request, sleep: async () => {} });
+    expect(out).toMatchObject({ ok: true });
+    const status = db.checks.find((c) => c.projectId === 'p9' && c.target === 'status');
+    expect(status).toMatchObject({ ok: true, errorClass: SCHEDULER_STALE });
+    expect(db.incidents.filter((i) => i.projectId === 'p9')).toHaveLength(0);
+    db.overrides['uptimeCheck.findFirst'] = async (a) => (a.where.target === 'status' ? { ok: true, at: new Date('2026-10-22T08:00:00Z'), errorClass: SCHEDULER_STALE, httpStatus: 200 } : null);
+    const v = await staffUptimeView(project, { now: new Date('2026-10-22T08:01:00Z') });
+    expect(v.statusEndpoint).toMatchObject({ ok: true, warning: 'scheduler_stale' });
   });
 });
 
