@@ -2,17 +2,20 @@
  * Site metrics, page speed: PSI parser, CWV / lab status rule, URL guard, fetch error mapping, job cap and stop-on-429.
  * Prisma is stubbed; no network.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 
+import { takeShapeViolations } from '../../helpers/prismaShape.js';
 const db = vi.hoisted(() => ({ calls: [], overrides: {} }));
-vi.mock('../../../src/lib/prisma.js', () => {
+vi.mock('../../../src/lib/prisma.js', async () => {
+  const { assertPrismaArgs } = await import('../../helpers/prismaShape.js');
   const model = (name) =>
     new Proxy({}, {
       get(_, method) {
         const key = `${name}.${String(method)}`;
         return async (args) => {
           db.calls.push({ key, args });
+          assertPrismaArgs(name, method, args);
           if (db.overrides[key]) return db.overrides[key](args);
           if (method === 'findMany' || method === 'groupBy') return [];
           if (method === 'deleteMany') return { count: 0 };
@@ -195,3 +198,6 @@ describe('runPageSpeedJob', () => {
     expect(utcDay(new Date('2026-10-22T23:59:00-05:00')).toISOString()).toBe('2026-10-23T00:00:00.000Z');
   });
 });
+
+// Every Prisma call made by the code under test must match the real schema (tests/helpers/prismaShape.js).
+afterEach(() => expect(takeShapeViolations()).toEqual([]));

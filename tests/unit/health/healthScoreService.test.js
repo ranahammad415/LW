@@ -8,7 +8,8 @@ const FIXTURE = JSON.parse(readFileSync(join(here, 'fixtures/bundle-harbor-denta
 
 const db = vi.hoisted(() => ({ calls: [], projects: [], healthRows: new Map(), clientRows: new Map(), accounts: new Map(), throwFor: new Set() }));
 
-vi.mock('../../../src/lib/prisma.js', () => {
+vi.mock('../../../src/lib/prisma.js', async () => {
+  const { shapeChecked } = await import('../../helpers/prismaShape.js');
   const asDate = (s) => new Date(`${s}T00:00:00.000Z`);
   const inRange = (date, where) => (!where?.gte || date >= where.gte) && (!where?.lte || date <= where.lte);
   const daily = (key) => ({
@@ -19,7 +20,7 @@ vi.mock('../../../src/lib/prisma.js', () => {
     },
   });
   return {
-    prisma: {
+    prisma: shapeChecked({
       gscDailyMetric: daily('gsc'),
       ga4DailyMetric: daily('ga4'),
       gmbDailyMetric: daily('gmb'),
@@ -78,7 +79,7 @@ vi.mock('../../../src/lib/prisma.js', () => {
         },
         updateMany: async () => ({ count: 0 }),
       },
-    },
+    }),
   };
 });
 

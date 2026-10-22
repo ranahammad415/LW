@@ -3,7 +3,8 @@
  * HUMAN_ONLY before any site call), signals-config-set (baseRev + idempotency key, 409 CONFLICT_REV replaces the
  * mirror and asks to redo), visitor erasure input checks, client scoping and the WordPress "available: false".
  */
-import { describe, it, expect, vi, beforeAll, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
+import { takeShapeViolations } from '../../helpers/prismaShape.js';
 import Fastify from 'fastify';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -173,3 +174,6 @@ describe('client route', () => {
     expect(res.body).not.toMatch(/"city"|visitorId|sessionId|payload/);
   });
 });
+
+// Every Prisma call made by the code under test must match the real schema (tests/helpers/prismaShape.js).
+afterEach(() => expect(takeShapeViolations()).toEqual([]));

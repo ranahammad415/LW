@@ -2,18 +2,21 @@
  * Health score v2 routes: guards (roles, ensureProjectAccess, client lead/secondary PM, owner only), client scoping,
  * humans-only writes, config validation, token denials and the client-audience redaction layer. Prisma is stubbed.
  */
-import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach, beforeAll, afterAll } from 'vitest';
 import Fastify from 'fastify';
 
+import { takeShapeViolations } from '../../helpers/prismaShape.js';
 const db = vi.hoisted(() => ({ calls: [], overrides: {} }));
 
-vi.mock('../../../src/lib/prisma.js', () => {
+vi.mock('../../../src/lib/prisma.js', async () => {
+  const { assertPrismaArgs } = await import('../../helpers/prismaShape.js');
   const model = (name) =>
     new Proxy({}, {
       get(_, method) {
         const key = `${name}.${String(method)}`;
         return async (args) => {
           db.calls.push({ key, args });
+          assertPrismaArgs(name, method, args);
           if (db.overrides[key]) return db.overrides[key](args);
           if (method === 'findMany' || method === 'groupBy') return [];
           if (method === 'count') return 0;
@@ -217,3 +220,6 @@ describe('API tokens and redaction', () => {
     expect(redactResponseSecrets(payload, 0, responseDropKeys({ url: '/api/pm/projects/p1/health', user: { role: 'PM' } }))).toEqual(payload);
   });
 });
+
+// Every Prisma call made by the code under test must match the real schema (tests/helpers/prismaShape.js).
+afterEach(() => expect(takeShapeViolations()).toEqual([]));

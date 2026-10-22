@@ -5,7 +5,8 @@
  * equality, bot re-scoring at session level, retention / compaction batches, erasure completeness (no row left for a
  * visitorId; LeadAttribution erased in the same transaction as the lead), the client allow-list.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { takeShapeViolations } from '../../helpers/prismaShape.js';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -462,3 +463,6 @@ describe('site snapshot only', () => {
     expect(await upsertSiteAttribution({ id: rows('cmsLead')[0].id, projectId: 'p1', leadId: LEAD }, { attribution: null })).toBe('stale');
   });
 });
+
+// Every Prisma call made by the code under test must match the real schema (tests/helpers/prismaShape.js).
+afterEach(() => expect(takeShapeViolations()).toEqual([]));

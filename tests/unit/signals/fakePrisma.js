@@ -7,6 +7,7 @@
  */
 import crypto from 'node:crypto';
 import { Prisma } from '@prisma/client';
+import { assertPrismaArgs } from '../../helpers/prismaShape.js';
 
 const UNIQUES = {
   signalEvent: [['projectId', 'eventId']],
@@ -247,7 +248,11 @@ export function createFakePrisma({ queryRaw = async () => [] } = {}) {
         if (prop === '_rows') return (name) => rowsOf(name);
         if (prop === '_reset') return () => (tables.clear(), (txCalls.length = 0));
         if (prop === 'then') return undefined;
-        if (!models.has(prop)) models.set(prop, model(String(prop)));
+        if (!models.has(prop)) {
+          // Every call is checked against the real schema (tests/helpers/prismaShape.js) before the in-memory op runs.
+          const m = model(String(prop));
+          models.set(prop, Object.fromEntries(Object.entries(m).map(([k, fn]) => [k, typeof fn === 'function' ? (args, ...rest) => (assertPrismaArgs(String(prop), k, args), fn(args, ...rest)) : fn])));
+        }
         return models.get(prop);
       },
     }

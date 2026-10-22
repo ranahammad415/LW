@@ -3,8 +3,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const db = vi.hoisted(() => ({ rows: [], logs: new Map(), notified: [], users: [], deleted: [], oncall: [] }));
 
 vi.mock('../../../src/lib/notificationService.js', () => ({ notify: async (n) => { db.notified.push(n); } }));
-vi.mock('../../../src/lib/prisma.js', () => ({
-  prisma: {
+vi.mock('../../../src/lib/prisma.js', async () => {
+  const { shapeChecked } = await import('../../helpers/prismaShape.js');
+  return {
+  prisma: shapeChecked({
     clientHealthDaily: { findMany: async ({ where }) => db.rows.filter((r) => where.date.in.includes(r.date)) },
     healthAlertLog: {
       updateMany: async ({ where, data }) => {
@@ -43,8 +45,9 @@ vi.mock('../../../src/lib/prisma.js', () => ({
       },
     },
     agencySetting: { findFirst: async () => ({ securityOnCallUserIds: db.oncall }) },
-  },
-}));
+  }),
+  };
+});
 
 import { evaluateHealthAlerts, decideAlert, claimHealthAlert, largestDrop } from '../../../src/lib/health/healthAlerts.js';
 import { DEFAULT_CONFIG_V1 } from '../../../src/lib/health/defaultConfig.js';

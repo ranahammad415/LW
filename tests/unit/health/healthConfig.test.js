@@ -4,16 +4,19 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 
 const db = vi.hoisted(() => ({ rows: [], findFirst: 0 }));
-vi.mock('../../../src/lib/prisma.js', () => ({
-  prisma: {
+vi.mock('../../../src/lib/prisma.js', async () => {
+  const { shapeChecked } = await import('../../helpers/prismaShape.js');
+  return {
+  prisma: shapeChecked({
     healthScoreConfig: {
       findFirst: async () => {
         db.findFirst += 1;
         return db.rows[0] || null;
       },
     },
-  },
-}));
+  }),
+  };
+});
 
 import { DEFAULT_CONFIG_V1, validateConfig, getActiveConfig, invalidateConfigCache } from '../../../src/lib/health/healthConfig.js';
 

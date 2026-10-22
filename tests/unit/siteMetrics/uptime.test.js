@@ -3,13 +3,15 @@
  * failures / RECOVERED after 1 success, one alert per incident, TLS alert once a day, rollup math, retention batches,
  * overlap guard. Prisma (a small in-memory store) and notify are stubbed; no network.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 
+import { takeShapeViolations } from '../../helpers/prismaShape.js';
 const db = vi.hoisted(() => ({ calls: [], overrides: {}, checks: [], incidents: [], alertLog: new Map() }));
 const sent = vi.hoisted(() => ({ notify: [] }));
 
 vi.mock('../../../src/lib/notificationService.js', () => ({ notify: async (n) => sent.notify.push(n) }));
-vi.mock('../../../src/lib/prisma.js', () => {
+vi.mock('../../../src/lib/prisma.js', async () => {
+  const { assertPrismaArgs } = await import('../../helpers/prismaShape.js');
   const defaults = {
     'uptimeCheck.create': async ({ data }) => (db.checks.push({ ...data }), data),
     'uptimeCheck.findMany': async (a) =>
@@ -46,6 +48,7 @@ vi.mock('../../../src/lib/prisma.js', () => {
         const key = `${name}.${String(method)}`;
         return async (args) => {
           db.calls.push({ key, args });
+          assertPrismaArgs(name, method, args);
           if (db.overrides[key]) return db.overrides[key](args);
           if (defaults[key]) return defaults[key](args);
           if (method === 'findMany' || method === 'groupBy') return [];
@@ -321,3 +324,6 @@ describe('rollup, retention, helpers', () => {
     expect(await first).toMatchObject({ sites: 0 });
   });
 });
+
+// Every Prisma call made by the code under test must match the real schema (tests/helpers/prismaShape.js).
+afterEach(() => expect(takeShapeViolations()).toEqual([]));

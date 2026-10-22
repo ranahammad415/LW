@@ -2,19 +2,22 @@
  * Site metrics routes: staff guards (roles, ensureProjectAccess, OWNER-only paid refresh), agents / API tokens denied on
  * refresh before any outside call, DB cooldown, and the client allow-lists (no vendor, cost, URL or raw data).
  */
-import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach, beforeAll, afterAll } from 'vitest';
 import Fastify from 'fastify';
 
+import { takeShapeViolations } from '../../helpers/prismaShape.js';
 const db = vi.hoisted(() => ({ calls: [], overrides: {} }));
 const outside = vi.hoisted(() => ({ calls: [] }));
 
-vi.mock('../../../src/lib/prisma.js', () => {
+vi.mock('../../../src/lib/prisma.js', async () => {
+  const { assertPrismaArgs } = await import('../../helpers/prismaShape.js');
   const model = (name) =>
     new Proxy({}, {
       get(_, method) {
         const key = `${name}.${String(method)}`;
         return async (args) => {
           db.calls.push({ key, args });
+          assertPrismaArgs(name, method, args);
           if (db.overrides[key]) return db.overrides[key](args);
           if (method === 'findMany' || method === 'groupBy') return [];
           return null;
@@ -234,15 +237,25 @@ describe('uptime routes', () => {
     expect((await app.inject({ method: 'GET', url: '/api/pm/uptime/fleet' })).statusCode).toBe(403);
     who = { user: { id: 'pm1', role: 'PM' } };
     let where;
-    db.overrides['project.findMany'] = async (a) => ((where = a.where), [{ id: 'p1', name: 'Acme', client: { name: 'Acme Inc' } }]);
+    db.overrides['project.findMany'] = async (a) => ((where = a.where), [{ id: 'p1', name: 'Acme', client: { agencyName: 'Acme Inc' } }]);
     const res = await app.inject({ method: 'GET', url: '/api/pm/uptime/fleet' });
     expect(res.statusCode).toBe(200);
     expect(where.OR).toEqual([{ leadPmId: 'pm1' }, { client: { leadPmId: 'pm1' } }, { client: { secondaryPmId: 'pm1' } }]);
-    expect(res.json().sites[0]).toMatchObject({ projectId: 'p1', state: 'unknown', availability30: null });
+    expect(res.json().sites[0]).toMatchObject({ projectId: 'p1', clientName: 'Acme Inc', state: 'unknown', availability30: null });
     who = { user: { id: 'o', role: 'OWNER' } };
     await app.inject({ method: 'GET', url: '/api/pm/uptime/fleet' });
     expect(where.OR).toBeUndefined();
     expect((await app.inject({ method: 'GET', url: '/api/pm/projects/p1/uptime' })).statusCode).toBe(200);
+  });
+
+  it('fleet failure answers a generic 500 (no Prisma text echoed)', async () => {
+    who = { user: { id: 'o', role: 'OWNER' } };
+    db.overrides['project.findMany'] = async () => {
+      throw new Error("Unknown field 'name' for select statement on model 'ClientAccount'");
+    };
+    const res = await app.inject({ method: 'GET', url: '/api/pm/uptime/fleet' });
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toEqual({ code: 'FLEET_FAILED', message: 'Could not load the uptime overview.' });
   });
 
   it('client view: availability, state and plain incidents only', async () => {
@@ -264,3 +277,6 @@ describe('uptime routes', () => {
     expect((await app.inject({ method: 'GET', url: '/api/client/projects/p1/uptime' })).statusCode).toBe(404);
   });
 });
+
+// Every Prisma call made by the code under test must match the real schema (tests/helpers/prismaShape.js).
+afterEach(() => expect(takeShapeViolations()).toEqual([]));

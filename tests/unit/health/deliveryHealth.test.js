@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const db = vi.hoisted(() => ({ calls: [] }));
-vi.mock('../../../src/lib/prisma.js', () => ({
-  prisma: {
+vi.mock('../../../src/lib/prisma.js', async () => {
+  const { shapeChecked } = await import('../../helpers/prismaShape.js');
+  return {
+  prisma: shapeChecked({
     clientAccount: { findMany: async () => [{ id: 'c1', onboardingStatus: 'COMPLETE' }, { id: 'c2', onboardingStatus: 'IN_PROGRESS' }] },
     project: { findMany: async () => [{ id: 'p1', clientId: 'c1' }, { id: 'p2', clientId: 'c1' }, { id: 'p3', clientId: 'c2' }] },
     task: {
@@ -12,8 +14,9 @@ vi.mock('../../../src/lib/prisma.js', () => ({
         return [{ projectId: 'p3', _count: { _all: 3 } }];
       },
     },
-  },
-}));
+  }),
+  };
+});
 
 import { deliveryScore, computeDeliveryHealthMany, computeDeliveryHealth } from '../../../src/lib/health/deliveryHealth.js';
 

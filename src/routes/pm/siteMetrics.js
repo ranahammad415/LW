@@ -119,7 +119,13 @@ export async function pmSiteMetricsRoutes(app) {
   app.get('/uptime/fleet', read, async (request, reply) => {
     if (!SITE_METRICS_ROLES.includes(request.user?.role)) return reply.status(403).send({ message: 'Access denied' });
     reply.header('cache-control', 'no-store');
-    return reply.send({ sites: await uptimeFleetView(request.user) });
+    try {
+      return reply.send({ sites: await uptimeFleetView(request.user) });
+    } catch (err) {
+      // Never echo a Prisma / driver message (query shape) to the browser.
+      request.log.error({ err }, 'Uptime fleet view failed');
+      return reply.status(500).send({ code: 'FLEET_FAILED', message: 'Could not load the uptime overview.' });
+    }
   });
 
   // Costs one DataForSEO call: OWNER only, people only, once per project per hour.

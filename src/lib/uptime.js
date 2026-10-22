@@ -632,7 +632,7 @@ export async function uptimeFleetView(user, { now = new Date() } = {}) {
   if (user.role !== 'OWNER') {
     where.OR = [{ leadPmId: user.id }, { client: { leadPmId: user.id } }, { client: { secondaryPmId: user.id } }];
   }
-  const projects = await prisma.project.findMany({ where, select: { id: true, name: true, wpUrl: true, client: { select: { name: true } } }, orderBy: { name: 'asc' }, take: 1000 });
+  const projects = await prisma.project.findMany({ where, select: { id: true, name: true, wpUrl: true, client: { select: { agencyName: true } } }, orderBy: { name: 'asc' }, take: 1000 });
   const ids = projects.map((p) => p.id);
   if (!ids.length) return [];
   const since30 = new Date(utcDayStart(now).getTime() - 29 * DAY_MS);
@@ -651,7 +651,7 @@ export async function uptimeFleetView(user, { now = new Date() } = {}) {
     return {
       projectId: p.id,
       name: p.name,
-      clientName: p.client?.name || null,
+      clientName: p.client?.agencyName || null,
       ...uptimeStatus({ openIncident: openSet.has(p.id), lastCheckAt: lastAt.get(p.id), availability30, now }),
       availability30,
       p95Ms: p95s.length ? Math.round(p95s.reduce((a, b) => a + b, 0) / p95s.length) : null,

@@ -4,16 +4,19 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const db = vi.hoisted(() => ({ calls: [] }));
-vi.mock('../../../src/lib/prisma.js', () => ({
-  prisma: {
+vi.mock('../../../src/lib/prisma.js', async () => {
+  const { shapeChecked } = await import('../../helpers/prismaShape.js');
+  return {
+  prisma: shapeChecked({
     keywordTrack: {
       findMany: async () => [{ id: 'k1', keyword: 'dentist harbor' }, { id: 'k2', keyword: 'teeth whitening' }],
       update: async (a) => { db.calls.push(['keywordTrack.update', a]); return {}; },
     },
     keywordRankDaily: { upsert: async (a) => { db.calls.push(['keywordRankDaily.upsert', a]); return {}; } },
     llmReferralDaily: { upsert: async (a) => { db.calls.push(['llmReferralDaily.upsert', a]); return {}; } },
-  },
-}));
+  }),
+  };
+});
 vi.mock('../../../src/lib/analytics/providers.js', () => ({
   domainFromUrl: (d) => d,
   hasRealSerpProvider: () => true,
