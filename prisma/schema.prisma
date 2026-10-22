@@ -690,6 +690,8 @@ model Project {
   securityReports      SecurityMonthlyReport[]
   securityConfig       SecurityConfigMirror?
   securityConfigActions SecurityConfigAction[]
+  pageSpeedDaily        PageSpeedDaily[]
+  backlinkSnapshots     BacklinkSnapshotMonthly[]
 
   @@map("project")
 }
@@ -3463,4 +3465,66 @@ model BacklinkOrderEvent {
 
   @@index([orderId, createdAt])
   @@map("backlinkorderevent")
+}
+
+/// Site metrics (docs/ledger/features/site-metrics.md): one PageSpeed Insights v5 run per project, UTC day and
+/// strategy. Lab values come from Lighthouse; field values (CrUX p75, page data with origin fallback) are null when
+/// Google has no field data. Health v2 (factor S5) reads it through lib/pageSpeed.js pageSpeedStatus(row).
+model PageSpeedDaily {
+  id               String   @id @default(uuid())
+  projectId        String
+  date             DateTime @db.Date
+  /// mobile | desktop
+  strategy         String   @db.VarChar(8)
+  url              String   @db.VarChar(500)
+  performanceScore Int?
+  lcpMs            Int?
+  cls              Float?
+  tbtMs            Int?
+  fcpMs            Int?
+  speedIndexMs     Int?
+  fieldLcpP75      Int?
+  fieldInpP75      Int?
+  fieldClsP75      Float?
+  /// FAST | AVERAGE | SLOW | null
+  fieldCategory    String?  @db.VarChar(8)
+  /// ok | error
+  status           String   @db.VarChar(8)
+  errorCode        String?  @db.VarChar(40)
+  fetchedAt        DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, date, strategy])
+  @@index([projectId, date])
+  @@map("pagespeeddaily")
+}
+
+/// Site metrics: monthly backlink / authority snapshot of the client's domain (DataForSEO Backlinks summary/live).
+/// costUsd is staff-only (lib/redactSecrets.js drops it from every client response). new/lost referring domains come
+/// from the summary when present, otherwise from the net change against the previous ok snapshot.
+model BacklinkSnapshotMonthly {
+  id                   String   @id @default(uuid())
+  projectId            String
+  /// YYYY-MM (UTC month of the fetch)
+  month                String   @db.VarChar(7)
+  target               String   @db.VarChar(255)
+  rank                 Int?
+  backlinks            Int?
+  referringDomains     Int?
+  referringMainDomains Int?
+  newReferringDomains  Int?
+  lostReferringDomains Int?
+  backlinksSpamScore   Int?
+  brokenBacklinks      Int?
+  costUsd              Decimal? @db.Decimal(10, 5)
+  /// ok | error
+  status               String   @db.VarChar(8)
+  errorCode            String?  @db.VarChar(40)
+  fetchedAt            DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, month])
+  @@map("backlinksnapshotmonthly")
 }
