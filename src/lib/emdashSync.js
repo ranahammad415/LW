@@ -116,9 +116,9 @@ export async function syncEmdashPipelines({ projectId, interactive = false, noRe
 }
 
 /** Refresh site-info (versions, capabilities, health) and enforce the contract gate. */
-export async function refreshEmdashSiteInfo(projectId, { interactive = false } = {}) {
+export async function refreshEmdashSiteInfo(projectId, { interactive = false, noRetry = false } = {}) {
   const { project, conn } = await loadEmdashConnection(projectId);
-  const info = await emdashRoutes.siteInfo(conn, retryOpts(interactive));
+  const info = await emdashRoutes.siteInfo(conn, retryOpts(interactive, noRetry));
   const contract = negotiateContract(info?.supportedContracts) ?? (Number.isInteger(info?.contract) ? info.contract : null);
   await prismaCmsStore.recordHeartbeat({ projectId: project.id, siteInfo: info, contract, now: new Date() });
   if (!contract || !SUPPORTED_CONTRACTS.includes(contract)) {

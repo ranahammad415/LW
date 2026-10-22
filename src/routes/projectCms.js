@@ -24,7 +24,7 @@ import {
 } from '../lib/siteAdapters/signing.js';
 import { emdashRoutes, CmsBridgeError } from '../lib/siteAdapters/emdash.js';
 import { loadEmdashConnection, sanitizeKeyState } from '../lib/cmsStore.js';
-import { revokeConfirmOutcome } from '../lib/emdashSync.js';
+import { revokeConfirmOutcome, refreshEmdashSiteInfo } from '../lib/emdashSync.js';
 import { validateSiteUrl } from '../lib/siteAdapters/netGuard.js';
 import { sanitizeOutboxPause } from '../lib/siteAdapters/migration.js';
 
@@ -293,6 +293,37 @@ export async function projectCmsRoutes(app) {
       try {
         const { conn } = await loadEmdashConnection(project.id);
         body.live = await emdashRoutes.health(conn, { retryDelays: [], timeoutMs: 8000 });
+        // O-R3-5: a live check also refreshes the stored capabilities / site-info, exactly like a heartbeat
+        // (refreshEmdashSiteInfo → recordHeartbeat, same sanitizers), so a site setting the PM just changed (e.g.
+        // allowOsPublish → capabilities.publishFromOs) applies now instead of after the next heartbeat.
+        if (body.live?.ok !== false) {
+          try {
+            await refreshEmdashSiteInfo(project.id, { interactive: true, noRetry: true });
+            const fresh = await prisma.project.findUnique({
+              where: { id: project.id },
+              select: { cmsCapabilities: true, cmsHealth: true, cmsContractVersion: true, cmsPluginVersion: true, cmsLastSeenAt: true },
+            });
+            if (fresh) {
+              Object.assign(body, {
+                capabilities: fresh.cmsCapabilities || null,
+                health: fresh.cmsHealth || null,
+                contractVersion: fresh.cmsContractVersion ?? null,
+                contractRevision: fresh.cmsHealth?.contractRevision ?? null,
+                previewConfigured: fresh.cmsHealth?.previewConfigured ?? null,
+                pluginVersion: fresh.cmsPluginVersion || null,
+                contractSupported: fresh.cmsContractVersion == null || SUPPORTED_CONTRACTS.includes(fresh.cmsContractVersion),
+                lastSeenAt: fresh.cmsLastSeenAt || body.lastSeenAt,
+                revokeSupported: revisionAtLeast(fresh.cmsHealth?.contractRevision, '1.5.6'),
+              });
+              if (fresh.cmsLastSeenAt) body.stale = Date.now() - new Date(fresh.cmsLastSeenAt).getTime() > STALE_AFTER_MS;
+            }
+            body.siteInfoRefreshed = true;
+          } catch (err) {
+            // The stored values stay; the live health answer above is still shown.
+            body.siteInfoRefreshed = false;
+            body.siteInfoError = err instanceof CmsBridgeError ? err.code : 'INTERNAL';
+          }
+        }
       } catch (err) {
         body.live = {
           ok: false,

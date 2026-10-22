@@ -26,6 +26,20 @@ vi.mock('../../../src/lib/prisma.js', () => {
   });
   return { prisma };
 });
+// O-R3-5: the live health check (site calls stubbed; everything else is the real module).
+const live = vi.hoisted(() => ({ health: null, refresh: null, refreshCalls: [] }));
+vi.mock('../../../src/lib/cmsStore.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  loadEmdashConnection: async (id) => ({ project: { id }, conn: { stub: true } }),
+}));
+vi.mock('../../../src/lib/siteAdapters/emdash.js', async (importOriginal) => {
+  const orig = await importOriginal();
+  return { ...orig, emdashRoutes: { ...orig.emdashRoutes, health: async () => live.health() } };
+});
+vi.mock('../../../src/lib/emdashSync.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  refreshEmdashSiteInfo: async (id, opts) => (live.refreshCalls.push({ id, opts }), live.refresh(id, opts)),
+}));
 vi.mock('../../../src/lib/ensureProjectAccess.js', () => ({
   ensureProjectAccess: async (project, user) => user.role === 'OWNER' || project.leadPmId === user.id,
 }));
@@ -195,6 +209,50 @@ describe('rotate-keys and health', () => {
     const body = r.json();
     expect(body).toMatchObject({ paired: true, stale: true, keyId: 1, contractSupported: true, pluginVersion: '1.0.0', encryptionConfigured: true });
     expect(JSON.stringify(body)).not.toMatch(/Enc|aosk1_/);
+  });
+});
+
+describe('GET /:id/cms/health?live=1 refreshes the stored capabilities (O-R3-5)', () => {
+  const paired = (caps) => project({ cmsSiteId: 'site_existing01', cmsPairedAt: new Date(), cmsLastSeenAt: new Date(), cmsContractVersion: 1, cmsCapabilities: caps, cmsHealth: { contractRevision: '1.7.0' } });
+  beforeEach(() => {
+    live.refreshCalls = [];
+    db.overrides['cmsCredential.findUnique'] = async () => ({ keyId: 1, pendingKeyId: null });
+  });
+
+  it('after the site enabled allowOsPublish, the live check stores and returns publishFromOs: true', async () => {
+    let stored = { publishFromOs: false, pushDrafts: true };
+    db.overrides['project.findUnique'] = async (a) => (a.select?.cmsCapabilities ? { cmsCapabilities: stored, cmsHealth: { contractRevision: '1.7.0' }, cmsContractVersion: 1, cmsPluginVersion: '1.0.0', cmsLastSeenAt: new Date() } : paired(stored));
+    live.health = async () => ({ ok: true, paired: true, contract: 1 });
+    live.refresh = async () => {
+      stored = { publishFromOs: true, pushDrafts: true }; // what recordHeartbeat writes from the new site-info
+      return { contract: 1 };
+    };
+    const body = (await app.inject({ method: 'GET', url: `/api/projects/${PID}/cms/health?live=1` })).json();
+    expect(live.refreshCalls).toEqual([{ id: PID, opts: { interactive: true, noRetry: true } }]);
+    expect(body).toMatchObject({ siteInfoRefreshed: true, capabilities: { publishFromOs: true }, live: { ok: true } });
+  });
+
+  it('no refresh without ?live=1 or when the live check failed; a failed refresh keeps the stored values', async () => {
+    db.overrides['project.findUnique'] = async () => paired({ publishFromOs: false });
+    live.health = async () => ({ ok: true });
+    live.refresh = async () => ({});
+    await app.inject({ method: 'GET', url: `/api/projects/${PID}/cms/health` });
+    expect(live.refreshCalls).toHaveLength(0);
+
+    live.health = async () => {
+      throw new Error('down');
+    };
+    const down = (await app.inject({ method: 'GET', url: `/api/projects/${PID}/cms/health?live=1` })).json();
+    expect(live.refreshCalls).toHaveLength(0);
+    expect(down.live.ok).toBe(false);
+
+    live.health = async () => ({ ok: true });
+    live.refresh = async () => {
+      const { CmsBridgeError } = await import('../../../src/lib/siteAdapters/emdash.js');
+      throw new CmsBridgeError({ status: 426, code: 'CONTRACT_UNSUPPORTED', message: 'x' });
+    };
+    const failed = (await app.inject({ method: 'GET', url: `/api/projects/${PID}/cms/health?live=1` })).json();
+    expect(failed).toMatchObject({ siteInfoRefreshed: false, siteInfoError: 'CONTRACT_UNSUPPORTED', capabilities: { publishFromOs: false } });
   });
 });
 
