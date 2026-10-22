@@ -299,6 +299,7 @@ export async function runLocalRankJob({ now = new Date(), log = console, env = p
     summary.errors += r.errors;
     summary.costUsd += r.costUsd;
     budget -= r.checked;
+    if (r.stopped === 'CAP') summary.stopped = 'CAP';
     if (r.stopped && r.stopped !== 'CAP') {
       summary.stopped = r.stopped;
       log?.warn?.({ projectId: p.id, code: r.stopped }, 'Local rank run stopped on an account-level DataForSEO error');

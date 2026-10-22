@@ -12,7 +12,9 @@ import {
 } from '../../lib/analytics/googleAuth.js';
 import { runGscSync } from '../../lib/gscSync.js';
 import { runNativeAnalyticsSync } from '../../lib/analytics/runNativeSync.js';
-import { normalizeGmbIdentifier } from '../../lib/analytics/gmbIdentifier.js';
+import { normalizeGmbIdentifier, resolveMapsShortLink } from '../../lib/analytics/gmbIdentifier.js';
+import { startBackgroundRun, getRun, runView } from '../../lib/analytics/syncRuns.js';
+import { rejectAgentRefresh } from '../pm/siteMetrics.js';
 import { runConnectionHealth, probeProjectGmbDfs } from '../../lib/analytics/connectionHealth.js';
 import { DisconnectError, disconnectAgencyGoogle, isConsentStale } from '../../lib/analytics/googleDisconnect.js';
 
@@ -37,6 +39,48 @@ function quotaHint(message) {
     return 'Business Profile API quota is 0 (pending Google approval). Bind the business manually below; data is pulled via DataForSEO meanwhile.';
   }
   return msg;
+}
+
+/**
+ * Project data for a manually entered GBP identifier (features/local-seo.md). CID → gmbCid (digits only), place_id →
+ * gmbPlaceId, a name → legacy keyword in gmbCid (Find business turns it into a CID). An unchanged identifier changes
+ * nothing; a new one replaces the other id, drops the verification and the old profile, and resets the review cycle.
+ * An empty value clears the DataForSEO identity (the native location, if any, stays).
+ */
+export function manualIdentityData(project, normalized) {
+  let next;
+  if (normalized.kind === 'cid' && normalized.cid) next = { gmbCid: normalized.cid, gmbPlaceId: null };
+  else if (normalized.kind === 'place_id' && normalized.placeId) next = { gmbCid: null, gmbPlaceId: normalized.placeId };
+  else if (normalized.kind === 'name' && normalized.identifier) next = { gmbCid: normalized.identifier, gmbPlaceId: null };
+  else next = { gmbCid: null, gmbPlaceId: null };
+
+  const curCid = project.gmbCid ? String(project.gmbCid).replace(/^cid:/i, '') : null;
+  const unchanged =
+    (next.gmbCid && next.gmbCid === curCid) ||
+    (next.gmbPlaceId && next.gmbPlaceId === project.gmbPlaceId) ||
+    (!next.gmbCid && !next.gmbPlaceId && !project.gmbCid && !project.gmbPlaceId);
+  if (unchanged) return {};
+  const empty = !next.gmbCid && !next.gmbPlaceId;
+  return {
+    ...next,
+    gmbIdentitySource: empty ? (project.gmbLocationId ? 'native' : null) : 'manual',
+    gmbIdentityVerifiedAt: null,
+    gmbProfileSyncedAt: null,
+    gmbFeatureId: null,
+    gmbLat: null,
+    gmbLng: null,
+    gmbAddress: null,
+    gmbPhone: null,
+    gmbCategory: null,
+    gmbWebsite: null,
+    gmbRating: null,
+    gmbReviewsCount: null,
+    gmbReviewsFullAt: null,
+    gmbReviewsTaskId: null,
+    gmbReviewsTaskAt: null,
+    gmbReviewsTaskDepth: null,
+    gmbSyncError: null,
+  };
 }
 
 export async function adminIntegrationsRoutes(app) {
@@ -125,22 +169,41 @@ export async function adminIntegrationsRoutes(app) {
   );
 
   // ── Trigger analytics sync on demand ───────────────────────────────────
-  // Runs GSC + GA4/GMB/DataForSEO syncs immediately (instead of waiting for the
-  // nightly cron) and returns per-project results so API errors surface.
+  // Runs GSC + GA4/GMB/DataForSEO syncs (instead of waiting for the nightly cron) in the BACKGROUND: answers 202 with
+  // a run id at once (the sync can take minutes: DataForSEO review tasks queue) and the UI polls
+  // GET /integrations/sync/runs/:runId for the per-project results. A run already in progress is returned instead of
+  // starting a second one (paid calls). People only.
   app.post(
     '/integrations/sync',
+    { onRequest: [app.verifyJwt, requireOwner, rejectAgentRefresh], config: { rateLimit: { max: 6, timeWindow: '10 minutes' } } },
+    async (request, reply) => {
+      const { run, existing } = await startBackgroundRun(
+        { kind: 'integrations_sync', requestedById: request.user.id, log: request.log },
+        async () => {
+          let gsc;
+          try {
+            // Force full ~16 month daily pull so YoY compare has history.
+            gsc = await runGscSync({ forceFullDaily: true });
+          } catch (err) {
+            request.log.error({ err }, 'Manual GSC sync failed');
+            gsc = { error: err.message };
+          }
+          const native = await runNativeAnalyticsSync(request.log);
+          return { gsc, ...native };
+        }
+      );
+      return reply.status(202).send({ run: runView(run), existing });
+    }
+  );
+
+  app.get(
+    '/integrations/sync/runs/:runId',
     { onRequest: [app.verifyJwt, requireOwner] },
     async (request, reply) => {
-      let gsc;
-      try {
-        // Force full ~16 month daily pull so YoY compare has history.
-        gsc = await runGscSync({ forceFullDaily: true });
-      } catch (err) {
-        request.log.error({ err }, 'Manual GSC sync failed');
-        gsc = { error: err.message };
-      }
-      const native = await runNativeAnalyticsSync(request.log);
-      return reply.send({ gsc, ...native });
+      const run = await getRun(request.params.runId);
+      if (!run || run.kind !== 'integrations_sync') return reply.status(404).send({ message: 'Run not found' });
+      reply.header('cache-control', 'no-store');
+      return reply.send(runView(run));
     }
   );
 
@@ -286,6 +349,12 @@ export async function adminIntegrationsRoutes(app) {
           gmbLocationId: true,
           gmbLocationName: true,
           gmbCid: true,
+          gmbPlaceId: true,
+          gmbIdentitySource: true,
+          gmbIdentityVerifiedAt: true,
+          gmbRating: true,
+          gmbReviewsCount: true,
+          localLocationName: true,
           gmbLastSyncedAt: true,
           dataforseoDomain: true,
           targetMarket: true,
@@ -320,9 +389,11 @@ export async function adminIntegrationsRoutes(app) {
         data.ga4PropertyName = body.ga4PropertyName || null;
       }
       if (body.gmbLocationId !== undefined) {
+        // A native location never clears the CID / place_id: both are kept so the DataForSEO fallback stays available.
         data.gmbLocationId = body.gmbLocationId || null;
         data.gmbAccountId = body.gmbAccountId || null;
-        data.gmbLocationName = body.gmbLocationName || null;
+        if (body.gmbLocationId || body.gmbLocationName) data.gmbLocationName = body.gmbLocationName || null;
+        if (body.gmbLocationId && !project.gmbIdentitySource) data.gmbIdentitySource = 'native';
       }
       if (body.targetMarket !== undefined) {
         const tm = body.targetMarket ? String(body.targetMarket).trim().slice(0, 120) : '';
@@ -340,11 +411,22 @@ export async function adminIntegrationsRoutes(app) {
             : body.targetMarket !== undefined
               ? String(body.targetMarket || '').trim() || null
               : project.targetMarket;
-        const normalized = normalizeGmbIdentifier(body.gmbCid, {
+        let normalized = normalizeGmbIdentifier(body.gmbCid, {
           targetMarket: market,
           displayName: body.gmbLocationName,
         });
-        data.gmbCid = normalized.identifier;
+        if (normalized.kind === 'short_link') {
+          // maps.app.goo.gl: follow the redirects (SSRF-guarded, Google Maps hosts only, capped) to the long URL.
+          const resolved = await resolveMapsShortLink(normalized.url);
+          if (!resolved.ok) {
+            return reply.status(422).send({
+              code: `SHORT_LINK_${resolved.code}`,
+              message: 'That short link could not be opened. Paste the full Google Maps link, the CID or the place_id.',
+            });
+          }
+          normalized = normalizeGmbIdentifier(resolved.url, { targetMarket: market, displayName: body.gmbLocationName });
+        }
+        Object.assign(data, manualIdentityData(project, normalized));
         if (body.gmbLocationName !== undefined) {
           data.gmbLocationName = body.gmbLocationName
             ? String(body.gmbLocationName).trim().slice(0, 255)
@@ -369,6 +451,12 @@ export async function adminIntegrationsRoutes(app) {
           gmbLocationId: true,
           gmbLocationName: true,
           gmbCid: true,
+          gmbPlaceId: true,
+          gmbIdentitySource: true,
+          gmbIdentityVerifiedAt: true,
+          gmbRating: true,
+          gmbReviewsCount: true,
+          localLocationName: true,
           dataforseoDomain: true,
           targetMarket: true,
         },
@@ -429,6 +517,12 @@ export async function adminIntegrationsRoutes(app) {
           gmbLocationId: true,
           gmbLocationName: true,
           gmbCid: true,
+          gmbPlaceId: true,
+          gmbIdentitySource: true,
+          gmbIdentityVerifiedAt: true,
+          gmbRating: true,
+          gmbReviewsCount: true,
+          localLocationName: true,
           dataforseoDomain: true,
           targetMarket: true,
           gscLastSyncedAt: true,

@@ -88,7 +88,7 @@ export async function runConnectionHealth() {
       )
     );
   } else {
-    const dfsProjects = await prisma.project.count({ where: { gmbCid: { not: null } } });
+    const dfsProjects = await prisma.project.count({ where: { OR: [{ gmbCid: { not: null } }, { gmbPlaceId: { not: null } }] } });
     checks.push(
       check(
         'business_data',
@@ -188,6 +188,7 @@ export async function runConnectionHealth() {
       ga4PropertyId: true,
       gmbLocationId: true,
       gmbCid: true,
+      gmbPlaceId: true,
       dataforseoDomain: true,
       targetMarket: true,
     },
@@ -197,7 +198,7 @@ export async function runConnectionHealth() {
     gsc: projects.filter((p) => p.gscSiteUrl).length,
     ga4: projects.filter((p) => p.ga4PropertyId).length,
     gmbNative: projects.filter((p) => p.gmbLocationId).length,
-    gmbDfs: projects.filter((p) => p.gmbCid).length,
+    gmbDfs: projects.filter((p) => p.gmbCid || p.gmbPlaceId).length,
     domain: projects.filter((p) => p.dataforseoDomain).length,
     targetMarket: projects.filter((p) => p.targetMarket).length,
   };
@@ -220,11 +221,12 @@ export async function runConnectionHealth() {
     summary: { ok: okCount, warn: warnCount, fail: failCount },
     checks,
     dfsProjects: await prisma.project.findMany({
-      where: { gmbCid: { not: null }, client: { isActive: true } },
+      where: { OR: [{ gmbCid: { not: null } }, { gmbPlaceId: { not: null } }], client: { isActive: true } },
       select: {
         id: true,
         name: true,
         gmbCid: true,
+        gmbPlaceId: true,
         gmbLocationName: true,
         targetMarket: true,
         gmbLastSyncedAt: true,
@@ -249,6 +251,7 @@ export async function probeProjectGmbDfs(projectId) {
       id: true,
       name: true,
       gmbCid: true,
+      gmbPlaceId: true,
       gmbLocationName: true,
       targetMarket: true,
       client: { select: { agencyName: true } },
@@ -257,7 +260,7 @@ export async function probeProjectGmbDfs(projectId) {
   if (!project) {
     return { status: 'fail', message: 'Project not found' };
   }
-  if (!project.gmbCid) {
+  if (!dfsKeywordForProject(project)) {
     return {
       status: 'fail',
       message: 'No gmbCid / Maps identifier on this project — set it in Integrations',

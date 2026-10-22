@@ -81,6 +81,8 @@ import { clientHealthRoutes } from './routes/client/health.js';
 import { adminHealthRoutes } from './routes/admin/health.js';
 import { pmSiteMetricsRoutes } from './routes/pm/siteMetrics.js';
 import { clientSiteMetricsRoutes } from './routes/client/siteMetrics.js';
+import { pmLocalSeoRoutes } from './routes/pm/localSeo.js';
+import { clientLocalSeoRoutes } from './routes/client/localSeo.js';
 import { pmSignalsRoutes } from './routes/pm/signals.js';
 import { clientSignalsRoutes } from './routes/client/signals.js';
 import { startSignalsJobs } from './lib/signals/jobs.js';
@@ -293,6 +295,9 @@ app.register(adminHealthRoutes, { prefix: '/api/admin' });
 // Site metrics (docs/ledger/features/site-metrics.md): page speed, backlinks / authority, uptime.
 app.register(pmSiteMetricsRoutes, { prefix: '/api/pm' });
 app.register(clientSiteMetricsRoutes, { prefix: '/api/client' });
+// Local SEO (docs/ledger/features/local-seo.md): GBP identity, location, Maps ranks, geo-grid; client Maps tile.
+app.register(pmLocalSeoRoutes, { prefix: '/api/pm' });
+app.register(clientLocalSeoRoutes, { prefix: '/api/client' });
 app.register(pmSignalsRoutes, { prefix: '/api/pm' });
 app.register(clientSignalsRoutes, { prefix: '/api/client' });
 app.register(pmDigestRoutes, { prefix: '/api/pm' });
@@ -400,8 +405,10 @@ try {
     }
   });
 
-  // GA4 + GMB + DataForSEO sync — runs daily at 05:30 UTC
+  // GA4 + GMB + DataForSEO sync — runs daily at 05:30. Leader only (2026-10-22, local-seo): the GMB and rank steps
+  // make paid DataForSEO calls, so they must not run once per PM2 instance.
   cron.schedule('30 5 * * *', async () => {
+    if (!isLeader()) return;
     app.log.info('Starting native analytics sync (GA4/GMB/DataForSEO)...');
     try {
       const result = await runNativeAnalyticsSync(app.log);
@@ -497,6 +504,29 @@ try {
       app.log.info(await runBacklinkSnapshotJob({ log: app.log }), 'Backlink snapshot monthly run complete');
     } catch (err) {
       app.log.error({ err }, 'Backlink snapshot monthly run failed');
+    }
+  });
+  // Local SEO (docs/ledger/features/local-seo.md), leader only, paid DataForSEO calls, both off by default:
+  // 06:15 daily Maps ranks (LOCAL_RANK_ENABLED, capped by LOCAL_RANK_MAX_PER_RUN, after the 05:30 GMB/rank sync),
+  // 06:40 Mondays geo-grid (LOCAL_GRID_ENABLED + Project.localGridEnabled, capped by LOCAL_GRID_MAX_POINTS_PER_RUN).
+  cron.schedule('15 6 * * *', async () => {
+    if (!isLeader()) return;
+    try {
+      const { runLocalRankJob } = await import('./lib/localRank.js');
+      const out = await runLocalRankJob({ log: app.log });
+      if (!out.skipped) app.log.info(out, 'Local rank daily run complete');
+    } catch (err) {
+      app.log.error({ err }, 'Local rank daily run failed');
+    }
+  });
+  cron.schedule('40 6 * * 1', async () => {
+    if (!isLeader()) return;
+    try {
+      const { runLocalGridJob } = await import('./lib/localRank.js');
+      const out = await runLocalGridJob({ log: app.log });
+      if (!out.skipped) app.log.info(out, 'Local grid weekly run complete');
+    } catch (err) {
+      app.log.error({ err }, 'Local grid weekly run failed');
     }
   });
   // Uptime (UPTIME_ENABLED, default on): prober every UPTIME_INTERVAL_MIN minutes (in-process overlap guard), rollup
