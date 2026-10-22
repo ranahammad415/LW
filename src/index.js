@@ -529,6 +529,18 @@ try {
       app.log.error({ err }, 'Local grid weekly run failed');
     }
   });
+  // Maps standard queue (contract-180): collect posted DataForSEO tasks every 10 minutes (task_get is free; a task
+  // still pending after 24 h is expired). Leader only; a DB read only when nothing is pending.
+  cron.schedule('*/10 * * * *', async () => {
+    if (!isLeader()) return;
+    try {
+      const { collectLocalRankTasks } = await import('./lib/localRank.js');
+      const out = await collectLocalRankTasks({ log: app.log });
+      if (out.tasks) app.log.info(out, 'Local rank task collection');
+    } catch (err) {
+      app.log.error({ err }, 'Local rank task collection failed');
+    }
+  });
   // Uptime (UPTIME_ENABLED, default on): prober every UPTIME_INTERVAL_MIN minutes (in-process overlap guard), rollup
   // of today + yesterday hourly at :07, final rollup of yesterday + retention purge at 00:20 UTC. Leader only.
   {

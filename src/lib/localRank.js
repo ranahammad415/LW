@@ -1,7 +1,13 @@
 /**
  * Local rank tracking: Google Maps positions of the client's business (docs/ledger/features/local-seo.md).
  *
- * Source: DataForSEO `POST /v3/serp/google/maps/live/advanced` (one task per call). Chosen over local_finder because
+ * Source (contract-180 owner decision): DataForSEO **standard queue** `POST /v3/serp/google/maps/task_post` (normal
+ * priority 1) + `GET /v3/serp/google/maps/task_get/advanced/{id}` (not billed). Every check — the daily ranks, the
+ * geo-grid AND the staff "Refresh now" — is posted as a task; `collectLocalRankTasks` (leader, every 10 min) collects
+ * results until done or 24 h old (then `expired`). 40601 / 40602 are pending, never errors. A keyword-day is claimed
+ * with a `LocalRankDaily` row in status `pending` BEFORE the task is posted (unique keywordId+date), so a keyword is
+ * never paid for twice on one UTC day, whichever instance or trigger posts it. The live endpoint
+ * (`checkMapsRank`, /live/advanced) is kept for tests and ad-hoc use only; nothing calls it on a schedule.
  * Maps bills per SERP of up to 100 results (local_finder per 10), so depth 20 is one billed SERP, and every Maps item
  * carries cid + place_id for an exact match. Location: `location_coordinate` "lat,lng,14z" from the stored business
  * coordinates (zoom 14 ≈ a 5–10 km neighbourhood/city view, what a nearby searcher sees), else the project's
@@ -16,7 +22,7 @@
  * Project.localGridEnabled, weekly, N×N with N ≤ 7 (default 5), LOCAL_GRID_MAX_POINTS_PER_RUN.
  */
 import { prisma } from './prisma.js';
-import { dfsPostTask } from './dataforseo/client.js';
+import { dfsPostTask, dfsGetTask, hasDataForSeoCreds } from './dataforseo/client.js';
 import { DFS_MAPS_PATH, locationCode as dfsLocationCode, languageCode as dfsLanguageCode } from './omniSearch/businessDataProvider.js';
 import { dfsIdentifierForProject, hasGbpIdentity } from './analytics/gmbIdentifier.js';
 import { projectSiteDomain } from './analytics/gbpIdentity.js';
@@ -41,11 +47,23 @@ export const localRankMaxPerRun = (env = process.env) => intEnv(env, 'LOCAL_RANK
 export const localRankDepth = (env = process.env) => intEnv(env, 'LOCAL_RANK_DEPTH', 20, 10, 100);
 export const localGridMaxPointsPerRun = (env = process.env) => intEnv(env, 'LOCAL_GRID_MAX_POINTS_PER_RUN', 250, 9, 5000);
 export const localGridMaxKeywords = (env = process.env) => intEnv(env, 'LOCAL_GRID_MAX_KEYWORDS', 3, 1, 20);
-/** Estimated USD per Maps call, used only for the UI estimate until real costUsd rows exist (unverified price). */
+/**
+ * Estimated USD per Maps check, used only for the UI estimate until real costUsd rows exist. Standard queue, normal
+ * priority: 0.0006 per SERP (DataForSEO public SERP API pricing: standard $0.0006, high priority $0.0012, live $0.002;
+ * an estimate, not verified against this account's invoice).
+ */
+export const STANDARD_QUEUE_EST_COST_USD = 0.0006;
 export function estCostPerCall(env = process.env) {
   const n = Number(env.LOCAL_RANK_EST_COST_USD);
-  return Number.isFinite(n) && n > 0 ? n : 0.002;
+  return Number.isFinite(n) && n > 0 ? n : STANDARD_QUEUE_EST_COST_USD;
 }
+
+// ── standard queue ──
+export const DFS_MAPS_TASK_POST_PATH = '/v3/serp/google/maps/task_post';
+export const DFS_MAPS_TASK_GET_PATH = '/v3/serp/google/maps/task_get/advanced';
+/** A task not collected within this time is given up (`expired`); DataForSEO keeps results ~30 days, we do not wait. */
+export const TASK_EXPIRY_MS = 24 * 60 * 60_000;
+export const localRankCollectMax = (env = process.env) => intEnv(env, 'LOCAL_RANK_COLLECT_MAX_PER_TICK', 200, 1, 2000);
 
 export function clampGridSize(n) {
   let s = Math.round(Number(n) || 5);
@@ -116,8 +134,90 @@ function matchContext(project) {
   return { cid: id.cid, placeId: id.placeId || project.gmbPlaceId || null, name: project.gmbLocationName, siteDomain: projectSiteDomain(project) };
 }
 
+/** Maps items → { status: ok|not_found, rank, rankAbsolute, matchedBy, inPack, competitors }. Pure. */
+export function rankResultFromItems(project, items) {
+  const m = matchBusiness(items, matchContext(project));
+  return {
+    status: m ? 'ok' : 'not_found',
+    rank: m?.rank ?? null,
+    rankAbsolute: m?.rankAbsolute ?? null,
+    matchedBy: m?.matchedBy ?? null,
+    inPack: !!m && m.rank != null && m.rank <= 3,
+    competitors: competitorsFrom(items, m?.item),
+  };
+}
+
+/** Task body for one Maps check (live and task_post share it; task_post adds priority 1 = normal). Pure. */
+export function mapsTaskBody(project, keyword, { point = null, env = process.env } = {}) {
+  const loc = mapsLocation(project, point, env);
+  const depth = localRankDepth(env);
+  return { loc, depth, body: { keyword: String(keyword).slice(0, 700), language_code: dfsLanguageCode(project), depth, ...loc.params } };
+}
+
 /**
- * One Maps check (one paid call). Never throws for DataForSEO task errors: → { status: 'ok'|'not_found'|'error', … }.
+ * Post one standard-queue Maps task (one paid task). Never throws for DataForSEO errors:
+ * → { status: 'posted', taskId, costUsd, depth, locationMode } | { status: 'error', errorCode, accountLevel, costUsd }.
+ */
+export async function postMapsTask(project, keyword, { point = null, post, env = process.env } = {}) {
+  const { loc, depth, body } = mapsTaskBody(project, keyword, { point, env });
+  try {
+    const parsed = await dfsPostTask(DFS_MAPS_TASK_POST_PATH, { ...body, priority: 1 }, { post });
+    const taskId = parsed.task?.id ? String(parsed.task.id) : null;
+    if (!taskId || !/^[\w-]{8,64}$/.test(taskId)) {
+      return { status: 'error', errorCode: 'NO_TASK_ID', accountLevel: false, costUsd: parsed.costUsd ?? null, depth, locationMode: loc.mode };
+    }
+    return { status: 'posted', taskId, costUsd: parsed.costUsd ?? null, depth, locationMode: loc.mode };
+  } catch (err) {
+    return {
+      status: 'error',
+      errorCode: String(err?.code || 'FAILED').slice(0, 40),
+      accountLevel: !!err?.accountLevel,
+      costUsd: err?.costUsd ?? null,
+      depth,
+      locationMode: loc.mode,
+    };
+  }
+}
+
+/**
+ * One task_get (free). → { state: 'pending' } | { state: 'done', items } | { state: 'failed', errorCode, accountLevel }.
+ * 40601 Task Handed / 40602 Task In Queue = pending; 40102 no results = done with no items.
+ */
+export async function getMapsTask(taskId, { get } = {}) {
+  if (!/^[\w-]{8,64}$/.test(String(taskId || ''))) return { state: 'failed', errorCode: 'BAD_TASK_ID', accountLevel: false };
+  try {
+    const parsed = await dfsGetTask(`${DFS_MAPS_TASK_GET_PATH}/${taskId}`, { get });
+    if (parsed.state === 'pending') return { state: 'pending' };
+    if (parsed.state === 'no_results') return { state: 'done', items: [] };
+    if (!parsed.result) return { state: 'pending' };
+    return { state: 'done', items: parsed.result.items || [] };
+  } catch (err) {
+    return { state: 'failed', errorCode: String(err?.code || 'FAILED').slice(0, 40), accountLevel: !!err?.accountLevel };
+  }
+}
+
+/**
+ * Claim a keyword-day before paying for it: an `error` row of the day is taken over (CAS on status), else a new
+ * `pending` row is created; the unique (keywordId, date) makes a second claim fail. → true when this caller owns it.
+ */
+export async function claimDailyRow(projectId, keywordId, date, now = new Date()) {
+  const upd = await prisma.localRankDaily.updateMany({
+    where: { keywordId, date, status: 'error' },
+    data: { status: 'pending', errorCode: null, fetchedAt: now },
+  });
+  if (upd?.count) return true;
+  try {
+    await prisma.localRankDaily.create({ data: { projectId, keywordId, date, status: 'pending', fetchedAt: now } });
+    return true;
+  } catch (err) {
+    if (err?.code === 'P2002') return false;
+    throw err;
+  }
+}
+
+/**
+ * One Maps check via the LIVE endpoint (one paid call). Not used by any job since contract-180 (standard queue);
+ * kept for tests and ad-hoc checks. Never throws for DataForSEO task errors: → { status: 'ok'|'not_found'|'error', … }.
  * Account-level errors come back with accountLevel: true so the caller stops.
  */
 export async function checkMapsRank(project, keyword, { point = null, post, env = process.env } = {}) {
@@ -131,18 +231,7 @@ export async function checkMapsRank(project, keyword, { point = null, post, env 
     );
     if (parsed.state === 'pending') return { status: 'error', errorCode: 'DFS_PENDING', costUsd: parsed.costUsd, depth, locationMode: loc.mode };
     const items = parsed.state === 'ok' ? parsed.result?.items || [] : [];
-    const m = matchBusiness(items, matchContext(project));
-    return {
-      status: m ? 'ok' : 'not_found',
-      rank: m?.rank ?? null,
-      rankAbsolute: m?.rankAbsolute ?? null,
-      matchedBy: m?.matchedBy ?? null,
-      inPack: !!m && m.rank != null && m.rank <= 3,
-      competitors: competitorsFrom(items, m?.item),
-      costUsd: parsed.costUsd,
-      depth,
-      locationMode: loc.mode,
-    };
+    return { ...rankResultFromItems(project, items), costUsd: parsed.costUsd, depth, locationMode: loc.mode };
   } catch (err) {
     return {
       status: 'error',
@@ -174,7 +263,7 @@ export async function storeLocalRank(project, keywordId, r, { now = new Date() }
   };
   if (r.status === 'error') {
     const prev = await prisma.localRankDaily.findUnique({ where, select: { status: true } });
-    if (prev && prev.status !== 'error') return { kept: true };
+    if (prev && (prev.status === 'ok' || prev.status === 'not_found')) return { kept: true };
   }
   await prisma.localRankDaily.upsert({ where, create: { projectId: project.id, keywordId, date, ...data }, update: data });
   return { kept: false };
@@ -229,11 +318,13 @@ export function localRankBlocker(project) {
 }
 
 /**
- * Check every due local keyword of one project, within `budget` calls. Skips keywords already checked today unless
- * force. → { checked, ok, notFound, errors, costUsd, stopped }
+ * Post a standard-queue task for every due local keyword of one project, within `budget` tasks. A keyword already
+ * checked or pending today is skipped (never paid twice per keyword-day; there is no force any more). Each keyword-day
+ * is claimed with a pending LocalRankDaily row before its task is posted. Results arrive through
+ * collectLocalRankTasks. → { checked (tasks posted or failed), posted, errors, costUsd, stopped }
  */
-export async function runLocalRankForProject(project, { now = new Date(), budget = localRankMaxPerRun(), force = false, post, maxKeywords = 200 } = {}) {
-  const out = { projectId: project.id, checked: 0, ok: 0, notFound: 0, errors: 0, costUsd: 0, stopped: null };
+export async function runLocalRankForProject(project, { now = new Date(), budget = localRankMaxPerRun(), post, maxKeywords = 200, env = process.env } = {}) {
+  const out = { projectId: project.id, checked: 0, posted: 0, errors: 0, costUsd: 0, stopped: null };
   const blocker = localRankBlocker(project);
   if (blocker) return { ...out, skipped: blocker };
   const keywords = await prisma.keywordTrack.findMany({
@@ -243,34 +334,158 @@ export async function runLocalRankForProject(project, { now = new Date(), budget
     take: maxKeywords,
   });
   if (!keywords.length) return { ...out, skipped: 'NO_KEYWORDS' };
-  let done = new Set();
-  if (!force) {
-    const rows = await prisma.localRankDaily.findMany({
-      where: { projectId: project.id, date: utcDay(now), status: { in: ['ok', 'not_found'] } },
-      select: { keywordId: true },
-    });
-    done = new Set(rows.map((r) => r.keywordId));
-  }
+  const date = utcDay(now);
+  const rows = await prisma.localRankDaily.findMany({
+    where: { projectId: project.id, date, status: { in: ['ok', 'not_found', 'pending'] } },
+    select: { keywordId: true },
+  });
+  const done = new Set(rows.map((r) => r.keywordId));
   for (const k of keywords) {
     if (done.has(k.id)) continue;
     if (out.checked >= budget) {
       out.stopped = 'CAP';
       break;
     }
-    const r = await checkMapsRank(project, k.keyword, { post });
+    if (!(await claimDailyRow(project.id, k.id, date, now))) continue; // another instance / trigger owns this day
+    const r = await postMapsTask(project, k.keyword, { post, env });
     out.checked++;
     if (typeof r.costUsd === 'number') out.costUsd += r.costUsd;
-    await storeLocalRank(project, k.id, r, { now });
-    if (r.status === 'ok') out.ok++;
-    else if (r.status === 'not_found') out.notFound++;
-    else out.errors++;
-    if (r.accountLevel) {
-      out.stopped = r.errorCode;
-      break;
+    if (r.status === 'posted') {
+      await prisma.localRankTask.create({
+        data: { projectId: project.id, keywordId: k.id, kind: 'daily', date, taskId: r.taskId, locationMode: r.locationMode, depth: r.depth, status: 'pending', postedAt: now, costUsd: r.costUsd ?? null },
+      });
+      await prisma.localRankDaily.updateMany({
+        where: { keywordId: k.id, date, status: 'pending' },
+        data: { costUsd: r.costUsd ?? null, depth: r.depth, locationMode: r.locationMode },
+      });
+      out.posted++;
+    } else {
+      await prisma.localRankDaily.updateMany({
+        where: { keywordId: k.id, date, status: 'pending' },
+        data: { status: 'error', errorCode: r.errorCode || 'FAILED', costUsd: r.costUsd ?? null },
+      });
+      out.errors++;
+      if (r.accountLevel) {
+        out.stopped = r.errorCode;
+        break;
+      }
     }
   }
   out.costUsd = Number(out.costUsd.toFixed(5));
   return out;
+}
+
+/** Store a collected daily result on its pending row (never touches an ok / not_found row). */
+async function storeCollectedDaily(task, r, now) {
+  await prisma.localRankDaily.updateMany({
+    where: { keywordId: task.keywordId, date: task.date, status: 'pending' },
+    data: {
+      rank: r.status === 'ok' ? r.rank : null,
+      rankAbsolute: r.status === 'ok' ? r.rankAbsolute : null,
+      inPack: !!r.inPack,
+      matchedBy: r.matchedBy || null,
+      competitors: r.competitors || [],
+      status: r.status,
+      errorCode: r.status === 'error' ? r.errorCode || 'FAILED' : null,
+      fetchedAt: now,
+    },
+  });
+}
+
+/** Grid row: fill a point, and when no task of the grid is pending any more, compute avgRank / coverage / status. */
+async function updateGridPoints(gridId, updates) {
+  const grid = await prisma.localRankGrid.findUnique({ where: { id: gridId }, select: { id: true, points: true, status: true, errorCode: true } });
+  if (!grid) return;
+  const points = Array.isArray(grid.points) ? grid.points.map((p) => ({ ...p })) : [];
+  for (const u of updates) {
+    const p = points[u.pointIndex];
+    if (!p) continue;
+    delete p.pending;
+    if (u.error) {
+      p.rank = null;
+      p.error = true;
+    } else {
+      p.rank = u.rank;
+      delete p.error;
+    }
+  }
+  const pending = points.some((p) => p.pending);
+  await prisma.localRankGrid.update({ where: { id: gridId }, data: { points, ...(pending ? {} : gridOutcome(points, grid.errorCode)) } });
+}
+
+/** avgRank / coverage / status of a finished grid. Pure. */
+export function gridOutcome(points, stoppedCode = null) {
+  const found = points.filter((p) => p.rank != null);
+  const measured = points.filter((p) => !p.error && !p.pending);
+  const errors = points.filter((p) => p.error).length;
+  return {
+    avgRank: found.length ? Number((found.reduce((s, p) => s + p.rank, 0) / found.length).toFixed(2)) : null,
+    coverage: measured.length ? Number((found.length / measured.length).toFixed(3)) : null,
+    status: stoppedCode || errors === points.length ? 'error' : errors > 0 ? 'partial' : 'ok',
+  };
+}
+
+/**
+ * Collector (leader only, every 10 min; free task_get calls). Oldest pending tasks first, ≤ LOCAL_RANK_COLLECT_MAX_PER_TICK.
+ * pending → polls + 1; older than 24 h → expired (daily row error DFS_EXPIRED, grid point error); done → match and
+ * store; failed → daily row error / grid point error. An account-level error stops the tick and leaves the task
+ * pending for the next one. Runs whatever LOCAL_RANK_ENABLED says (the tasks are already paid for).
+ */
+export async function collectLocalRankTasks({ now = new Date(), get, env = process.env, log = console } = {}) {
+  if (!get && !hasDataForSeoCreds(env)) return { skipped: 'NO_CREDS' };
+  const tasks = await prisma.localRankTask.findMany({
+    where: { status: 'pending' },
+    orderBy: { postedAt: 'asc' },
+    take: localRankCollectMax(env),
+    select: { id: true, projectId: true, keywordId: true, kind: true, date: true, gridId: true, pointIndex: true, taskId: true, postedAt: true, polls: true },
+  });
+  const summary = { tasks: tasks.length, done: 0, pending: 0, expired: 0, failed: 0, stopped: null };
+  if (!tasks.length) return summary;
+  const projects = new Map();
+  const gridUpdates = new Map();
+  const queueGrid = (t, u) => {
+    if (!t.gridId) return;
+    if (!gridUpdates.has(t.gridId)) gridUpdates.set(t.gridId, []);
+    gridUpdates.get(t.gridId).push({ pointIndex: t.pointIndex, ...u });
+  };
+  for (const t of tasks) {
+    if (now.getTime() - new Date(t.postedAt).getTime() > TASK_EXPIRY_MS) {
+      await prisma.localRankTask.updateMany({ where: { id: t.id, status: 'pending' }, data: { status: 'expired', collectedAt: now, errorCode: 'DFS_EXPIRED' } });
+      if (t.kind === 'daily') await storeCollectedDaily(t, { status: 'error', errorCode: 'DFS_EXPIRED' }, now);
+      else queueGrid(t, { error: true });
+      summary.expired++;
+      continue;
+    }
+    const r = await getMapsTask(t.taskId, { get });
+    if (r.state === 'pending') {
+      await prisma.localRankTask.update({ where: { id: t.id }, data: { polls: (t.polls || 0) + 1 } });
+      summary.pending++;
+      continue;
+    }
+    if (r.state === 'failed') {
+      if (r.accountLevel) {
+        summary.stopped = r.errorCode;
+        log?.warn?.({ code: r.errorCode }, 'Local rank collector stopped on an account-level DataForSEO error');
+        break;
+      }
+      await prisma.localRankTask.updateMany({ where: { id: t.id, status: 'pending' }, data: { status: 'failed', collectedAt: now, errorCode: r.errorCode } });
+      if (t.kind === 'daily') await storeCollectedDaily(t, { status: 'error', errorCode: r.errorCode }, now);
+      else queueGrid(t, { error: true });
+      summary.failed++;
+      continue;
+    }
+    if (!projects.has(t.projectId)) {
+      projects.set(t.projectId, await prisma.project.findUnique({ where: { id: t.projectId }, select: LOCAL_PROJECT_SELECT }));
+    }
+    const project = projects.get(t.projectId);
+    const res = project ? rankResultFromItems(project, r.items) : { status: 'not_found', rank: null };
+    await prisma.localRankTask.updateMany({ where: { id: t.id, status: 'pending' }, data: { status: 'done', collectedAt: now } });
+    if (t.kind === 'daily') await storeCollectedDaily(t, res, now);
+    else queueGrid(t, { rank: res.status === 'ok' ? res.rank : null });
+    summary.done++;
+  }
+  for (const [gridId, updates] of gridUpdates) await updateGridPoints(gridId, updates);
+  return summary;
 }
 
 /** Daily job (leader only, LOCAL_RANK_ENABLED). Projects with at least one local keyword, least recently checked first. */
@@ -285,17 +500,16 @@ export async function runLocalRankJob({ now = new Date(), log = console, env = p
     select: LOCAL_PROJECT_SELECT,
   });
   let budget = localRankMaxPerRun(env);
-  const summary = { projects: projects.length, checked: 0, ok: 0, notFound: 0, errors: 0, costUsd: 0, stopped: null, skipped: 0 };
+  const summary = { projects: projects.length, checked: 0, posted: 0, errors: 0, costUsd: 0, stopped: null, skipped: 0 };
   for (const p of projects) {
     if (budget <= 0) {
       summary.stopped = 'CAP';
       break;
     }
-    const r = await runLocalRankForProject(p, { now, budget, post });
+    const r = await runLocalRankForProject(p, { now, budget, post, env });
     if (r.skipped) summary.skipped++;
     summary.checked += r.checked;
-    summary.ok += r.ok;
-    summary.notFound += r.notFound;
+    summary.posted += r.posted;
     summary.errors += r.errors;
     summary.costUsd += r.costUsd;
     budget -= r.checked;
@@ -336,46 +550,70 @@ export function gridCostEstimate({ size, keywords, perCallUsd = estCostPerCall()
   return { calls, perRunUsd: Number((calls * perCallUsd).toFixed(4)), perMonthUsd: Number((calls * perCallUsd * 4.35).toFixed(4)), perCallUsd };
 }
 
-/** One grid run for one keyword (size² paid calls). Stores a LocalRankGrid row. */
-export async function runGridForKeyword(project, keyword, { now = new Date(), post, maxPoints = Infinity } = {}) {
+/**
+ * One grid run for one keyword: size² standard-queue tasks. The LocalRankGrid row is created first in status `pending`
+ * (every point `pending: true`); collectLocalRankTasks fills the points and sets avgRank / coverage / status when the
+ * last task is in. A point whose task could not be posted is an error point straight away; an account-level error
+ * stops posting (the remaining points become error points).
+ */
+export async function runGridForKeyword(project, keyword, { now = new Date(), post, maxPoints = Infinity, env = process.env } = {}) {
   if (typeof project.gmbLat !== 'number' || typeof project.gmbLng !== 'number') return { skipped: 'NO_COORDINATES' };
   const size = clampGridSize(project.localGridSize);
   const spacingKm = clampSpacingKm(project.localGridSpacingKm);
   const pts = gridPoints({ lat: project.gmbLat, lng: project.gmbLng }, size, spacingKm);
   if (pts.length > maxPoints) return { skipped: 'CAP' };
-  const points = [];
+  const points = pts.map((pt) => ({ lat: pt.lat, lng: pt.lng, row: pt.row, col: pt.col, rank: null, pending: true }));
+  const grid = await prisma.localRankGrid.create({
+    data: {
+      projectId: project.id,
+      keywordId: keyword.id,
+      runAt: now,
+      gridSize: size,
+      spacingKm,
+      centerLat: project.gmbLat,
+      centerLng: project.gmbLng,
+      points,
+      avgRank: null,
+      coverage: null,
+      costUsd: 0,
+      status: 'pending',
+      errorCode: null,
+    },
+  });
   let costUsd = 0;
-  let errors = 0;
+  let posted = 0;
   let stopped = null;
-  for (const pt of pts) {
-    const r = await checkMapsRank(project, keyword.keyword, { point: pt, post });
+  const date = utcDay(now);
+  for (let i = 0; i < pts.length; i += 1) {
+    if (stopped) {
+      delete points[i].pending;
+      points[i].error = true;
+      continue;
+    }
+    const r = await postMapsTask(project, keyword.keyword, { point: pts[i], post, env });
     if (typeof r.costUsd === 'number') costUsd += r.costUsd;
-    if (r.status === 'error') errors++;
-    points.push({ lat: pt.lat, lng: pt.lng, row: pt.row, col: pt.col, rank: r.status === 'ok' ? r.rank : null, error: r.status === 'error' || undefined });
-    if (r.accountLevel) {
-      stopped = r.errorCode;
-      break;
+    if (r.status === 'posted') {
+      await prisma.localRankTask.create({
+        data: { projectId: project.id, keywordId: keyword.id, kind: 'grid', date, gridId: grid.id, pointIndex: i, taskId: r.taskId, locationMode: r.locationMode, depth: r.depth, status: 'pending', postedAt: now, costUsd: r.costUsd ?? null },
+      });
+      posted++;
+    } else {
+      delete points[i].pending;
+      points[i].error = true;
+      if (r.accountLevel) stopped = r.errorCode;
     }
   }
-  const found = points.filter((p) => p.rank != null);
-  const measured = points.filter((p) => !p.error);
-  const data = {
-    projectId: project.id,
-    keywordId: keyword.id,
-    runAt: now,
-    gridSize: size,
-    spacingKm,
-    centerLat: project.gmbLat,
-    centerLng: project.gmbLng,
-    points,
-    avgRank: found.length ? Number((found.reduce((s, p) => s + p.rank, 0) / found.length).toFixed(2)) : null,
-    coverage: measured.length ? Number((found.length / measured.length).toFixed(3)) : null,
-    costUsd: Number(costUsd.toFixed(5)),
-    status: stopped || errors === points.length ? 'error' : errors > 0 || points.length < pts.length ? 'partial' : 'ok',
-    errorCode: stopped || null,
-  };
-  await prisma.localRankGrid.create({ data });
-  return { calls: points.length, costUsd: data.costUsd, status: data.status, stopped };
+  // The collector may already have filled points while we were still posting: keep what it stored.
+  const stored = await prisma.localRankGrid.findUnique({ where: { id: grid.id }, select: { points: true } });
+  if (Array.isArray(stored?.points)) {
+    stored.points.forEach((p, i) => {
+      if (p && !p.pending && points[i]?.pending) points[i] = p;
+    });
+  }
+  const anyPending = points.some((p) => p.pending);
+  const data = { points, costUsd: Number(costUsd.toFixed(5)), errorCode: stopped || null, ...(anyPending ? {} : gridOutcome(points, stopped)) };
+  await prisma.localRankGrid.update({ where: { id: grid.id }, data });
+  return { calls: points.length, posted, costUsd: data.costUsd, status: data.status || 'pending', stopped };
 }
 
 /** Weekly grid job (leader only, LOCAL_GRID_ENABLED + Project.localGridEnabled). */
@@ -478,7 +716,7 @@ export async function staffLocalRankView(project, { now = new Date() } = {}) {
   const localCount = tracked.filter((k) => k.trackLocal).length;
   const list = keywords.map((k) => {
     const hist = byKw.get(k.id) || [];
-    const latest = [...hist].reverse().find((h) => h.status !== 'error') || null;
+    const latest = [...hist].reverse().find((h) => h.status === 'ok' || h.status === 'not_found') || null;
     const lastAny = hist[hist.length - 1] || null;
     return {
       id: k.id,
@@ -498,12 +736,14 @@ export async function staffLocalRankView(project, { now = new Date() } = {}) {
           }
         : null,
       lastError: lastAny?.status === 'error' ? lastAny.errorCode : null,
-      history: hist.filter((h) => h.status !== 'error').map((h) => ({ date: isoDay(h.date), rank: h.rank })),
+      pending: lastAny?.status === 'pending',
+      history: hist.filter((h) => h.status === 'ok' || h.status === 'not_found').map((h) => ({ date: isoDay(h.date), rank: h.rank })),
     };
   });
   const gridKeywords = Math.min(localCount, localGridMaxKeywords());
   return {
     flags: { localRankEnabled: isLocalRankEnabled(), localGridEnabled: isLocalGridEnabled() },
+    mode: 'standard_queue',
     blocker: localRankBlocker(project),
     location: mapsLocation(project).mode,
     keywords: list,

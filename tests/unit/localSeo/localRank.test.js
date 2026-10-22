@@ -42,6 +42,9 @@ import {
   isLocalIntentKeyword,
   applyDefaultTrackLocal,
   LOCAL_PROJECT_SELECT,
+  collectLocalRankTasks,
+  gridOutcome,
+  estCostPerCall,
 } from '../../../src/lib/localRank.js';
 
 const PROJECT = {
@@ -55,11 +58,15 @@ const ITEMS = [
   { type: 'maps_search', rank_group: 4, rank_absolute: 4, title: 'Rival Four', cid: '903' },
 ];
 const dfsOk = (items) => async () => ({ status_code: 20000, tasks: [{ id: 't', status_code: 20000, cost: 0.002, result: [{ items }] }] });
+let seq = 0;
+const dfsPosted = () => async () => ({ status_code: 20000, tasks: [{ id: `task-${String(++seq).padStart(8, '0')}`, status_code: 20100, status_message: 'Task Created.', cost: 0.0006, result: null }] });
+const dfsGet = (code, items = []) => async () => ({ status_code: 20000, tasks: [{ id: 'x', status_code: code, status_message: 'm', cost: 0, result: code === 20000 ? [{ items }] : null }] });
 const now = new Date('2026-10-22T06:15:00Z');
 
 beforeEach(() => {
   db.calls = [];
   db.overrides = {};
+  seq = 0;
 });
 
 describe('matching', () => {
@@ -110,21 +117,48 @@ describe('checks and storage', () => {
     expect(db.calls.some((c) => c.key === 'localRankDaily.upsert')).toBe(false);
   });
 
-  it('per-project: skips keywords done today, respects the budget, stops at an account-level error', async () => {
+  it('per-project (standard queue): skips keywords done or pending today, claims before posting, respects the budget, stops at an account-level error', async () => {
     db.overrides['keywordTrack.findMany'] = async () => [{ id: 'k1', keyword: 'a' }, { id: 'k2', keyword: 'b' }, { id: 'k3', keyword: 'c' }, { id: 'k4', keyword: 'd' }];
     db.overrides['localRankDaily.findMany'] = async () => [{ keywordId: 'k1' }];
-    const post = vi.fn(dfsOk(ITEMS));
-    const out = await runLocalRankForProject(PROJECT, { now, budget: 2, post });
-    expect(out).toMatchObject({ checked: 2, ok: 2, stopped: 'CAP', costUsd: 0.004 });
+    db.overrides['localRankDaily.updateMany'] = async () => ({ count: 0 });
+    const post = vi.fn(dfsPosted());
+    const out = await runLocalRankForProject(PROJECT, { now, budget: 2, post, env: {} });
+    expect(out).toMatchObject({ checked: 2, posted: 2, stopped: 'CAP', costUsd: 0.0012 });
     expect(post).toHaveBeenCalledTimes(2);
+    expect(post.mock.calls[0][0]).toBe('/v3/serp/google/maps/task_post');
+    expect(post.mock.calls[0][1][0]).toMatchObject({ keyword: 'b', depth: 20, priority: 1, location_coordinate: '43.0389000,-87.9065000,14z' });
+    const doneWhere = db.calls.find((c) => c.key === 'localRankDaily.findMany').args.where;
+    expect(doneWhere.status).toEqual({ in: ['ok', 'not_found', 'pending'] });
+    // Claim (pending row) BEFORE the task is posted; the task id is stored for the collector.
+    const keys = db.calls.map((c) => c.key);
+    expect(keys.indexOf('localRankDaily.create')).toBeLessThan(keys.indexOf('localRankTask.create'));
+    expect(db.calls.find((c) => c.key === 'localRankDaily.create').args.data).toMatchObject({ keywordId: 'k2', status: 'pending' });
+    expect(db.calls.find((c) => c.key === 'localRankTask.create').args.data).toMatchObject({ kind: 'daily', keywordId: 'k2', taskId: 'task-00000001', status: 'pending', costUsd: 0.0006 });
     const kwWhere = db.calls.find((c) => c.key === 'keywordTrack.findMany').args.where;
     expect(kwWhere).toEqual({ projectId: 'p1', trackLocal: true, status: { in: ['APPROVED', 'ACCEPTED', 'TRACKING'] } });
 
     db.overrides['localRankDaily.findMany'] = async () => [];
     const bad = vi.fn(async () => ({ status_code: 40100, status_message: 'auth', tasks: [] }));
-    const stop = await runLocalRankForProject(PROJECT, { now, budget: 10, post: bad });
+    const stop = await runLocalRankForProject(PROJECT, { now, budget: 10, post: bad, env: {} });
     expect(stop).toMatchObject({ checked: 1, errors: 1, stopped: 'DFS_40100' });
     expect(bad).toHaveBeenCalledTimes(1);
+  });
+
+  it('never pays twice for one keyword-day: a claim lost to another instance posts nothing', async () => {
+    db.overrides['keywordTrack.findMany'] = async () => [{ id: 'k1', keyword: 'a' }];
+    db.overrides['localRankDaily.updateMany'] = async () => ({ count: 0 });
+    db.overrides['localRankDaily.create'] = async () => {
+      throw Object.assign(new Error('dup'), { code: 'P2002' });
+    };
+    const post = vi.fn(dfsPosted());
+    const out = await runLocalRankForProject(PROJECT, { now, budget: 10, post, env: {} });
+    expect(post).not.toHaveBeenCalled();
+    expect(out).toMatchObject({ checked: 0, posted: 0 });
+    // An error row of the day is taken over with a CAS on status (then posted once).
+    db.overrides['localRankDaily.updateMany'] = async (args) => ({ count: args.where.status === 'error' ? 1 : 1 });
+    const post2 = vi.fn(dfsPosted());
+    await runLocalRankForProject(PROJECT, { now, budget: 10, post: post2, env: {} });
+    expect(post2).toHaveBeenCalledTimes(1);
   });
 
   it('job is off unless LOCAL_RANK_ENABLED=true and capped by LOCAL_RANK_MAX_PER_RUN', async () => {
@@ -132,10 +166,11 @@ describe('checks and storage', () => {
     expect(db.calls).toEqual([]);
     db.overrides['project.findMany'] = async () => [PROJECT, { ...PROJECT, id: 'p2' }];
     db.overrides['keywordTrack.findMany'] = async () => [{ id: 'k1', keyword: 'a' }, { id: 'k2', keyword: 'b' }];
-    const post = vi.fn(dfsOk(ITEMS));
+    db.overrides['localRankDaily.updateMany'] = async () => ({ count: 0 });
+    const post = vi.fn(dfsPosted());
     const out = await runLocalRankJob({ env: { LOCAL_RANK_ENABLED: 'true', LOCAL_RANK_MAX_PER_RUN: '3' }, post, now });
     expect(post).toHaveBeenCalledTimes(3);
-    expect(out).toMatchObject({ checked: 3, stopped: 'CAP' });
+    expect(out).toMatchObject({ checked: 3, posted: 3, stopped: 'CAP' });
     expect(db.calls.find((c) => c.key === 'project.findMany').args.select).toEqual(LOCAL_PROJECT_SELECT);
   });
 
@@ -159,8 +194,10 @@ describe('geo-grid', () => {
     expect(gridPoints({ lat: 43, lng: -87.9 }, 15, 1)).toHaveLength(49);
   });
 
-  it('cost estimate before enabling', () => {
+  it('cost estimate before enabling (standard queue default 0.0006 per check)', () => {
     expect(gridCostEstimate({ size: 5, keywords: 3, perCallUsd: 0.002 })).toEqual({ calls: 75, perRunUsd: 0.15, perMonthUsd: 0.6525, perCallUsd: 0.002 });
+    expect(estCostPerCall({})).toBe(0.0006);
+    expect(estCostPerCall({ LOCAL_RANK_EST_COST_USD: '0.001' })).toBe(0.001);
   });
 
   it('a grid larger than the remaining budget is not started', async () => {
@@ -169,18 +206,91 @@ describe('geo-grid', () => {
     expect(post).not.toHaveBeenCalled();
   });
 
-  it('one grid run stores avgRank and coverage', async () => {
-    const post = vi.fn(dfsOk(ITEMS));
-    const out = await runGridForKeyword({ ...PROJECT, localGridSize: 3 }, { id: 'k1', keyword: 'a' }, { post, now });
+  it('one grid run posts N² tasks on a pending grid row; the collector fills it and sets avgRank and coverage', async () => {
+    const post = vi.fn(dfsPosted());
+    db.overrides['localRankGrid.create'] = async (args) => ({ id: 'g1', ...args.data });
+    const out = await runGridForKeyword({ ...PROJECT, localGridSize: 3 }, { id: 'k1', keyword: 'a' }, { post, now, env: {} });
     expect(post).toHaveBeenCalledTimes(9);
-    expect(out).toMatchObject({ calls: 9, status: 'ok' });
+    expect(out).toMatchObject({ calls: 9, posted: 9, status: 'pending' });
     const row = db.calls.find((c) => c.key === 'localRankGrid.create').args.data;
-    expect(row).toMatchObject({ gridSize: 3, avgRank: 3, coverage: 1, status: 'ok', centerLat: 43.0389 });
-    expect(row.points).toHaveLength(9);
+    expect(row).toMatchObject({ gridSize: 3, status: 'pending', centerLat: 43.0389 });
+    expect(row.points.every((p) => p.pending)).toBe(true);
+    const tasks = db.calls.filter((c) => c.key === 'localRankTask.create').map((c) => c.args.data);
+    expect(tasks.map((t) => t.pointIndex)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(tasks.every((t) => t.kind === 'grid' && t.gridId === 'g1')).toBe(true);
+    const upd = db.calls.find((c) => c.key === 'localRankGrid.update').args.data;
+    expect(upd).not.toHaveProperty('status'); // still pending until collected
+    expect(upd.costUsd).toBe(0.0054);
+
+    // Collection: 9 done tasks fill every point; the grid is finalised.
+    db.calls = [];
+    const points = row.points;
+    db.overrides['localRankTask.findMany'] = async () => tasks.map((t, i) => ({ id: `lt${i}`, projectId: 'p1', keywordId: 'k1', kind: 'grid', date: t.date, gridId: 'g1', pointIndex: i, taskId: t.taskId, postedAt: now, polls: 0 }));
+    db.overrides['project.findUnique'] = async () => PROJECT;
+    db.overrides['localRankGrid.findUnique'] = async () => ({ id: 'g1', points, status: 'pending', errorCode: null });
+    const sum = await collectLocalRankTasks({ now: new Date(now.getTime() + 20 * 60_000), get: dfsGet(20000, ITEMS), env: {} });
+    expect(sum).toMatchObject({ tasks: 9, done: 9 });
+    const fin = db.calls.find((c) => c.key === 'localRankGrid.update').args.data;
+    expect(fin).toMatchObject({ avgRank: 3, coverage: 1, status: 'ok' });
+    expect(fin.points.some((p) => p.pending)).toBe(false);
   });
 
   it('weekly job is off unless LOCAL_GRID_ENABLED=true', async () => {
     expect(await runLocalGridJob({ env: {} })).toEqual({ skipped: 'DISABLED' });
+  });
+});
+
+describe('standard-queue collector', () => {
+  const task = (over = {}) => ({ id: 'lt1', projectId: 'p1', keywordId: 'k1', kind: 'daily', date: new Date('2026-10-22T00:00:00Z'), gridId: null, pointIndex: null, taskId: 'task-00000001', postedAt: now, polls: 0, ...over });
+
+  it('40601 / 40602 are pending (polls + 1, nothing stored); 20000 stores the rank on the pending day row only', async () => {
+    db.overrides['localRankTask.findMany'] = async () => [task()];
+    for (const code of [40601, 40602]) {
+      db.calls = [];
+      const out = await collectLocalRankTasks({ now: new Date(now.getTime() + 60_000), get: dfsGet(code), env: {} });
+      expect(out).toMatchObject({ pending: 1, done: 0 });
+      expect(db.calls.find((c) => c.key === 'localRankTask.update').args.data).toEqual({ polls: 1 });
+      expect(db.calls.some((c) => c.key === 'localRankDaily.updateMany')).toBe(false);
+    }
+    db.calls = [];
+    db.overrides['project.findUnique'] = async () => PROJECT;
+    const get = vi.fn(dfsGet(20000, ITEMS));
+    const out = await collectLocalRankTasks({ now: new Date(now.getTime() + 60_000), get, env: {} });
+    expect(out).toMatchObject({ done: 1 });
+    expect(get.mock.calls[0][0]).toBe('/v3/serp/google/maps/task_get/advanced/task-00000001');
+    const upd = db.calls.find((c) => c.key === 'localRankDaily.updateMany').args;
+    expect(upd.where).toEqual({ keywordId: 'k1', date: new Date('2026-10-22T00:00:00Z'), status: 'pending' });
+    expect(upd.data).toMatchObject({ status: 'ok', rank: 3, inPack: true, matchedBy: 'cid' });
+    expect(db.calls.find((c) => c.key === 'localRankTask.updateMany').args.data).toMatchObject({ status: 'done' });
+  });
+
+  it('a task older than 24 h is expired without a get call; an account-level error stops the tick and keeps the task', async () => {
+    db.overrides['localRankTask.findMany'] = async () => [task()];
+    const get = vi.fn(dfsGet(20000, ITEMS));
+    const out = await collectLocalRankTasks({ now: new Date(now.getTime() + 24 * 3600_000 + 1), get, env: {} });
+    expect(out).toMatchObject({ expired: 1 });
+    expect(get).not.toHaveBeenCalled();
+    expect(db.calls.find((c) => c.key === 'localRankTask.updateMany').args.data).toMatchObject({ status: 'expired', errorCode: 'DFS_EXPIRED' });
+    expect(db.calls.find((c) => c.key === 'localRankDaily.updateMany').args.data).toMatchObject({ status: 'error', errorCode: 'DFS_EXPIRED' });
+
+    db.calls = [];
+    db.overrides['localRankTask.findMany'] = async () => [task(), task({ id: 'lt2', taskId: 'task-00000002' })];
+    const acct = vi.fn(async () => ({ status_code: 40200, status_message: 'payment', tasks: [] }));
+    const stop = await collectLocalRankTasks({ now: new Date(now.getTime() + 60_000), get: acct, env: {} });
+    expect(stop.stopped).toBe('DFS_40200');
+    expect(acct).toHaveBeenCalledTimes(1);
+    expect(db.calls.some((c) => c.key === 'localRankTask.updateMany')).toBe(false);
+  });
+
+  it('without credentials (and no injected client) it does nothing', async () => {
+    expect(await collectLocalRankTasks({ env: {} })).toEqual({ skipped: 'NO_CREDS' });
+    expect(db.calls).toEqual([]);
+  });
+
+  it('gridOutcome: errors make it partial, all errors / a stop make it error', () => {
+    expect(gridOutcome([{ rank: 2 }, { rank: null }, { rank: null, error: true }])).toEqual({ avgRank: 2, coverage: 0.5, status: 'partial' });
+    expect(gridOutcome([{ rank: null, error: true }])).toMatchObject({ status: 'error' });
+    expect(gridOutcome([{ rank: 1 }], 'DFS_40200')).toMatchObject({ status: 'error' });
   });
 });
 

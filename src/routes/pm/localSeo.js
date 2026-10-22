@@ -266,7 +266,9 @@ export async function pmLocalSeoRoutes(app) {
     return reply.send(updated);
   });
 
-  // Maps ranks now (background, 202). LOCAL_RANK_ENABLED must be on; once an hour per project; ≤ 20 keywords.
+  // Maps ranks now (background, 202). LOCAL_RANK_ENABLED must be on; once an hour per project; ≤ 20 keywords. Since
+  // contract-180 this posts standard-queue tasks like the daily job (no live mode): keywords already checked or pending
+  // today are skipped (never paid twice per keyword-day); results appear when the collector picks them up.
   app.post('/projects/:id/local-seo/refresh', write, async (request, reply) => {
     const project = await projectFor(request, reply);
     if (!project) return;
@@ -281,7 +283,7 @@ export async function pmLocalSeoRoutes(app) {
     if (since < LOCAL_RANK_REFRESH_COOLDOWN_MS) return cooldown(reply, since, LOCAL_RANK_REFRESH_COOLDOWN_MS);
     const { run, existing } = await startBackgroundRun(
       { kind: 'local_rank', projectId: project.id, requestedById: request.user.id, log: request.log },
-      () => runLocalRankForProject(project, { force: true, budget: MANUAL_REFRESH_MAX_KEYWORDS, maxKeywords: MANUAL_REFRESH_MAX_KEYWORDS })
+      () => runLocalRankForProject(project, { budget: MANUAL_REFRESH_MAX_KEYWORDS, maxKeywords: MANUAL_REFRESH_MAX_KEYWORDS })
     );
     return reply.status(202).send({ run: runView(run), existing });
   });
