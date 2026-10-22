@@ -20,7 +20,10 @@ vi.mock('../../../src/lib/prisma.js', async () => {
 vi.mock('../../../src/lib/analytics/providers.js', () => ({
   domainFromUrl: (d) => d,
   hasRealSerpProvider: () => true,
-  getKeywordRankings: async () => [{ keyword: 'dentist harbor', position: 3.4 }, { keyword: 'teeth whitening', position: null }],
+  getKeywordRankings: async () => [
+    { keyword: 'dentist harbor', position: 3.4, dataSource: 'dataforseo' },
+    { keyword: 'teeth whitening', position: null, dataSource: 'dataforseo' },
+  ],
 }));
 vi.mock('../../../src/lib/analytics/ga4Client.js', () => ({ runGa4Report: async () => [] }));
 

@@ -37,7 +37,22 @@ function isPlainObject(v) {
  */
 // Health score v2: staff factor matrices, numeric security scores and security check ids never reach a client audience
 // (the client views are allow-lists already; this is the second layer). Site metrics: per-call vendor cost (costUsd).
-export const CLIENT_DROP_KEYS = new Set(['pmPreviewUrl', 'healthFactors', 'securityScore', 'checkId', 'costUsd']);
+// Local SEO (features/local-seo.md): Google listing ids, competitor ids, match method, the pending vendor task id and
+// sync error text are staff-only too.
+export const CLIENT_DROP_KEYS = new Set([
+  'pmPreviewUrl',
+  'healthFactors',
+  'securityScore',
+  'checkId',
+  'costUsd',
+  'gmbCid',
+  'gmbPlaceId',
+  'gmbFeatureId',
+  'gmbReviewsTaskId',
+  'gmbSyncError',
+  'competitorCid',
+  'matchedBy',
+]);
 
 /**
  * The agent flag (User.isAgent, SEO Engine OS-01) is server-side only: an agent must look exactly like a human

@@ -316,7 +316,7 @@ export async function aggregateReportFacts({ clientIds, start, end, compare = tr
     };
   }
   if (gmb?.linked && gmb.data?.kpis) {
-    optional.gmb = { kpis: gmb.data.kpis };
+    optional.gmb = gmbFactsForAi(gmb.data);
   }
   if (llm?.data?.kpis) {
     optional.llm = { kpis: llm.data.kpis };
@@ -400,6 +400,40 @@ export async function aggregateReportFacts({ clientIds, start, end, compare = tr
       pageTableKind: landingPages.length ? 'landing' : 'query',
       factsForAi,
     },
+  };
+}
+
+/**
+ * Business Profile facts for the narrative (features/local-seo.md). Rating and total reviews come from the stored
+ * profile; new reviews / reply rate are the period's. Without native Business Profile access the owner metrics are
+ * null (missing, NOT zero) and `metricsLimited` + `note` tell the model never to report them as 0. Pure.
+ */
+export function gmbFactsForAi(data) {
+  const k = data?.kpis || {};
+  const limited = !!data?.metricsLimited;
+  const kpis = {
+    rating: k.rating ?? null,
+    reviewsTotal: k.reviews ?? null,
+    newReviews: k.newReviews ?? null,
+    replyRate: k.replyRate ?? null,
+    periodRating: k.periodRating ?? null,
+    impressions: limited ? null : k.impressions ?? null,
+    calls: limited ? null : k.calls ?? null,
+    directions: limited ? null : k.directions ?? null,
+    websiteClicks: limited ? null : k.websiteClicks ?? null,
+  };
+  if (!limited) {
+    kpis.impressionsDelta = k.impressionsDelta ?? null;
+    kpis.callsDelta = k.callsDelta ?? null;
+    kpis.directionsDelta = k.directionsDelta ?? null;
+    kpis.websiteClicksDelta = k.websiteClicksDelta ?? null;
+  }
+  return {
+    metricsLimited: limited,
+    note: limited
+      ? 'Calls, directions, website clicks and impressions are not available (Google Business Profile access is not connected yet). They are missing data, not zero: do not mention them as numbers.'
+      : null,
+    kpis,
   };
 }
 

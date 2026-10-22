@@ -27,6 +27,8 @@ Return ONLY valid JSON with exactly these keys:
 
 Health score: facts.healthScore is the agency's stored health score (0-100) with facts.healthCoverage (% of data sources behind it); it is null when there is not enough data. Never invent or estimate a health score; when it is null, keep healthLabel about the period's KPIs.
 
+Missing data: a null value in the facts means the figure is NOT AVAILABLE, never zero. Never write "0 calls", "no calls", "no directions" or similar for a null metric. When facts.optional.gmb.metricsLimited is true, do not report Business Profile calls, directions, website clicks or impressions at all (at most say they become available once Google Business Profile access is connected); use its rating, reviewsTotal, newReviews and replyRate instead.
+
 Rules:
 - achievements: 4-6 items drawn only from wins / strong facts. If few wins, still write honest achievements from available positives or stability.
 - weakContext: one entry per weak metric in facts.weaks (or empty array if none). Reasons must be plausible from the data (e.g. impressions down while CTR/position improved = efficiency, not ranking collapse).

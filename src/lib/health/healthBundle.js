@@ -6,6 +6,7 @@
 import { prisma } from '../prisma.js';
 import { hasSecurity, hasBackups } from '../security/securitySync.js';
 import { addDays, dayDiff, sumRange, toDateStr, windowsFor, MS_DAY } from './healthMath.js';
+import { hasGbpIdentity } from '../analytics/gmbIdentifier.js';
 
 /** Project fields the health service needs (all verified against schema.prisma). */
 export const HEALTH_PROJECT_SELECT = Object.freeze({
@@ -26,6 +27,10 @@ export const HEALTH_PROJECT_SELECT = Object.freeze({
   gscSiteUrl: true,
   ga4PropertyId: true,
   gmbLocationId: true,
+  gmbCid: true,
+  gmbPlaceId: true,
+  gmbRating: true,
+  gmbReviewsCount: true,
 });
 
 /** How far back one load reaches before `from`: two windows + a year (YoY) + the GSC lag. */
@@ -54,6 +59,8 @@ export async function loadHealthBundle(project, { from, to, cfg } = {}) {
   const s2Days = Math.min(S2_MAX_DAYS, cfg?.factors?.S2?.days ?? 14);
   const runsFrom = new Date(asDate(from).getTime() - (s2Days + 1) * MS_DAY);
   const none = Promise.resolve(null);
+  // Reviews feed R1–R3 from either source (native or DataForSEO): gated on a GBP identity, not the native location.
+  const gbp = hasGbpIdentity(project);
 
   const [gsc, ga4, gmb, reviews, leads, status, points, failChecks, runs] = await Promise.all([
     project.gscSiteUrl
@@ -65,9 +72,9 @@ export async function loadHealthBundle(project, { from, to, cfg } = {}) {
     project.gmbLocationId
       ? prisma.gmbDailyMetric.findMany({ where: { projectId: pid, date: range }, select: { date: true, impressions: true, websiteClicks: true, directions: true, calls: true } })
       : none,
-    project.gmbLocationId
+    gbp
       ? prisma.gmbReview.findMany({
-          where: { projectId: pid, createTime: { gte: asDate(start), lte: new Date(asDate(to).getTime() + MS_DAY - 1) } },
+          where: { projectId: pid, removedAt: null, createTime: { gte: asDate(start), lte: new Date(asDate(to).getTime() + MS_DAY - 1) } },
           select: { starRating: true, replyComment: true, createTime: true },
           orderBy: { createTime: 'desc' },
           take: REVIEW_TAKE,
@@ -243,7 +250,14 @@ export function sliceBundle(bundle, date, cfg, { backfilled = false, now = Date.
     },
     gmb: { linked: !!p.gmbLocationId && Array.isArray(bundle.gmb), ...sums(m.gmb, w, GMB_FIELDS) },
     leads: { linked: leadsEver, ...sums(m.leads, w, LEAD_FIELDS) },
-    reviews: { linked: !!p.gmbLocationId && Array.isArray(bundle.reviews), list: reviews },
+    // R1 uses the stored profile rating when present (live scores only: the profile is today's, not a past date's).
+    // R4 (GBP actions) stays native-only through `gmb.linked` above.
+    reviews: {
+      linked: hasGbpIdentity(p) && Array.isArray(bundle.reviews),
+      list: reviews,
+      profileRating: !backfilled && typeof p.gmbRating === 'number' ? p.gmbRating : null,
+      profileCount: !backfilled && typeof p.gmbReviewsCount === 'number' ? p.gmbReviewsCount : null,
+    },
     security: { linked: !!sec.security && (backfilled ? (sec.points || []).length > 0 : !!sec.status), state: securityState, criticalFail },
     backups: { linked: !!sec.backups, runs },
     connection,

@@ -6,6 +6,7 @@ import { resolveCycle } from '../workCycle.js';
 import { buildClientAnalytics } from './freezeSnapshot.js';
 import { getClientTrafficSeries } from './gscSeries.js';
 import { stripTrailingIncomplete } from './seriesUtils.js';
+import { profileTotals, periodReviewStats } from './gmbMetrics.js';
 
 function cycleRange(cycle) {
   const start = new Date(Date.UTC(cycle.year, cycle.month - 1, 1));
@@ -200,7 +201,10 @@ async function clientProjects(clientId) {
       ga4PropertyId: true,
       gmbLocationId: true,
       gmbCid: true,
+      gmbPlaceId: true,
       gmbLocationName: true,
+      gmbRating: true,
+      gmbReviewsCount: true,
       dataforseoDomain: true,
       targetMarket: true,
       client: { select: { agencyName: true, websiteUrl: true } },
@@ -221,7 +225,7 @@ async function resolveAnalyticsContext(clientIds, query) {
   const links = {
     gsc: projects.some((p) => !!p.gscSiteUrl),
     ga4: projects.some((p) => !!p.ga4PropertyId),
-    gmb: projects.some((p) => !!p.gmbLocationId || !!p.gmbCid),
+    gmb: projects.some((p) => !!p.gmbLocationId || !!p.gmbCid || !!p.gmbPlaceId),
     seo: projects.some((p) => !!p.dataforseoDomain),
   };
 
@@ -618,13 +622,13 @@ export async function buildGmbView(clientIds, view, query) {
   if (ctx.error) return ctx.error;
 
   const reviewCountEarly = ctx.projectIds.length
-    ? await prisma.gmbReview.count({ where: { projectId: { in: ctx.projectIds } } })
+    ? await prisma.gmbReview.count({ where: { projectId: { in: ctx.projectIds }, removedAt: null } })
     : 0;
 
   if (!ctx.links.gmb && reviewCountEarly === 0) {
     return empty(
       false,
-      'Connect a Business Profile location (or paste Maps/CID for DataForSEO) in Admin → Integrations',
+      'Connect a Business Profile (location, Maps link or CID) in Admin → Integrations',
       ctx.cycle,
       ctx.source
     );
@@ -706,45 +710,63 @@ export async function buildGmbView(clientIds, view, query) {
   const prevSum = (k) => prevSeries.reduce((s, r) => s + r[k], 0);
   const yoySum = (k) => yoySeries.reduce((s, r) => s + r[k], 0);
 
+  // Stored reviews (soft-removed ones excluded): list, star split and PERIOD figures only. Rating and the total count
+  // come from the stored profile (features/local-seo.md): the stored sample is capped by the fetch depth.
   const reviews = await prisma.gmbReview.findMany({
-    where: { projectId: { in: ctx.projectIds } },
+    where: { projectId: { in: ctx.projectIds }, removedAt: null },
     orderBy: { createTime: 'desc' },
     take: 200,
   });
-  const avgRating = reviews.length
-    ? Number((reviews.reduce((s, r) => s + r.starRating, 0) / reviews.length).toFixed(1))
-    : null;
+  const profile = profileTotals(ctx.projects);
+  const period = periodReviewStats(reviews, start, end);
   const byStar = [5, 4, 3, 2, 1].map((star) => ({
     star,
     count: reviews.filter((r) => r.starRating === star).length,
   }));
 
+  // Owner metrics only exist with the native Business Profile API. Without it they are null (missing), never 0.
+  const hasNativeBinding = ctx.projects.some((p) => !!p.gmbLocationId);
+  const nativeRowsEver =
+    rows.length > 0 || prevRows.length > 0
+      ? true
+      : hasNativeBinding
+        ? (await prisma.gmbDailyMetric.count({ where: { projectId: { in: ctx.projectIds } } })) > 0
+        : false;
+  const metricsLimited = !(hasNativeBinding && nativeRowsEver);
+  const m = (v) => (metricsLimited ? null : v);
+  const hasIdentityBinding = ctx.projects.some((p) => !!p.gmbCid || !!p.gmbPlaceId);
+  const dataSource = !metricsLimited ? 'google' : hasIdentityBinding || reviews.length > 0 ? 'public_profile' : 'none';
+
   const data = {
     kpis: {
-      impressions: sum('impressions'),
-      directions: sum('directions'),
-      websiteClicks: sum('websiteClicks'),
-      calls: sum('calls'),
-      reviews: reviews.length,
-      rating: avgRating,
+      impressions: m(sum('impressions')),
+      directions: m(sum('directions')),
+      websiteClicks: m(sum('websiteClicks')),
+      calls: m(sum('calls')),
+      reviews: profile.reviewsCount,
+      rating: profile.rating,
+      newReviews: period.newReviews,
+      replyRate: period.replyRate,
+      periodRating: period.periodRating,
+      storedReviews: reviews.length,
       searchShare:
-        sum('impressions') > 0
+        metricsLimited ? null : sum('impressions') > 0
           ? Number(((sum('impressionsSearch') / sum('impressions')) * 100).toFixed(1))
           : 0,
       mapsShare:
-        sum('impressions') > 0
+        metricsLimited ? null : sum('impressions') > 0
           ? Number(((sum('impressionsMaps') / sum('impressions')) * 100).toFixed(1))
           : 0,
-      impressionsDelta: hasPrev ? pctDelta(sum('impressions'), prevSum('impressions')) : null,
-      directionsDelta: hasPrev ? pctDelta(sum('directions'), prevSum('directions')) : null,
-      websiteClicksDelta: hasPrev ? pctDelta(sum('websiteClicks'), prevSum('websiteClicks')) : null,
-      callsDelta: hasPrev ? pctDelta(sum('calls'), prevSum('calls')) : null,
-      impressionsYoyDelta: hasYoy ? pctDelta(sum('impressions'), yoySum('impressions')) : null,
-      directionsYoyDelta: hasYoy ? pctDelta(sum('directions'), yoySum('directions')) : null,
-      websiteClicksYoyDelta: hasYoy ? pctDelta(sum('websiteClicks'), yoySum('websiteClicks')) : null,
-      callsYoyDelta: hasYoy ? pctDelta(sum('calls'), yoySum('calls')) : null,
+      impressionsDelta: m(hasPrev ? pctDelta(sum('impressions'), prevSum('impressions')) : null),
+      directionsDelta: m(hasPrev ? pctDelta(sum('directions'), prevSum('directions')) : null),
+      websiteClicksDelta: m(hasPrev ? pctDelta(sum('websiteClicks'), prevSum('websiteClicks')) : null),
+      callsDelta: m(hasPrev ? pctDelta(sum('calls'), prevSum('calls')) : null),
+      impressionsYoyDelta: m(hasYoy ? pctDelta(sum('impressions'), yoySum('impressions')) : null),
+      directionsYoyDelta: m(hasYoy ? pctDelta(sum('directions'), yoySum('directions')) : null),
+      websiteClicksYoyDelta: m(hasYoy ? pctDelta(sum('websiteClicks'), yoySum('websiteClicks')) : null),
+      callsYoyDelta: m(hasYoy ? pctDelta(sum('calls'), yoySum('calls')) : null),
     },
-    series: stripTrailingIncomplete(series, ['impressions', 'websiteClicks', 'directions', 'calls']),
+    series: metricsLimited ? [] : stripTrailingIncomplete(series, ['impressions', 'websiteClicks', 'directions', 'calls']),
     reviews: reviews.map((r) => ({
       id: r.id,
       reviewerName: r.reviewerName,
@@ -757,26 +779,29 @@ export async function buildGmbView(clientIds, view, query) {
     byStar,
   };
 
-  const hasNativeMetrics = rows.length > 0;
-  const hasDfsBinding = ctx.projects.some((p) => !!p.gmbCid);
-  const hasNativeBinding = ctx.projects.some((p) => !!p.gmbLocationId);
-  const metricsLimited = hasDfsBinding && !hasNativeMetrics;
-  const dataSource = hasNativeMetrics ? 'google' : hasDfsBinding || reviews.length > 0 ? 'dataforseo' : 'none';
-
   const meta = {
     metricsLimited,
+    metricsLimitedNote: metricsLimited ? 'Available once Google Business Profile access is connected' : null,
     dataSource,
     hasNativeBinding,
-    hasDfsBinding,
+    hasIdentityBinding,
     profileName: ctx.projects.map((p) => p.gmbLocationName).find(Boolean) || null,
   };
 
+  const actionTotal = metricsLimited ? null : data.kpis.websiteClicks + data.kpis.directions + data.kpis.calls;
   const viewData =
     view === 'reviews'
       ? {
           reviews: data.reviews,
           byStar: data.byStar,
-          kpis: { reviews: data.kpis.reviews, rating: data.kpis.rating },
+          kpis: {
+            reviews: data.kpis.reviews,
+            rating: data.kpis.rating,
+            newReviews: data.kpis.newReviews,
+            replyRate: data.kpis.replyRate,
+            periodRating: data.kpis.periodRating,
+            storedReviews: data.kpis.storedReviews,
+          },
           ...meta,
         }
       : view === 'actions'
@@ -800,25 +825,21 @@ export async function buildGmbView(clientIds, view, query) {
               websiteClicks: data.kpis.websiteClicks,
               directions: data.kpis.directions,
               calls: data.kpis.calls,
-              total: data.kpis.websiteClicks + data.kpis.directions + data.kpis.calls,
+              total: actionTotal,
               websiteClicksDelta: data.kpis.websiteClicksDelta,
               directionsDelta: data.kpis.directionsDelta,
               callsDelta: data.kpis.callsDelta,
-              totalDelta: hasPrev
-                ? pctDelta(
-                    data.kpis.websiteClicks + data.kpis.directions + data.kpis.calls,
-                    prevSum('websiteClicks') + prevSum('directions') + prevSum('calls')
-                  )
-                : null,
+              totalDelta:
+                !metricsLimited && hasPrev
+                  ? pctDelta(actionTotal, prevSum('websiteClicks') + prevSum('directions') + prevSum('calls'))
+                  : null,
               websiteClicksYoyDelta: data.kpis.websiteClicksYoyDelta,
               directionsYoyDelta: data.kpis.directionsYoyDelta,
               callsYoyDelta: data.kpis.callsYoyDelta,
-              totalYoyDelta: hasYoy
-                ? pctDelta(
-                    data.kpis.websiteClicks + data.kpis.directions + data.kpis.calls,
-                    yoySum('websiteClicks') + yoySum('directions') + yoySum('calls')
-                  )
-                : null,
+              totalYoyDelta:
+                !metricsLimited && hasYoy
+                  ? pctDelta(actionTotal, yoySum('websiteClicks') + yoySum('directions') + yoySum('calls'))
+                  : null,
             },
             ...meta,
           }

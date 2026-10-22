@@ -159,10 +159,20 @@ export function L3(s, cfg) {
 
 // ── Reputation (Google Business Profile reviews) ──
 
-/** R1: average star rating of the last `lastN` reviews. Level only. */
+/**
+ * R1: the profile rating (Project.gmbRating, live scores) when present, else the average star rating of the last
+ * `lastN` stored reviews. Level only. The profile count (gmbReviewsCount) is the volume check for the profile rating.
+ */
 export function R1(s, cfg) {
   if (!s.reviews.linked) return unlinked('R1', cfg);
   const fc = cfg.factors.R1;
+  const pr = s.reviews.profileRating;
+  if (typeof pr === 'number' && Number.isFinite(pr)) {
+    const raw = { cur: r1(pr), prev: null, yoy: null };
+    const count = s.reviews.profileCount;
+    if (count != null && count < fc.minReviews) return result('R1', cfg, { raw, reason: 'min_volume' });
+    return result('R1', cfg, { l: pl(pr, fc.level), raw });
+  }
   const list = [...s.reviews.list].sort((a, b) => (a.createTime < b.createTime ? 1 : -1)).slice(0, fc.lastN);
   const avg = list.length ? list.reduce((t, r) => t + (Number(r.starRating) || 0), 0) / list.length : null;
   const raw = { cur: r1(avg), prev: null, yoy: null };

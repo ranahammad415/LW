@@ -13,6 +13,7 @@ import { getActiveConfig, PILLARS } from './healthConfig.js';
 import { loadHealthBundle, sliceBundle, HEALTH_PROJECT_SELECT } from './healthBundle.js';
 import { computeFactors } from './healthFactors.js';
 import { pillarScore, renormalize, addDays, todayUtc, isNum } from './healthMath.js';
+import { hasGbpIdentity } from '../analytics/gmbIdentifier.js';
 
 export const ROLLUP_STATUSES = ['ACTIVE', 'PAUSED'];
 export const SCORED_STATUSES = ['ACTIVE', 'PAUSED', 'SETUP'];
@@ -33,7 +34,8 @@ export function profileFor(project) {
     case 'AEO_GEO_CAMPAIGN':
       return 'AEO';
     case 'SEO_CAMPAIGN':
-      return project.gmbLocationId ? 'LOCAL' : 'SEO';
+      // LOCAL when the project has a GBP identity: native location, CID or place_id (features/local-seo.md).
+      return hasGbpIdentity(project) ? 'LOCAL' : 'SEO';
     case 'WEBSITE_DESIGN':
     case 'WEBSITE_DEVELOPMENT':
       return 'WEBSITE';

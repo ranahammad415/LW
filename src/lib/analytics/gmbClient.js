@@ -86,6 +86,14 @@ export async function fetchGmbDailyMetrics(locationResourceName, startDate, endD
  * @param {string} locationId - full or bare
  */
 export async function fetchGmbReviews(accountId, locationId) {
+  return (await fetchGmbReviewsWithSummary(accountId, locationId)).reviews;
+}
+
+/**
+ * Reviews plus the profile summary the v4 list carries (averageRating, totalReviewCount): the native source of
+ * Project.gmbRating / gmbReviewsCount (docs/ledger/features/local-seo.md). First page only (pageSize 100).
+ */
+export async function fetchGmbReviewsWithSummary(accountId, locationId) {
   const headers = await authHeaders();
   let loc = locationId;
   if (!loc.includes('locations/')) loc = `locations/${loc}`;
@@ -101,7 +109,7 @@ export async function fetchGmbReviews(accountId, locationId) {
   }
   const json = await res.json();
   const starMap = { ONE: 1, TWO: 2, THREE: 3, FOUR: 4, FIVE: 5 };
-  return (json.reviews || []).map((r) => ({
+  const reviews = (json.reviews || []).map((r) => ({
     reviewId: r.reviewId || r.name,
     reviewerName: r.reviewer?.displayName || null,
     starRating: starMap[r.starRating] || Number(r.starRating) || 0,
@@ -110,4 +118,12 @@ export async function fetchGmbReviews(accountId, locationId) {
     createTime: r.createTime ? new Date(r.createTime) : null,
     updateTime: r.updateTime ? new Date(r.updateTime) : null,
   }));
+  const avg = Number(json.averageRating);
+  const total = Number(json.totalReviewCount);
+  return {
+    reviews,
+    averageRating: Number.isFinite(avg) && avg > 0 ? avg : null,
+    totalReviewCount: json.totalReviewCount != null && Number.isFinite(total) ? Math.round(total) : null,
+    complete: !json.nextPageToken,
+  };
 }

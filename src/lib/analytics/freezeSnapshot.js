@@ -10,6 +10,8 @@ import { prisma } from '../prisma.js';
 import { getClientTrafficSeries } from './gscSeries.js';
 import { stripTrailingIncomplete } from './seriesUtils.js';
 import { clientHealthAt } from '../health/healthViews.js';
+import { TRACKED_KEYWORD_STATUSES } from './keywordStatus.js';
+import { profileTotals, periodReviewStats } from './gmbMetrics.js';
 
 /** First/last day (UTC) of a cycle's calendar month. */
 function cycleRange(cycle) {
@@ -127,12 +129,12 @@ export async function buildClientAnalytics(clientId, cycle, opts = {}) {
   // Tracked-keyword ranking distribution for the client's projects.
   const projects = await prisma.project.findMany({
     where: { clientId },
-    select: { id: true },
+    select: { id: true, gmbLocationId: true, gmbCid: true, gmbPlaceId: true, gmbRating: true, gmbReviewsCount: true },
   });
   const projectIds = projects.map((p) => p.id);
   const keywords = projectIds.length
     ? await prisma.keywordTrack.findMany({
-        where: { projectId: { in: projectIds }, status: 'ACCEPTED' },
+        where: { projectId: { in: projectIds }, status: { in: [...TRACKED_KEYWORD_STATUSES] } },
         select: { keyword: true, currentRank: true, volume: true },
       })
     : [];
@@ -235,13 +237,31 @@ export async function buildClientAnalytics(clientId, cycle, opts = {}) {
     sumRows(prevGmbRows, 'websiteClicks') + sumRows(prevGmbRows, 'directions') + sumRows(prevGmbRows, 'calls');
   const yoyGmbActions =
     sumRows(yoyGmbRows, 'websiteClicks') + sumRows(yoyGmbRows, 'directions') + sumRows(yoyGmbRows, 'calls');
+  // Owner metrics need the native Business Profile API: without a native binding with data they are null, not 0.
+  const gmbMetricsLimited = !(projects.some((p) => !!p.gmbLocationId) && (gmbRows.length > 0 || prevGmbRows.length > 0));
+  const gm = (v) => (gmbMetricsLimited ? null : v);
+  // Rating / total count from the stored profile; period figures from the stored (non-removed) reviews.
+  const gmbProfile = profileTotals(projects);
+  const periodReviews = projectIds.length
+    ? await prisma.gmbReview.findMany({
+        where: { projectId: { in: projectIds }, removedAt: null, createTime: { gte: start, lte: new Date(end.getTime() + 86_400_000 - 1) } },
+        select: { starRating: true, replyComment: true, createTime: true },
+        take: 2000,
+      })
+    : [];
+  const gmbPeriod = periodReviewStats(periodReviews, start, end);
   const gmb = {
-    impressions: sumRows(gmbRows, 'impressions'),
-    directions: sumRows(gmbRows, 'directions'),
-    websiteClicks: sumRows(gmbRows, 'websiteClicks'),
-    calls: sumRows(gmbRows, 'calls'),
-    actions: gmbActions,
-    series: stripTrailingIncomplete(
+    metricsLimited: gmbMetricsLimited,
+    impressions: gm(sumRows(gmbRows, 'impressions')),
+    directions: gm(sumRows(gmbRows, 'directions')),
+    websiteClicks: gm(sumRows(gmbRows, 'websiteClicks')),
+    calls: gm(sumRows(gmbRows, 'calls')),
+    actions: gm(gmbActions),
+    rating: gmbProfile.rating,
+    reviewsCount: gmbProfile.reviewsCount,
+    newReviews: gmbPeriod.newReviews,
+    replyRate: gmbPeriod.replyRate,
+    series: gmbMetricsLimited ? [] : stripTrailingIncomplete(
       aggregateByDate(gmbRows, [
         'impressions',
         'impressionsSearch',
@@ -252,13 +272,13 @@ export async function buildClientAnalytics(clientId, cycle, opts = {}) {
       ]),
       ['impressions', 'websiteClicks', 'directions', 'calls']
     ),
-    deltas: hasPrevGmb
+    deltas: hasPrevGmb && !gmbMetricsLimited
       ? {
           impressions: pctDelta(sumRows(gmbRows, 'impressions'), sumRows(prevGmbRows, 'impressions')),
           actions: pctDelta(gmbActions, prevGmbActions),
         }
       : null,
-    yoyDeltas: hasYoyGmb
+    yoyDeltas: hasYoyGmb && !gmbMetricsLimited
       ? {
           impressions: pctDelta(sumRows(gmbRows, 'impressions'), sumRows(yoyGmbRows, 'impressions')),
           actions: pctDelta(gmbActions, yoyGmbActions),
@@ -321,6 +341,8 @@ export async function buildClientAnalytics(clientId, cycle, opts = {}) {
       gscSiteUrl: true,
       ga4PropertyId: true,
       gmbLocationId: true,
+      gmbCid: true,
+      gmbPlaceId: true,
       dataforseoDomain: true,
     },
   });
@@ -364,7 +386,8 @@ export async function buildClientAnalytics(clientId, cycle, opts = {}) {
     links: {
       gsc: links.some((l) => !!l.gscSiteUrl),
       ga4: links.some((l) => !!l.ga4PropertyId),
-      gmb: links.some((l) => !!l.gmbLocationId),
+      // A DataForSEO identity (CID / place_id) counts as linked too (features/local-seo.md).
+      gmb: links.some((l) => !!l.gmbLocationId || !!l.gmbCid || !!l.gmbPlaceId),
       seo: links.some((l) => !!l.dataforseoDomain),
     },
   };
