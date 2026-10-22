@@ -297,12 +297,14 @@ const templates = [
     inAppMessage: '{{clientName}} completed onboarding',
     variables: ['clientName', 'actionUrl'] },
 
-  { slug: 'client_health_critical', name: 'Client Health Critical', description: 'When client health score drops below 40', category: 'client',
-    subject: 'Health Alert: {{clientName}} (Score: {{healthScore}})',
-    bodyHtml: '<p>Client <strong>{{clientName}}</strong> health score has dropped to <strong>{{healthScore}}</strong>.</p>',
-    bodyText: 'Client "{{clientName}}" health score has dropped to {{healthScore}}.',
-    inAppMessage: '{{clientName}} health score critical: {{healthScore}}',
-    variables: ['clientName', 'healthScore', 'actionUrl'] },
+  // Health score v2 (replaces client_health_critical, which the migration 20261105_health_score_v2 deactivates).
+  // The migration seeds the same row with INSERT IGNORE (role flags: owners + PMs by email, never clients).
+  { slug: 'health_score_drop', name: 'Client Health Drop', description: "A client's health score fell into a lower band, or dropped 10+ points over 7 days two runs in a row", category: 'client',
+    subject: 'Health alert: {{clientName}} is now {{band}} ({{score}})',
+    bodyHtml: '<p>The health score of <strong>{{clientName}}</strong> is now <strong>{{score}}</strong> ({{band}}, {{delta}} points).</p><p>{{reasons}}</p><p>Open the client\'s Health section for the full breakdown.</p>',
+    bodyText: 'The health score of {{clientName}} is now {{score}} ({{band}}, {{delta}} points). {{reasons}} Open the client\'s Health section for the full breakdown.',
+    inAppMessage: '{{clientName}} health: {{band}} ({{score}}, {{delta}})',
+    variables: ['clientName', 'score', 'band', 'delta', 'reasons', 'actionUrl'] },
 
   { slug: 'welcome_email', name: 'Welcome Email', description: 'Sent when a new client account is created', category: 'client',
     subject: 'Welcome to Localwaves, {{contactName}}!',

@@ -33,20 +33,20 @@ const V = (subject, bodyHtml, bodyText, inAppMessage, ctaLabel) => ({
 // VARIANTS[slug][audience] = { subject, bodyHtml, bodyText, inAppMessage, ctaLabel }
 const VARIANTS = {
   // ── Client / Account ──────────────────────────────────────────────────
-  client_health_critical: {
+  health_score_drop: {
     AGENCY_OWNER: V(
-      '[Escalation] {{clientName}} health dropped to {{healthScore}}',
-      '<p>The health score for <strong>{{clientName}}</strong> has dropped to <strong>{{healthScore}}</strong>. This account is now at risk of churn and needs owner-level attention.</p><p>Review the client profile for the latest flags, recent activity, and upcoming deliverables before your next check-in.</p>',
-      'Client {{clientName}} health has dropped to {{healthScore}}. Review the account profile for the latest risk signals.',
-      '{{clientName}} health critical ({{healthScore}})',
-      'Open client account'
+      '[Escalation] {{clientName}} health is now {{band}} ({{score}})',
+      '<p>The health score of <strong>{{clientName}}</strong> is now <strong>{{score}}</strong> ({{band}}, {{delta}} points).</p><p>{{reasons}}</p><p>Review the client\'s Health section before the next check-in.</p>',
+      '{{clientName}} health is now {{score}} ({{band}}, {{delta}}). {{reasons}}',
+      '{{clientName}} health: {{band}} ({{score}})',
+      'Open client health'
     ),
     AGENCY_TEAM: V(
-      'Heads up: {{clientName}} health is now {{healthScore}}',
-      '<p>The health score for <strong>{{clientName}}</strong> has dropped to <strong>{{healthScore}}</strong>. Please prioritise any pending deliverables on this account and flag blockers in your next standup.</p>',
-      '{{clientName}} health is now {{healthScore}}. Prioritise deliverables and flag blockers.',
-      '{{clientName}} health critical ({{healthScore}})',
-      'Open client account'
+      'Heads up: {{clientName}} health is now {{band}} ({{score}})',
+      '<p>The health score of <strong>{{clientName}}</strong> is now <strong>{{score}}</strong> ({{band}}, {{delta}} points).</p><p>{{reasons}}</p><p>Please check the factors that moved and flag blockers in your next standup.</p>',
+      '{{clientName}} health is now {{score}} ({{band}}, {{delta}}). {{reasons}}',
+      '{{clientName}} health: {{band}} ({{score}})',
+      'Open client health'
     ),
   },
 
