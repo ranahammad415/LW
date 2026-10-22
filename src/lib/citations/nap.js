@@ -65,7 +65,7 @@ export function zipFromAddress(address) {
 /** Address → lower-case tokens with abbreviations expanded and punctuation removed, joined by one space. */
 export function normalizeAddress(raw) {
   const tokens = fold(raw)
-    .replace(/#/g, ' suite ')
+    .replace(/#/g, ' ')
     .replace(/[^a-z0-9]+/g, ' ')
     .trim()
     .split(/\s+/)

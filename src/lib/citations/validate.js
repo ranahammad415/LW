@@ -2,7 +2,13 @@
  * EmDash contract 1.8.0 §39: pure constants and sanitizers for citations (no I/O, safe to import from the webhook
  * validator). Bounds: SEO_CITATION_LIMITS (contract src/constants.mjs).
  */
-import { safeText } from '../siteAdapters/security.js';
+/** Business listing text (public NAP data, not personal data): control characters stripped and bounded, NOT redacted
+ * (redact() would turn the listing's phone number into [phone] and defeat the comparison). */
+export function plainText(v, max) {
+  if (typeof v !== 'string') return null;
+  const s = v.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
+  return s.length > max ? s.slice(0, max) : s;
+}
 
 export const SEO_CITATION_KINDS = Object.freeze(['directory', 'social', 'maps', 'review-site', 'industry-list']);
 export const SEO_NAP_STATUSES = Object.freeze(['missing', 'wrong', 'correct', 'unknown']);
@@ -18,7 +24,7 @@ export const DATE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}
 export const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 // ── sanitizing (contract shapes → bounded values) ──
 
-const seenStr = (v) => (v == null ? null : typeof v === 'string' ? safeText(v, SEO_CITATION_LIMITS.seen) : null);
+const seenStr = (v) => (v == null ? null : typeof v === 'string' ? plainText(v, SEO_CITATION_LIMITS.seen) : null);
 export const dateOrNull = (v) => (typeof v === 'string' && DATE_RE.test(v) && !Number.isNaN(Date.parse(v)) ? new Date(v).toISOString() : null);
 
 export function httpsUrl(v) {
@@ -42,7 +48,7 @@ export function sanitizeChecks(v) {
 export function sanitizeCitation(raw) {
   if (!isObj(raw)) return null;
   if (typeof raw.id !== 'string' || !CITATION_ID_RE.test(raw.id)) return null;
-  const name = typeof raw.name === 'string' && raw.name.trim() ? safeText(raw.name, SEO_CITATION_LIMITS.name) : null;
+  const name = typeof raw.name === 'string' && raw.name.trim() ? plainText(raw.name, SEO_CITATION_LIMITS.name) : null;
   if (!name) return null;
   if (!SEO_CITATION_KINDS.includes(raw.kind) || !SEO_NAP_STATUSES.includes(raw.nap_status)) return null;
   return {
@@ -59,8 +65,8 @@ export function sanitizeCitation(raw) {
     checks: sanitizeChecks(raw.checks),
     last_checked: dateOrNull(raw.last_checked),
     checked_by: raw.checked_by === 'os' ? 'os' : 'human',
-    note: typeof raw.note === 'string' ? safeText(raw.note, SEO_CITATION_LIMITS.note) : null,
-    utm: typeof raw.utm === 'string' ? safeText(raw.utm, SEO_CITATION_LIMITS.utm) : null,
+    note: typeof raw.note === 'string' ? plainText(raw.note, SEO_CITATION_LIMITS.note) : null,
+    utm: typeof raw.utm === 'string' ? plainText(raw.utm, SEO_CITATION_LIMITS.utm) : null,
     rank: Number.isInteger(raw.rank) ? raw.rank : null,
     updated_at: dateOrNull(raw.updated_at),
   };
