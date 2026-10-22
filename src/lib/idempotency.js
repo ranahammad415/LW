@@ -13,6 +13,8 @@
  *   `request.idempotency.release = true` (OS-19: a draft push whose site outcome is unknown must run again). Keys live 7 days; a pending claim
  *   older than 2 minutes (crashed request) can be reclaimed.
  * The stored body is the response after the global redaction hook, and it is only ever replayed to the same user.
+ * `opts.keyFrom(request)` may supply the key when the header is absent (routes whose clients send
+ * `body.idempotencyKey`, O-C180-1); returning undefined means "no key" and the route runs normally.
  */
 import { createHash } from 'crypto';
 import { prisma } from './prisma.js';
@@ -44,9 +46,10 @@ function inProgress(reply) {
   });
 }
 
-export function idempotency(route) {
+export function idempotency(route, { keyFrom = null } = {}) {
   async function preHandler(request, reply) {
-    const raw = request.headers['idempotency-key'];
+    let raw = request.headers['idempotency-key'];
+    if (raw === undefined && typeof keyFrom === 'function') raw = keyFrom(request);
     if (raw === undefined) return;
     if (typeof raw !== 'string' || !KEY_RE.test(raw)) {
       return reply.status(400).send({ message: 'Invalid Idempotency-Key header (1-255 visible ASCII characters)' });

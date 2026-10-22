@@ -22,6 +22,7 @@ import {
 } from '../../lib/citations/citations.js';
 import { checkProjectCitations, isCitationsMonitorEnabled, isPageCheckEnabled, manualCheckBlocker, PAGE_CHECKS_PER_PROJECT } from '../../lib/citations/monitor.js';
 import { staffAiPromptsView } from '../../lib/analytics/aiVisibilityScheduled.js';
+import { idempotency } from '../../lib/idempotency.js';
 
 export const SEO_MONITORING_ROLES = ['OWNER', 'PM'];
 const WRITE_LIMIT = { rateLimit: { max: 20, timeWindow: '10 minutes' } };
@@ -65,9 +66,21 @@ function needCapability(project, reply) {
 
 const view = (project) => staffCitationsView(project, { monitorEnabled: isCitationsMonitorEnabled() });
 
+/** The staff UI sends its key as body.idempotencyKey (one per user action); a valid one also keys the OS-05 store. */
+const BODY_KEY_RE = /^[A-Za-z0-9_-]{8,80}$/;
+export const citationUpsertKey = (request) => {
+  const k = request.body?.idempotencyKey;
+  return typeof k === 'string' && BODY_KEY_RE.test(k) ? k : undefined;
+};
+
 export async function pmSeoMonitoringRoutes(app) {
   const read = { onRequest: [app.verifyJwt] };
   const write = { onRequest: [app.verifyJwt, rejectAgentWrite], config: WRITE_LIMIT };
+  // O-C180-1: a repeated key is answered from the stored first response (re-sending would carry a fresh last_checked
+  // and the new baseRev → 409 CONFLICT_REV / IDEMPOTENCY_MISMATCH). Same key + different body → 409
+  // IDEMPOTENCY_KEY_REUSED. 5xx releases the key (OS-05 semantics).
+  const idemUpsert = idempotency('POST /api/pm/projects/:id/citations/upsert', { keyFrom: citationUpsertKey });
+  const upsertOpts = { ...write, preHandler: idemUpsert.preHandler, onSend: idemUpsert.onSend };
 
   app.get('/projects/:id/citations', read, async (request, reply) => {
     const project = await projectFor(request, reply);
@@ -102,7 +115,7 @@ export async function pmSeoMonitoringRoutes(app) {
   });
 
   // Edit one listing (OS fields) or add one: { baseRev, item, create?, idempotencyKey? } → seo-citations-upsert as the person.
-  app.post('/projects/:id/citations/upsert', write, async (request, reply) => {
+  app.post('/projects/:id/citations/upsert', upsertOpts, async (request, reply) => {
     const project = await projectFor(request, reply);
     if (!project) return;
     if (needCapability(project, reply)) return;
