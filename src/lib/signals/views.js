@@ -62,6 +62,7 @@ const SESSION_LIST_SELECT = {
   isNewVisitor: true,
   sessionOnly: true,
   leadId: true,
+  leadCount: true,
 };
 
 export function staffSession(s) {
@@ -96,6 +97,8 @@ export function staffSession(s) {
     sessionOnly: s.sessionOnly,
     hasLead: !!s.leadId,
     leadId: s.leadId ?? null,
+    // O-R3B-3: every distinct lead of the session (leadId is the first one)
+    leadCount: Number(s.leadCount) || (s.leadId ? 1 : 0),
   };
 }
 
@@ -130,10 +133,14 @@ export async function sessionTimeline(projectId, sessionId) {
     select: { eventId: true, type: true, at: true, sessionId: true, visitorId: true, refClass: true, refSource: true, country: true, pagePath: true, leadId: true, botScore: true, payload: true, payloadCompactedAt: true },
   });
   if (!s && !events.length) return null;
-  const attribution = s?.leadId ? await prisma.leadAttribution.findFirst({ where: { projectId, siteLeadId: s.leadId } }) : null;
+  // O-R3B-3: every lead of the session (its lead events name them; LeadAttribution holds one row per lead).
+  const leadIds = [...new Set([s?.leadId, ...events.map((e) => e.leadId)].filter(Boolean))];
+  const attributions = leadIds.length ? await prisma.leadAttribution.findMany({ where: { projectId, siteLeadId: { in: leadIds } }, orderBy: { leadAt: 'asc' }, take: 50 }) : [];
+  const attribution = attributions.find((a) => a.siteLeadId === s?.leadId) || attributions[0] || null;
   return {
     session: s ? { ...staffSession(s), touch: s.touch || null, botReasons: Array.isArray(s.botReasons) ? s.botReasons : [] } : null,
     attribution: attribution ? staffAttribution(attribution) : null,
+    attributions: attributions.map(staffAttribution),
     events: events.map((e) => {
       const sig = rowToSignal(e);
       return {
@@ -203,20 +210,27 @@ export async function attributionPaths(projectId, q = {}) {
   };
 }
 
-/** Country / region / city / device / local hour (admin only: city lives here). */
+/**
+ * Country / region / city / device / local hour (admin only: city lives here). Sessions from SignalSession (bots
+ * excluded); leads from LeadAttribution by leadAt (O-R3B-3), exactly as the daily rollups and the overview count them:
+ * every lead once, under the lead's own country / region / form factor (its city from the lead session).
+ */
 export async function geoDeviceHour(projectId, q = {}) {
   const { from, to } = parseRange(q);
-  const rows = await prisma.signalSession.findMany({ where: { projectId, startedAt: { gte: from, lt: to }, botScore: { lt: BOT_THRESHOLD } }, select: { country: true, region: true, city: true, formFactor: true, localHour: true, leadId: true }, take: 100_000 });
+  const rows = await prisma.signalSession.findMany({ where: { projectId, startedAt: { gte: from, lt: to }, botScore: { lt: BOT_THRESHOLD } }, select: { country: true, region: true, city: true, formFactor: true, localHour: true }, take: 100_000 });
+  const leads = await prisma.leadAttribution.findMany({ where: { projectId, leadAt: { gte: from, lt: to } }, select: { sessionId: true, country: true, region: true, formFactor: true }, take: 100_000 });
+  const leadSessionIds = [...new Set(leads.map((a) => a.sessionId).filter(Boolean))];
+  const leadSessions = leadSessionIds.length
+    ? await prisma.signalSession.findMany({ where: { projectId, sessionId: { in: leadSessionIds } }, select: { sessionId: true, city: true, region: true }, take: 100_000 })
+    : [];
+  const cityOf = new Map(leadSessions.map((s) => [s.sessionId, s]));
+  const leadRows = leads.map((a) => ({ country: a.country, region: a.region, formFactor: a.formFactor, city: cityOf.get(a.sessionId)?.city ?? null }));
   const count = (key) => {
     const m = new Map();
-    for (const r of rows) {
-      const k = key(r);
-      const x = m.get(k) || { key: k, sessions: 0, leads: 0 };
-      x.sessions += 1;
-      if (r.leadId) x.leads += 1;
-      m.set(k, x);
-    }
-    return [...m.values()].sort((a, b) => b.sessions - a.sessions).slice(0, 50);
+    const at = (k) => m.get(k) || m.set(k, { key: k, sessions: 0, leads: 0 }).get(k);
+    for (const r of rows) at(key(r)).sessions += 1;
+    for (const r of leadRows) at(key(r)).leads += 1;
+    return [...m.values()].sort((a, b) => b.sessions - a.sessions || b.leads - a.leads).slice(0, 50);
   };
   const hours = Array.from({ length: 24 }, (_, h) => ({ hour: h, sessions: 0 }));
   for (const r of rows) if (Number.isInteger(r.localHour) && r.localHour >= 0 && r.localHour < 24) hours[r.localHour].sessions += 1;
@@ -329,7 +343,7 @@ export async function staffCsv(projectId, q = {}) {
   if (q.grain === 'day') return dailyCsv(projectId, from, to);
   const where = { projectId, startedAt: { gte: from, lt: to }, ...(q.bots === 'include' ? {} : { botScore: { lt: BOT_THRESHOLD } }) };
   const rows = await prisma.signalSession.findMany({ where, orderBy: { startedAt: 'asc' }, take: 100_000, select: SESSION_LIST_SELECT });
-  const header = ['startedAt', 'endedAt', 'sessionId', 'visitorId', 'landingPath', 'exitPath', 'pageviews', 'engagedSec', 'ctaClicks', 'formStarts', 'refClass', 'refSource', 'utmCampaign', 'formFactor', 'uaFamily', 'country', 'region', 'city', 'localHour', 'botScore', 'isNewVisitor', 'sessionOnly', 'hasLead'];
+  const header = ['startedAt', 'endedAt', 'sessionId', 'visitorId', 'landingPath', 'exitPath', 'pageviews', 'engagedSec', 'ctaClicks', 'formStarts', 'refClass', 'refSource', 'utmCampaign', 'formFactor', 'uaFamily', 'country', 'region', 'city', 'localHour', 'botScore', 'isNewVisitor', 'sessionOnly', 'hasLead', 'leadCount'];
   return toCsv(header, rows.map(staffSession));
 }
 

@@ -294,3 +294,16 @@ describe('uptime routes', () => {
 
 // Every Prisma call made by the code under test must match the real schema (tests/helpers/prismaShape.js).
 afterEach(() => expect(takeShapeViolations()).toEqual([]));
+
+describe('O-R3B-6: client uptime with a single probe', () => {
+  it('shows "starting", never "100% (30 days)"', async () => {
+    who = { user: { id: 'u1', role: 'CLIENT' }, clientIds: ['c1'] };
+    db.overrides['project.findUnique'] = async () => ({ id: 'p1', clientId: 'c1' });
+    const now = Date.now();
+    db.overrides['uptimeDaily.findMany'] = async () => [{ date: new Date(now), checks: 1, okChecks: 1 }];
+    db.overrides['uptimeCheck.findFirst'] = async () => ({ at: new Date(now - 60_000) });
+    db.overrides['uptimeCheck.count'] = async () => 1;
+    const body = (await app.inject({ method: 'GET', url: '/api/client/projects/p1/uptime' })).json();
+    expect(body).toMatchObject({ available: true, availability30: null, monitoring: 'starting', state: 'up' });
+  });
+});

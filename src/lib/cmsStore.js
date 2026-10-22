@@ -315,6 +315,9 @@ export const prismaCmsStore = {
 
   async recordHeartbeat({ projectId, siteInfo, contract, now = new Date() }) {
     const data = siteInfoProjectData(siteInfo, contract, now);
+    // O-R3B-4: a body without a capabilities object keeps the stored capabilities (never wiped to {}); the webhook
+    // asks for a bounded site-info refresh instead.
+    if (!(siteInfo?.capabilities && typeof siteInfo.capabilities === 'object' && !Array.isArray(siteInfo.capabilities))) delete data.cmsCapabilities;
     if (!('serviceToken' in data.cmsHealth)) {
       const prev = await prisma.project.findUnique({ where: { id: projectId }, select: { cmsHealth: true } }).catch(() => null);
       if (prev?.cmsHealth?.serviceToken) data.cmsHealth.serviceToken = prev.cmsHealth.serviceToken;

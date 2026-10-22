@@ -20,7 +20,7 @@ import { leadToRow, leadAnalyticsMeta, leadPhotoUrlAllowed, LEAD_PHOTO_MAX_BYTES
 import { CmsBridgeError, emdashRoutes, INTERACTIVE_RETRY_DELAYS_MS } from './siteAdapters/emdash.js';
 import { loadEmdashConnection } from './cmsStore.js';
 import { upsertSiteAttribution, applyLeadAttributed, heardFromOf } from './signals/attribution.js';
-import { leadErasureOps } from './signals/erase.js';
+import { leadErasureOps, prepareLeadErasure, afterLeadErasure } from './signals/erase.js';
 
 export function leadsDir() {
   return process.env.CMS_LEADS_DIR ? path.resolve(process.env.CMS_LEADS_DIR) : path.resolve(process.cwd(), 'private-uploads', 'cms-leads');
@@ -264,7 +264,9 @@ export async function eraseLocalLead(projectId, leadId, reason, { sitePending = 
     // Unknown lead: record a tombstone so a late lead.created cannot create it.
     await prisma.cmsLead.create({ data: { projectId, leadId: String(leadId).slice(0, 64), erasedAt: new Date(), erasedReason: reason } }).catch(() => {});
     // v1.7.0: no attribution can exist without its lead, but unlink any visit rows that named it.
-    await prisma.$transaction(leadErasureOps(prisma, projectId, String(leadId).slice(0, 64))).catch(() => {});
+    const id = String(leadId).slice(0, 64);
+    const prep = await prepareLeadErasure(projectId, id).catch(() => ({ relinks: [], dates: [] }));
+    await prisma.$transaction(leadErasureOps(prisma, projectId, id, prep.relinks)).catch(() => {});
     return true;
   }
   if (lead.erasedAt) {
@@ -277,11 +279,13 @@ export async function eraseLocalLead(projectId, leadId, reason, { sitePending = 
     return false;
   }
   await deletePhotoFiles(lead.photos);
+  // O-R3B-3: sessions that keep another lead after this one is gone, and the lead's rollup day (read before).
+  const prep = await prepareLeadErasure(projectId, lead.leadId);
   // One transaction: photo rows, the lead's attribution (v1.7.0 §38.5, plan §5.5: deleted in the SAME transaction as
   // the lead's erasure) and its links on visit rows, and the PII.
   await prisma.$transaction([
     prisma.cmsLeadPhoto.deleteMany({ where: { leadRowId: lead.id } }),
-    ...leadErasureOps(prisma, projectId, lead.leadId),
+    ...leadErasureOps(prisma, projectId, lead.leadId, prep.relinks),
     prisma.cmsLead.update({
       where: { id: lead.id },
       data: {
@@ -295,6 +299,7 @@ export async function eraseLocalLead(projectId, leadId, reason, { sitePending = 
       },
     }),
   ]);
+  await afterLeadErasure(projectId, prep);
   return true;
 }
 

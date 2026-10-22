@@ -11,7 +11,7 @@ import Fastify from 'fastify';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { emdashWebhookRoutes, processEventBatch } from '../../../src/routes/webhooks/emdash.js';
+import { emdashWebhookRoutes, processEventBatch, PARKED_EVENT_REFUSALS } from '../../../src/routes/webhooks/emdash.js';
 import {
   createPairingCode,
   pairingSigningKey,
@@ -1019,5 +1019,65 @@ describe('v1.5.3 §29: no event is accepted before the migration cut-over (the s
     const after = await post(EV, eventsBody(events), { secret: keys.outbound, keyId: 1 });
     expect(after.statusCode).toBe(200);
     expect(after.json().accepted.length).toBeGreaterThan(0);
+  });
+});
+
+describe('release-3 e2e fixes', () => {
+  it('O-R3B-2: lead.attributed before its lead.created is a typed retryable refusal, logged at info (never error)', async () => {
+    addProject();
+    const ev = ex('events.request--signals').events.find((e) => e.type === 'lead.attributed');
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const parked = { ...store, applyLeadEvent: async () => Promise.reject(Object.assign(new Error('lead not stored yet'), { code: 'LEAD_NOT_STORED' })) };
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const r = await processEventBatch({ store: parked, project: store.projects.get(PROJECT_ID), events: [ev], log });
+      expect(r.accepted).toEqual([]);
+      expect(r.duplicate).toEqual([]);
+      // the contract's per-event shape: code INTERNAL (retryable), the reason first in the message
+      expect(r.rejected).toEqual([{ eventId: ev.eventId, code: 'INTERNAL', retryable: true, message: PARKED_EVENT_REFUSALS.LEAD_NOT_STORED }]);
+      expect(r.rejected[0].message).toMatch(/^LEAD_NOT_STORED: /);
+    }
+    expect(log.error).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledTimes(2);
+    expect(log.info.mock.calls[0][0]).toEqual({ code: 'LEAD_NOT_STORED', eventId: ev.eventId, type: 'lead.attributed' });
+    expect(store.receipts.size).toBe(0); // released: the re-sent event is applied once the lead exists
+    // any other failure keeps the generic retryable INTERNAL and the error log
+    const broken = { ...store, applyLeadEvent: async () => Promise.reject(Object.assign(new Error('boom'), { code: 'P1001' })) };
+    const r2 = await processEventBatch({ store: broken, project: store.projects.get(PROJECT_ID), events: [ev], log });
+    expect(r2.rejected[0]).toMatchObject({ code: 'INTERNAL', retryable: true, message: 'Could not apply the event; retry later' });
+    expect(log.error).toHaveBeenCalledTimes(1);
+  });
+
+  describe('O-R3B-4: bounded site-info refresh from heartbeats and event batches', () => {
+    let refresher;
+    let keys;
+    beforeEach(async () => {
+      refresher = { request: vi.fn(), markFresh: vi.fn() };
+      await app.close();
+      app = Fastify();
+      app.setValidatorCompiler(() => (data) => ({ value: data }));
+      await app.register(emdashWebhookRoutes, { prefix: '/api/webhooks/emdash', store, now: () => nowMs, onHeal, onPaired, onRevokeRotated, siteInfoRefresher: refresher });
+      await app.ready();
+      addProject();
+      keys = pairKeys();
+    });
+
+    it('a heartbeat carrying capabilities counts as a refresh; one without them asks for a site-info refresh', async () => {
+      const withCaps = await post(HS, handshakeBody('heartbeat'), { secret: keys.outbound, keyId: 1 });
+      expect(withCaps.statusCode).toBe(200);
+      expect(refresher.markFresh).toHaveBeenCalledWith(PROJECT_ID);
+      expect(refresher.request).not.toHaveBeenCalled();
+      const { capabilities: _c, ...base } = ex('handshake.request--heartbeat');
+      const noCaps = await post(HS, JSON.stringify({ ...base, siteId: SITE }), { secret: keys.outbound, keyId: 1, nonce: '66666666-7777-4888-9999-aaaaaaaaaaaa' });
+      expect(noCaps.statusCode).toBe(200);
+      expect(refresher.request).toHaveBeenCalledTimes(1);
+      expect(refresher.request.mock.calls[0][0]).toBe(PROJECT_ID);
+    });
+
+    it('an accepted event batch (e.g. signals.config_changed) asks for the bounded refresh', async () => {
+      const r = await post(EV, eventsBody([ex('events.request').events[2]]), { secret: keys.outbound, keyId: 1 });
+      expect(r.statusCode).toBe(200);
+      expect(r.json().accepted.length).toBe(1);
+      expect(refresher.request).toHaveBeenCalledWith(PROJECT_ID, expect.anything());
+    });
   });
 });

@@ -89,7 +89,7 @@ vi.mock('../../../src/lib/siteAdapters/emdash.js', async (orig) => {
 
 vi.mock('../../../src/lib/wpSync.js', () => ({ autoSyncSitemap: vi.fn(async () => ({})) }));
 
-import { syncEmdashPipelines, replayEmdashEvents, syncEmdashInventory, scheduleInventoryAfterPairing } from '../../../src/lib/emdashSync.js';
+import { syncEmdashPipelines, replayEmdashEvents, syncEmdashInventory, scheduleInventoryAfterPairing, createSiteInfoRefresher, SITE_INFO_REFRESH_INTERVAL_MS } from '../../../src/lib/emdashSync.js';
 import { CmsBridgeError } from '../../../src/lib/siteAdapters/emdash.js';
 
 beforeEach(() => {
@@ -199,5 +199,43 @@ describe('first inventory after pairing (item 2)', () => {
       h.inventoryError = null;
       vi.useRealTimers();
     }
+  });
+});
+
+describe('O-R3B-4: createSiteInfoRefresher (≤ 1 site-info refresh per project per 15 min, trailing)', () => {
+  it('refreshes at once, then schedules ONE trailing refresh inside the interval; markFresh counts as a refresh', async () => {
+    let t = 1_000_000;
+    const timers = [];
+    const refresh = vi.fn(async () => {});
+    const r = createSiteInfoRefresher({ refresh, now: () => t, setTimer: (fn, ms) => (timers.push({ fn, ms }), { unref() {} }) });
+    expect(SITE_INFO_REFRESH_INTERVAL_MS).toBe(15 * 60_000);
+    expect(r.request('p1')).toBe('now');
+    await Promise.resolve();
+    expect(refresh).toHaveBeenCalledTimes(1);
+    t += 60_000;
+    expect(r.request('p1')).toBe('scheduled');
+    expect(r.request('p1')).toBe('scheduled'); // no second timer
+    expect(timers).toHaveLength(1);
+    expect(timers[0].ms).toBe(14 * 60_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    t += 14 * 60_000;
+    await timers[0].fn();
+    expect(refresh).toHaveBeenCalledTimes(2);
+    // another project is independent
+    expect(r.request('p2')).toBe('now');
+    // a heartbeat that carried capabilities: the next request waits for the interval
+    r.markFresh('p3');
+    expect(r.request('p3')).toBe('scheduled');
+    t += SITE_INFO_REFRESH_INTERVAL_MS;
+    expect(r.request('p1')).toBe('now');
+  });
+
+  it('a failed refresh is logged at info and keeps the stored values', async () => {
+    const log = { info: vi.fn(), error: vi.fn() };
+    const r = createSiteInfoRefresher({ refresh: async () => Promise.reject(new CmsBridgeError({ status: 503, code: 'UPSTREAM_UNAVAILABLE', message: 'down' })), setTimer: () => null });
+    r.request('p1', log);
+    await new Promise((res) => setImmediate(res));
+    expect(log.info).toHaveBeenCalledWith({ projectId: 'p1', code: 'UPSTREAM_UNAVAILABLE' }, 'EmDash site-info refresh failed');
+    expect(log.error).not.toHaveBeenCalled();
   });
 });

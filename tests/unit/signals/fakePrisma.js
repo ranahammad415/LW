@@ -24,10 +24,10 @@ const UNIQUES = {
 
 const DEFAULTS = {
   leadAttribution: () => ({ needsDerive: true, mismatch: false, lastClass: 'unknown', lastSource: '', derivedAt: null, visitorId: null, sessionId: null, heardFrom: null, sitePath: null, firstTouch: null, lastTouch: null }),
-  signalErasure: () => ({ siteState: 'none', siteAttempts: 0, at: new Date(), origin: 'os', siteNextAt: null, siteLastError: null, siteRows: null, pendingSubject: null, rowsEvents: 0, rowsSessions: 0, rowsAttributions: 0 }),
+  signalErasure: () => ({ siteState: 'none', siteAttempts: 0, at: new Date(), origin: 'os', siteNextAt: null, siteLastError: null, siteRows: null, siteConfirmedAt: null, pendingSubject: null, rowsEvents: 0, rowsSessions: 0, rowsAttributions: 0 }),
   signalIngestStat: () => ({ batches: 0, events: 0, innerDuplicates: 0, rejectedInvalid: 0, clamped: 0, botEvents: 0, siteSummary: null, siteSummaryAt: null }),
   signalEvent: () => ({ sessionizedAt: null, payloadCompactedAt: null, visitorId: null, refSource: null, country: null, leadId: null, botScore: 0 }),
-  signalSession: () => ({ rescoreBotScore: null }),
+  signalSession: () => ({ rescoreBotScore: null, leadCount: 0 }),
   signalConfigMirror: () => ({ stale: false, rev: null, config: null, buffer: null }),
   cmsLead: () => ({ erasedAt: null, erasedReason: null, siteCreatedAt: null, receivedAt: new Date() }),
 };

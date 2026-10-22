@@ -6,7 +6,8 @@
  *   (backoff 15 min doubling to 24 h, 10 attempts) until acknowledged (`signals.erased` also acknowledges it). The
  *   erasure never waits for the site. Aggregates are untouched (they hold no identifiers).
  * - By leadId: the lead erasure path (lib/cmsLeads.js eraseLocalLead) deletes the LeadAttribution in the same
- *   transaction as the lead and nulls SignalEvent.leadId / SignalSession.leadId (`leadErasureOps`). The site's
+ *   transaction as the lead and nulls SignalEvent.leadId; a session that still holds ANOTHER lead keeps it (leadId =
+ *   its next lead, leadCount − 1, O-R3B-3), a session with no lead left gets leadId null (`leadErasureOps`). The site's
  *   `lead-erase` clears the lead's attribution on the site (§38.5), so no extra site call is needed.
  */
 import { prisma } from '../prisma.js';
@@ -14,6 +15,8 @@ import { CmsBridgeError, emdashRoutes, osActor } from '../siteAdapters/emdash.js
 import { loadEmdashConnection } from '../cmsStore.js';
 import { isVisitorId, SIGNALS_ERASE_REASONS } from './validate.js';
 import { sha256 } from './ingest.js';
+import { sessionLeadIds } from './sessionize.js';
+import { markDirty } from './common.js';
 
 export const SIGNAL_ERASE_MAX_ATTEMPTS = 10;
 const BASE_DELAY_MS = 15 * 60_000;
@@ -31,20 +34,68 @@ export async function eraseVisitorLocal(projectId, visitorId, db = prisma) {
 }
 
 /**
- * The signal side of a lead erasure, as Prisma operations to run INSIDE the lead's transaction (array form):
- * LeadAttribution deleted, lead links on events / sessions nulled (the visits stay: they are not about the lead).
+ * O-R3B-3: read BEFORE a lead erasure. Every session that names the lead (on the session or on one of its events) and
+ * still holds another lead afterwards, or names the erased lead only as a later lead: its lead fields after the
+ * erasure ({ sessionId, leadId: the next first lead, leadCount }). Sessions left without a lead are not listed (the
+ * bulk update in leadErasureOps clears them).
  */
-export function leadErasureOps(db, projectId, siteLeadId) {
+export async function leadSessionRelinks(projectId, siteLeadId, db = prisma) {
+  const [onSessions, onEvents] = await Promise.all([
+    db.signalSession.findMany({ where: { projectId, leadId: siteLeadId }, select: { sessionId: true }, take: 1000 }),
+    db.signalEvent.findMany({ where: { projectId, leadId: siteLeadId }, select: { sessionId: true }, distinct: ['sessionId'], take: 1000 }),
+  ]);
+  const sessionIds = [...new Set([...onSessions, ...onEvents].map((r) => r.sessionId))];
+  if (!sessionIds.length) return [];
+  const others = await db.signalEvent.findMany({
+    where: { projectId, sessionId: { in: sessionIds }, leadId: { not: null }, NOT: { leadId: siteLeadId } },
+    select: { sessionId: true, type: true, at: true, leadId: true },
+    take: 5000,
+  });
+  const out = [];
+  for (const sessionId of sessionIds) {
+    const ids = sessionLeadIds(others.filter((e) => e.sessionId === sessionId));
+    if (ids.length) out.push({ sessionId, leadId: ids[0], leadCount: ids.length });
+  }
+  return out;
+}
+
+/**
+ * The signal side of a lead erasure, as Prisma operations to run INSIDE the lead's transaction (array form):
+ * LeadAttribution deleted, lead links on events nulled, sessions of that lead left with no lead cleared; sessions that
+ * still hold another lead are re-pointed from `relinks` (leadSessionRelinks, read before the transaction), so a
+ * session is never marked lead-less while another lead still references it. The visits stay.
+ */
+export function leadErasureOps(db, projectId, siteLeadId, relinks = []) {
   return [
     db.leadAttribution.deleteMany({ where: { projectId, siteLeadId } }),
     db.signalEvent.updateMany({ where: { projectId, leadId: siteLeadId }, data: { leadId: null } }),
-    db.signalSession.updateMany({ where: { projectId, leadId: siteLeadId }, data: { leadId: null } }),
+    db.signalSession.updateMany({ where: { projectId, leadId: siteLeadId }, data: { leadId: null, leadCount: 0 } }),
+    ...relinks.map((r) => db.signalSession.updateMany({ where: { projectId, sessionId: r.sessionId }, data: { leadId: r.leadId, leadCount: r.leadCount } })),
   ];
+}
+
+/**
+ * Read before a lead erasure: the session relinks (leadSessionRelinks) and the lead's day, so the rollups that counted
+ * the lead are recomputed after it is gone (afterLeadErasure → SignalRollupDirty).
+ */
+export async function prepareLeadErasure(projectId, siteLeadId, db = prisma) {
+  const [relinks, attr] = await Promise.all([
+    leadSessionRelinks(projectId, siteLeadId, db),
+    db.leadAttribution.findFirst({ where: { projectId, siteLeadId }, select: { leadAt: true } }),
+  ]);
+  return { relinks, dates: attr?.leadAt ? [attr.leadAt] : [] };
+}
+
+/** After the lead-erasure transaction: mark the lead's day dirty (the nightly rollup drops its count). */
+export async function afterLeadErasure(projectId, prep) {
+  if (prep?.dates?.length) await markDirty(projectId, prep.dates).catch(() => {});
 }
 
 /** Lead signals only (site-side `signals.erased {kind: leadId}`): the lead row itself stays. */
 export async function eraseLeadSignalsLocal(projectId, siteLeadId) {
-  const [attr] = await prisma.$transaction(leadErasureOps(prisma, projectId, siteLeadId));
+  const prep = await prepareLeadErasure(projectId, siteLeadId);
+  const [attr] = await prisma.$transaction(leadErasureOps(prisma, projectId, siteLeadId, prep.relinks));
+  await afterLeadErasure(projectId, prep);
   return { events: 0, sessions: 0, attributions: Number(attr?.count) || 0 };
 }
 

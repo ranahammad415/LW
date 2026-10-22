@@ -49,6 +49,17 @@ const SESSION_FIELDS = {
   payloadCompactedAt: true,
 };
 
+/**
+ * The distinct site lead ids of a session's events (O-R3B-3: one visit can send several quotes), first lead first:
+ * lead_submitted rows in time order, then any other row naming a lead. Pure.
+ */
+export function sessionLeadIds(events) {
+  const evs = [...events].sort((a, b) => new Date(a.at) - new Date(b.at) || String(a.type).localeCompare(String(b.type)));
+  const out = [];
+  for (const e of [...evs.filter((x) => x.type === 'lead_submitted'), ...evs]) if (e.leadId && !out.includes(e.leadId)) out.push(e.leadId);
+  return out;
+}
+
 /** Build a SignalSession row from all events of one session (pure; events in any order). */
 export function buildSession(projectId, sessionId, events, existing = null) {
   const evs = [...events].sort((a, b) => new Date(a.at) - new Date(b.at) || String(a.type).localeCompare(String(b.type)));
@@ -68,7 +79,7 @@ export function buildSession(projectId, sessionId, events, existing = null) {
   const landing = first?.pagePath || '/';
   const touch = touchFromVisit({ at: first.at, refClass: first.refClass, refSource: first.refSource, utm: pay(visit).utm, landing });
   const tsLocal = pay(withTz).tsLocal;
-  const leadRow = evs.find((e) => e.type === 'lead_submitted' && e.leadId) || evs.find((e) => e.leadId);
+  const leadIds = sessionLeadIds(evs);
   const compacted = evs.some((e) => e.payloadCompactedAt);
   const built = {
     projectId,
@@ -98,7 +109,9 @@ export function buildSession(projectId, sessionId, events, existing = null) {
     botScore: Math.max(captureBotScore, Number(existing?.rescoreBotScore) || 0),
     botReasons: [...reasons],
     sessionOnly: !visitorId,
-    leadId: leadRow?.leadId ?? null,
+    // the first lead; leadCount = every distinct lead of the session (LeadAttribution holds one row per lead)
+    leadId: leadIds[0] ?? null,
+    leadCount: leadIds.length,
     touch,
   };
   if (existing && compacted) {
@@ -142,8 +155,9 @@ export async function rebuildSession(projectId, sessionId) {
       for (const l of later) dates.push(l.startedAt);
     }
   }
-  // Lead attributions to (re-)derive: the lead of this session, and the visitor's leads (first touch may change).
-  if (s.leadId) await prisma.leadAttribution.updateMany({ where: { projectId, siteLeadId: s.leadId }, data: { needsDerive: true } });
+  // Lead attributions to (re-)derive: EVERY lead of this session, and the visitor's leads (first touch may change).
+  const leadIds = sessionLeadIds(events);
+  if (leadIds.length) await prisma.leadAttribution.updateMany({ where: { projectId, siteLeadId: { in: leadIds } }, data: { needsDerive: true } });
   if (s.visitorId) await prisma.leadAttribution.updateMany({ where: { projectId, visitorId: s.visitorId }, data: { needsDerive: true } });
   return dates;
 }

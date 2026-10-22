@@ -41,6 +41,9 @@ import { clientSignalsView, clientDailyCsv, staffCsv, sessionTimeline, listSessi
 import { leadsBySource, llmReferralSessions, fieldVitals, p75 } from '../../../src/lib/signals/metrics.js';
 import { applyLeadEvent, eraseLocalLead } from '../../../src/lib/cmsLeads.js';
 import { CmsBridgeError } from '../../../src/lib/siteAdapters/emdash.js';
+import { reclassifyProject, reclassifyPageWhere } from '../../../src/lib/signals/reclassify.js';
+import { staffOverview, geoDeviceHour } from '../../../src/lib/signals/views.js';
+import { OS_ERASURE_CONFIRM_WINDOW_MS } from '../../../src/lib/signals/ingest.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ex = (name) => JSON.parse(readFileSync(path.join(here, '../../fixtures/cms-contract/examples', `${name}.json`), 'utf8'));
@@ -395,7 +398,7 @@ describe('erasure', () => {
     expect(await eraseLocalLead('p1', LEAD, 'subject_request')).toBe(true);
     expect(prisma._txCalls).toHaveLength(1);
     expect(Array.isArray(prisma._txCalls[0])).toBe(true);
-    expect(prisma._txCalls[0]).toHaveLength(5); // photos, attribution, event + session links, the lead itself
+    expect(prisma._txCalls[0]).toHaveLength(5); // photos, attribution, event + session links, the lead itself (no other lead to re-point)
     expect(rows('leadAttribution')).toHaveLength(0);
     expect(rows('signalEvent').some((e) => e.leadId)).toBe(false);
     expect(rows('signalSession').some((s) => s.leadId)).toBe(false);
@@ -466,3 +469,107 @@ describe('site snapshot only', () => {
 
 // Every Prisma call made by the code under test must match the real schema (tests/helpers/prismaShape.js).
 afterEach(() => expect(takeShapeViolations()).toEqual([]));
+
+describe('release-3 e2e fixes (signals)', () => {
+  const LEAD2 = '01JB3QLEAD0000000000000002';
+  const user = { id: '0f1e2d3c-4b5a-4968-8776-655443322110', name: 'Sam Owner', role: 'OWNER' };
+
+  it("O-R3B-1: the site's signals.erased confirms an OS erasure: ONE SignalErasure row, updated (confirmedAt, site rows)", async () => {
+    await ingest(chatgptSession(1, '2026-10-22', { leadId: null }));
+    await runSessionizer({ now: new Date('2026-10-22T16:05:00Z') });
+    const out = await eraseVisitor({ projectId: 'p1', visitorId: VISITOR, reason: 'subject_request', user });
+    expect(out).toMatchObject({ erased: true, site: 'done', siteRows: 3 });
+    const ev = { type: 'signals.erased', data: { kind: 'visitorId', subjectHash: sha256(VISITOR), rows: 6, reason: 'subject_request', at: new Date().toISOString() } };
+    expect(await applySignalsErased(PROJECT, ev, { resolveVisitor: async () => null })).toBe('applied');
+    expect(rows('signalErasure')).toHaveLength(1);
+    expect(rows('signalErasure')[0]).toMatchObject({ origin: 'os', siteState: 'done', siteRows: 6, reason: 'subject_request' });
+    expect(rows('signalErasure')[0].siteConfirmedAt).toBeInstanceOf(Date);
+  });
+
+  it('O-R3B-1: an erasure started by the site (no OS row for the hash within 24 h) still inserts its own row', async () => {
+    const OTHER = 'v_01JB2R1S3T5V7X9Z1B3D5F7H00';
+    const now = new Date('2026-10-22T18:00:00Z');
+    // an OS erasure of the same hash, older than the confirmation window
+    rows('signalErasure').push({ id: 'old', projectId: 'p1', kind: 'visitorId', subjectHash: sha256(OTHER), origin: 'os', siteState: 'done', siteConfirmedAt: null, at: new Date(now.getTime() - OS_ERASURE_CONFIRM_WINDOW_MS - 60_000) });
+    const ev = { type: 'signals.erased', data: { kind: 'visitorId', subjectHash: sha256(OTHER), rows: 2, reason: 'visitor_reset', at: now.toISOString() } };
+    await applySignalsErased(PROJECT, ev, { resolveVisitor: async () => null, now });
+    const mine = rows('signalErasure').filter((r) => r.subjectHash === sha256(OTHER));
+    expect(mine).toHaveLength(2);
+    expect(mine.find((r) => r.id === 'old').siteConfirmedAt).toBeNull();
+    expect(mine.find((r) => r.id !== 'old')).toMatchObject({ origin: 'site', reason: 'visitor_reset', siteState: 'done', siteRows: 2 });
+  });
+
+  it('O-R3B-3: two quotes in one session count 2 in the session, rollups, overview and geo; erasing the first leaves 1 everywhere', async () => {
+    await ingest([...chatgptSession(1), sig('lead_submitted', { at: '2026-10-22T14:09:00.000Z', sessionId: sid(1), leadId: LEAD2 })]);
+    await storeLead();
+    await storeLead({ leadId: LEAD2 });
+    await runSessionizer({ now: new Date('2026-10-22T16:05:00Z') });
+    await attributeLeads({ now: new Date('2026-10-22T16:05:00Z') });
+    await runRollup({ now: new Date('2026-10-23T03:30:00Z') });
+    const range = { from: '2026-10-01', to: '2026-11-01' };
+    const counts = async () => {
+      const sum = (name) => rows(name).reduce((n, r) => n + r.leads, 0);
+      const geo = await geoDeviceHour('p1', range);
+      return {
+        bySource: sum('signalDailyBySource'),
+        byLanding: sum('signalDailyByLanding'),
+        byGeoDevice: sum('signalDailyByGeoDevice'),
+        overview: (await staffOverview(PROJECT, range)).leads,
+        geoCountries: geo.countries.reduce((n, r) => n + r.leads, 0),
+        geoRegions: geo.regions.reduce((n, r) => n + r.leads, 0),
+        geoCities: geo.cities.reduce((n, r) => n + r.leads, 0),
+        geoDevices: geo.devices.reduce((n, r) => n + r.leads, 0),
+      };
+    };
+    const [s1] = rows('signalSession');
+    expect(s1).toMatchObject({ sessionId: sid(1), leadId: LEAD, leadCount: 2 });
+    expect(rows('leadAttribution').map((a) => [a.siteLeadId, a.sessionId, a.model]).sort()).toEqual([[LEAD, sid(1), 'os-derived'], [LEAD2, sid(1), 'os-derived']]);
+    expect(await counts()).toEqual({ bySource: 2, byLanding: 2, byGeoDevice: 2, overview: 2, geoCountries: 2, geoRegions: 2, geoCities: 2, geoDevices: 2 });
+    expect((await listSessions('p1', range)).items[0]).toMatchObject({ hasLead: true, leadCount: 2 });
+    expect((await sessionTimeline('p1', sid(1))).attributions).toHaveLength(2);
+
+    expect(await eraseLocalLead('p1', LEAD, 'subject_request')).toBe(true);
+    // the session still came with a lead: it now names the second one
+    expect(rows('signalSession')[0]).toMatchObject({ leadId: LEAD2, leadCount: 1 });
+    expect((await listSessions('p1', { ...range, hasLead: 'true' })).items).toHaveLength(1);
+    expect((await listSessions('p1', range)).items[0]).toMatchObject({ hasLead: true, leadId: LEAD2, leadCount: 1 });
+    expect(await staffCsv('p1', range)).toMatch(/,true,1\r\n$/);
+    expect(rows('signalRollupDirty').map((r) => r.date.toISOString().slice(0, 10))).toEqual(['2026-10-22']);
+    await runRollup({ now: new Date('2026-10-23T04:00:00Z') });
+    expect(await counts()).toEqual({ bySource: 1, byLanding: 1, byGeoDevice: 1, overview: 1, geoCountries: 1, geoRegions: 1, geoCities: 1, geoDevices: 1 });
+    // erasing the last lead clears the session
+    expect(await eraseLocalLead('p1', LEAD2, 'subject_request')).toBe(true);
+    expect(rows('signalSession')[0]).toMatchObject({ leadId: null, leadCount: 0 });
+  });
+
+  it('O-R3B-3: a site-side lead-signal erasure re-points the session too', async () => {
+    await ingest([...chatgptSession(1), sig('lead_submitted', { at: '2026-10-22T14:09:00.000Z', sessionId: sid(1), leadId: LEAD2 })]);
+    await storeLead();
+    await storeLead({ leadId: LEAD2 });
+    await runSessionizer({ now: new Date('2026-10-22T16:05:00Z') });
+    await applySignalsErased(PROJECT, { type: 'signals.erased', data: { kind: 'leadId', subjectHash: sha256(LEAD), rows: 1, reason: 'subject_request', at: '2026-10-22T17:00:00Z' } });
+    expect(rows('signalSession')[0]).toMatchObject({ leadId: LEAD2, leadCount: 1 });
+    expect(rows('leadAttribution').map((a) => a.siteLeadId)).toEqual([LEAD2]);
+  });
+
+  it('O-R3B-5: reclassify keeps the 13-month bound on every page; visits sharing the boundary timestamp are not skipped', async () => {
+    rows('project').push({ id: 'p1', wpUrl: 'https://oasispoolspas.com' });
+    const at = '2026-10-20T10:00:00Z';
+    await ingest([sig('visit', { at, sessionId: sid(1) }), sig('visit', { at, sessionId: sid(2) }), sig('visit', { at, sessionId: sid(3) }), sig('visit', { at: '2025-08-01T10:00:00Z', sessionId: sid(4) })]);
+    const spy = vi.spyOn(prisma.signalEvent, 'findMany');
+    const now = new Date('2026-10-22T12:00:00Z');
+    const out = await reclassifyProject('p1', { now, batch: 2 });
+    expect(out.scanned).toBe(3); // the old visit never; all three tied visits
+    const pages = spy.mock.calls.map((c) => c[0].where).filter((w) => w.type === 'visit');
+    expect(pages.length).toBe(2);
+    const since = pages[0].AND[0].at.gte;
+    expect(since.getTime()).toBeGreaterThan(new Date('2025-08-01T10:00:00Z').getTime());
+    for (const w of pages) expect(w.AND[0]).toEqual({ at: { gte: since } });
+    expect(pages[1].AND[1].OR[1]).toMatchObject({ at: new Date(at) });
+    spy.mockRestore();
+    // pure: the bound is there with and without a cursor
+    const cursor = { at: new Date(at), eventId: '01JB3Q00000000000000000002' };
+    expect(reclassifyPageWhere('p1', since, cursor).AND).toEqual([{ at: { gte: since } }, { OR: [{ at: { gt: cursor.at } }, { at: cursor.at, eventId: { gt: cursor.eventId } }] }]);
+    expect(reclassifyPageWhere('p1', since).AND).toEqual([{ at: { gte: since } }]);
+  });
+});

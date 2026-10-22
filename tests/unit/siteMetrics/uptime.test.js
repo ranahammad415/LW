@@ -83,6 +83,9 @@ import {
   staffUptimeView,
   uptimeCoverage,
   CLIENT_MIN_PROBE_COVERAGE,
+  uptimeMonitoringState,
+  MIN_MONITORING_MS,
+  uptimeFleetView,
 } from '../../../src/lib/uptime.js';
 
 const err = (code, extra = {}) => Object.assign(new Error(code), { code, ...extra });
@@ -371,5 +374,59 @@ describe('client probe coverage (O-R3-4)', () => {
     // a first probe older than the window counts from the window start (30 UTC days)
     const old = uptimeCoverage({ checks: 21_000, firstAt: new Date('2026-01-01T00:00:00Z'), now, intervalMin: 2 });
     expect(old).toBeGreaterThan(0.95);
+  });
+});
+
+describe('O-R3B-6: a percentage needs 60 % of the expected probes AND 24 h since the first probe', () => {
+  const now = new Date('2026-10-22T12:00:00Z');
+  const ago = (ms) => new Date(now.getTime() - ms);
+  it('uptimeMonitoringState', () => {
+    expect(MIN_MONITORING_MS).toBe(86_400_000);
+    // one probe just now: 100 % coverage, but not 24 h
+    expect(uptimeMonitoringState({ checks: 1, firstAt: now, now, intervalMin: 2 })).toBe('starting');
+    // full coverage for 23 h: still starting
+    expect(uptimeMonitoringState({ checks: 691, firstAt: ago(23 * 3600_000), now, intervalMin: 2 })).toBe('starting');
+    // 24 h but sparse (8 probes)
+    expect(uptimeMonitoringState({ checks: 8, firstAt: ago(86_400_000), now, intervalMin: 2 })).toBe('starting');
+    // 24 h with enough probes
+    expect(uptimeMonitoringState({ checks: 721, firstAt: ago(86_400_000), now, intervalMin: 2 })).toBe('active');
+    expect(uptimeMonitoringState({ checks: 0, firstAt: null, now })).toBe('starting');
+  });
+
+  it('staff view: a single probe shows no percentage at all (monitoring starting)', async () => {
+    const project = { id: 'p7', name: 'Site', wpUrl: 'https://site.example', cmsType: 'EMDASH' };
+    db.checks.push({ projectId: 'p7', target: 'home', at: ago(60_000), ok: true, ms: 120, httpStatus: 200, errorClass: null });
+    db.overrides['uptimeDaily.findMany'] = async () => [{ date: now, checks: 1, okChecks: 1, availabilityPct: 100 }];
+    db.overrides['uptimeCheck.findFirst'] = async (a) => (a.where.target === 'home' && a.orderBy.at === 'asc' ? { at: ago(60_000) } : null);
+    db.overrides['uptimeCheck.count'] = async () => 1;
+    const v = await staffUptimeView(project, { now });
+    expect(v.monitoring).toBe('starting');
+    expect(v.availability).toEqual({ h24: null, d7: null, d30: null, d90: null });
+    expect(v.rating).toBe('unknown');
+    expect(v.series24h).toHaveLength(1); // the raw probe stays visible
+    // a day later with enough probes the figures appear
+    db.overrides['uptimeCheck.findFirst'] = async (a) => (a.where.target === 'home' && a.orderBy.at === 'asc' ? { at: ago(86_400_000) } : null);
+    db.overrides['uptimeCheck.count'] = async () => 721;
+    const later = await staffUptimeView(project, { now });
+    expect(later.monitoring).toBe('active');
+    expect(later.availability.d30).toBe(100);
+  });
+
+  it('fleet: no 30-day figure for a monitor with a single probe', async () => {
+    db.overrides['project.findMany'] = async () => [{ id: 'p7', name: 'Site', client: null }, { id: 'p8', name: 'Old', client: null }];
+    db.overrides['uptimeDaily.findMany'] = async () => [
+      { projectId: 'p7', date: now, checks: 1, okChecks: 1, p95Ms: 100 },
+      { projectId: 'p8', date: now, checks: 720, okChecks: 720, p95Ms: 100 },
+    ];
+    db.overrides['uptimeCheck.groupBy'] = async (a) =>
+      a._min
+        ? [
+            { projectId: 'p7', _min: { at: ago(60_000) }, _count: { _all: 1 } },
+            { projectId: 'p8', _min: { at: ago(2 * 86_400_000) }, _count: { _all: 1441 } },
+          ]
+        : [];
+    const rows = await uptimeFleetView({ id: 'o', role: 'OWNER' }, { now });
+    expect(rows.find((r) => r.projectId === 'p7')).toMatchObject({ availability30: null, monitoring: 'starting' });
+    expect(rows.find((r) => r.projectId === 'p8')).toMatchObject({ availability30: 100, monitoring: 'active' });
   });
 });

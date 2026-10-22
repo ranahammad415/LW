@@ -3803,8 +3803,11 @@ model SignalSession {
   botReasons      Json?
   isNewVisitor    Boolean  @default(false)
   sessionOnly     Boolean  @default(false)
-  /// The SITE's lead id of a lead_submitted in this session.
+  /// The SITE's lead id of the FIRST lead of this session (a session may hold several; LeadAttribution is the source
+  /// of truth for lead counts, O-R3B-3).
   leadId          String?  @db.VarChar(64)
+  /// Distinct site lead ids among the session's events (0 = no lead). Kept by the sessionizer and the lead erasure.
+  leadCount       Int      @default(0)
   /// The session's touch { at, class, source, campaign, medium, landing }.
   touch           Json?
   createdAt       DateTime @default(now())
@@ -3889,6 +3892,8 @@ model SignalErasure {
   siteNextAt       DateTime?
   siteLastError    String?   @db.VarChar(40)
   siteRows         Int?
+  /// When the site's signals.erased confirmed an OS-initiated erasure (O-R3B-1: the confirmation updates this row).
+  siteConfirmedAt  DateTime?
   pendingSubject   String?   @db.VarChar(28)
 
   @@index([projectId, at])

@@ -28,6 +28,22 @@ export function reclassifyVisit(row, siteHost) {
   return { refClass: r.class, refSource: r.source };
 }
 
+/**
+ * One page of visits to reclassify (O-R3B-5): the 13-month bound (`at >= since`) holds on EVERY page, and the keyset
+ * cursor is (at, eventId), so visits sharing the boundary timestamp are neither skipped nor read twice.
+ */
+export function reclassifyPageWhere(projectId, since, cursor = null) {
+  return {
+    projectId,
+    type: 'visit',
+    payloadCompactedAt: null,
+    AND: [
+      { at: { gte: since } },
+      ...(cursor ? [{ OR: [{ at: { gt: cursor.at } }, { at: cursor.at, eventId: { gt: cursor.eventId } }] }] : []),
+    ],
+  };
+}
+
 export async function reclassifyProject(projectId, { now = new Date(), batch = 5000, maxBatches = 20, log } = {}) {
   const project = await prisma.project.findUnique({ where: { id: projectId }, select: { wpUrl: true } });
   const siteHost = siteHostOf(project?.wpUrl);
@@ -37,13 +53,14 @@ export async function reclassifyProject(projectId, { now = new Date(), batch = 5
   const dirty = [];
   for (let i = 0; i < maxBatches; i += 1) {
     const rows = await prisma.signalEvent.findMany({
-      where: { projectId, type: 'visit', at: { gte: since }, payloadCompactedAt: null, ...(cursor ? { at: { gt: cursor } } : {}) },
-      orderBy: { at: 'asc' },
+      where: reclassifyPageWhere(projectId, since, cursor),
+      orderBy: [{ at: 'asc' }, { eventId: 'asc' }],
       take: batch,
       select: { eventId: true, at: true, sessionId: true, pagePath: true, refClass: true, refSource: true, payload: true },
     });
     if (!rows.length) break;
-    cursor = rows[rows.length - 1].at;
+    const lastRow = rows[rows.length - 1];
+    cursor = { at: lastRow.at, eventId: lastRow.eventId };
     out.scanned += rows.length;
     for (const row of rows) {
       const next = reclassifyVisit(row, siteHost);

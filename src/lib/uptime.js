@@ -600,29 +600,36 @@ export function uptimeStatus({ openIncident = null, lastCheckAt = null, availabi
 export async function staffUptimeView(project, { now = new Date(), env = process.env } = {}) {
   const since24 = new Date(now.getTime() - DAY_MS);
   const since90 = new Date(utcDayStart(now).getTime() - 89 * DAY_MS);
-  const [checks24, daily, incidents, open, lastTls, lastStatus] = await Promise.all([
+  const since30 = new Date(utcDayStart(now).getTime() - 29 * DAY_MS);
+  const [checks24, daily, incidents, open, lastTls, lastStatus, first30, count30] = await Promise.all([
     prisma.uptimeCheck.findMany({ where: { projectId: project.id, target: 'home', at: { gte: since24 } }, select: { at: true, ok: true, ms: true, httpStatus: true, errorClass: true }, orderBy: { at: 'asc' } }),
     prisma.uptimeDaily.findMany({ where: { projectId: project.id, date: { gte: since90 } }, select: { date: true, checks: true, okChecks: true, availabilityPct: true, avgMs: true, p95Ms: true, incidents: true, downtimeSec: true }, orderBy: { date: 'asc' } }),
     prisma.uptimeIncident.findMany({ where: { projectId: project.id, OR: [{ openedAt: { gte: since90 } }, { closedAt: null }] }, select: { id: true, openedAt: true, closedAt: true, cause: true, lastError: true, durationSec: true }, orderBy: { openedAt: 'desc' }, take: 50 }),
     prisma.uptimeIncident.findUnique({ where: { openProjectId: project.id }, select: { id: true, openedAt: true, cause: true, lastError: true } }),
     prisma.uptimeCheck.findFirst({ where: { projectId: project.id, target: 'home', tlsExpiresAt: { not: null } }, select: { tlsExpiresAt: true, at: true }, orderBy: { at: 'desc' } }),
     prisma.uptimeCheck.findFirst({ where: { projectId: project.id, target: 'status' }, select: { ok: true, at: true, errorClass: true, httpStatus: true }, orderBy: { at: 'desc' } }),
+    prisma.uptimeCheck.findFirst({ where: { projectId: project.id, target: 'home', at: { gte: since30 } }, select: { at: true }, orderBy: { at: 'asc' } }),
+    prisma.uptimeCheck.count({ where: { projectId: project.id, target: 'home', at: { gte: since30 } } }),
   ]);
   const last = checks24[checks24.length - 1] || null;
   const okCount = checks24.filter((c) => c.ok).length;
-  const availability30 = uptimeAvailability(daily, 30, now);
+  // O-R3B-6: no percentage at all (24 h … 90 days) while monitoring is 'starting'; the raw series and daily rows stay.
+  const monitoring = uptimeMonitoringState({ checks: count30, firstAt: first30?.at, now });
+  const pct = (v) => (monitoring === 'active' ? v : null);
+  const availability30 = pct(uptimeAvailability(daily, 30, now));
   const dayKey = (d) => new Date(d).toISOString().slice(0, 10);
   return {
     enabled: isUptimeEnabled(env),
     monitored: Boolean(siteHomeUrl(project)),
     ...uptimeStatus({ openIncident: open, lastCheckAt: last?.at, availability30, now }),
+    monitoring,
     openIncident: open,
     lastCheck: last,
     availability: {
-      h24: checks24.length ? Number(((okCount / checks24.length) * 100).toFixed(3)) : null,
-      d7: uptimeAvailability(daily, 7, now),
+      h24: pct(checks24.length ? Number(((okCount / checks24.length) * 100).toFixed(3)) : null),
+      d7: pct(uptimeAvailability(daily, 7, now)),
       d30: availability30,
-      d90: uptimeAvailability(daily, 90, now),
+      d90: pct(uptimeAvailability(daily, 90, now)),
     },
     series24h: checks24.map((c) => ({ at: c.at, ok: c.ok, ms: c.ms })),
     daily: daily.map((d) => ({ ...d, date: dayKey(d.date) })),
@@ -645,16 +652,20 @@ export async function uptimeFleetView(user, { now = new Date() } = {}) {
   const ids = projects.map((p) => p.id);
   if (!ids.length) return [];
   const since30 = new Date(utcDayStart(now).getTime() - 29 * DAY_MS);
-  const [daily, incidents, lastChecks] = await Promise.all([
+  const [daily, incidents, lastChecks, recent30] = await Promise.all([
     prisma.uptimeDaily.findMany({ where: { projectId: { in: ids }, date: { gte: since30 } }, select: { projectId: true, date: true, checks: true, okChecks: true, p95Ms: true } }),
     prisma.uptimeIncident.findMany({ where: { projectId: { in: ids }, openedAt: { gte: new Date(now.getTime() - 90 * DAY_MS) } }, select: { projectId: true, openedAt: true, closedAt: true, durationSec: true, cause: true }, orderBy: { openedAt: 'desc' } }),
     prisma.uptimeCheck.groupBy({ by: ['projectId'], where: { projectId: { in: ids }, target: 'home' }, _max: { at: true } }),
+    prisma.uptimeCheck.groupBy({ by: ['projectId'], where: { projectId: { in: ids }, target: 'home', at: { gte: since30 } }, _min: { at: true }, _count: { _all: true } }),
   ]);
+  const recentBy = new Map(recent30.map((g) => [g.projectId, { firstAt: g._min?.at || null, checks: Number(g._count?._all) || 0 }]));
   const openSet = new Set((await prisma.uptimeIncident.findMany({ where: { projectId: { in: ids }, closedAt: null }, select: { projectId: true } })).map((r) => r.projectId));
   const lastAt = new Map(lastChecks.map((g) => [g.projectId, g._max?.at || null]));
   return projects.map((p) => {
     const rows = daily.filter((d) => d.projectId === p.id);
-    const availability30 = uptimeAvailability(rows, 30, now);
+    // O-R3B-6: no figure while monitoring is 'starting' (too few probes, or under 24 h since the first one)
+    const monitoring = uptimeMonitoringState({ ...(recentBy.get(p.id) || {}), now });
+    const availability30 = monitoring === 'active' ? uptimeAvailability(rows, 30, now) : null;
     const p95s = rows.map((r) => r.p95Ms).filter((v) => typeof v === 'number');
     const lastIncident = incidents.find((i) => i.projectId === p.id) || null;
     return {
@@ -663,6 +674,7 @@ export async function uptimeFleetView(user, { now = new Date() } = {}) {
       clientName: p.client?.agencyName || null,
       ...uptimeStatus({ openIncident: openSet.has(p.id), lastCheckAt: lastAt.get(p.id), availability30, now }),
       availability30,
+      monitoring,
       p95Ms: p95s.length ? Math.round(p95s.reduce((a, b) => a + b, 0) / p95s.length) : null,
       lastIncident: lastIncident ? { openedAt: lastIncident.openedAt, closedAt: lastIncident.closedAt, durationSec: lastIncident.durationSec, cause: lastIncident.cause } : null,
     };
@@ -688,6 +700,19 @@ export function uptimeCoverage({ checks = 0, firstAt = null, now = new Date(), i
   return Math.min(1, checks / expected);
 }
 
+/** Minimum time since the first probe before any percentage is shown (O-R3B-6: one probe is not "100 % (30 days)"). */
+export const MIN_MONITORING_MS = 24 * 3600_000;
+
+/**
+ * 'active' only with BOTH at least CLIENT_MIN_PROBE_COVERAGE of the expected probes since the first probe AND at least
+ * 24 h since that first probe (O-R3B-6); otherwise 'starting' (no percentage, client and staff).
+ */
+export function uptimeMonitoringState({ checks = 0, firstAt = null, now = new Date(), intervalMin = uptimeIntervalMin() } = {}) {
+  if (!firstAt || !checks) return 'starting';
+  if (now.getTime() - new Date(firstAt).getTime() < MIN_MONITORING_MS) return 'starting';
+  return uptimeCoverage({ checks, firstAt, now, intervalMin }) >= CLIENT_MIN_PROBE_COVERAGE ? 'active' : 'starting';
+}
+
 export async function clientUptimeView(project, { now = new Date() } = {}) {
   const since90 = new Date(utcDayStart(now).getTime() - 89 * DAY_MS);
   const since30 = new Date(utcDayStart(now).getTime() - 29 * DAY_MS);
@@ -702,9 +727,9 @@ export async function clientUptimeView(project, { now = new Date() } = {}) {
   const availability30 = uptimeAvailability(daily, 30, now);
   if (availability30 == null && !last) return { available: false };
   const { state } = uptimeStatus({ openIncident: open, lastCheckAt: last?.at, availability30, now });
-  // O-R3-4: with sparse probes (C: a few probes, then the prober went quiet) a percentage is misleading. Below 60 % of
-  // the expected probes the client gets no figure and the "starting to monitor" sentence; never both.
-  const enough = availability30 != null && uptimeCoverage({ checks: recent, firstAt: first?.at, now }) >= CLIENT_MIN_PROBE_COVERAGE;
+  // O-R3-4 / O-R3B-6: with sparse probes (C: a few probes, then the prober went quiet) or under 24 h of monitoring (a
+  // single probe) a percentage is misleading: the client gets no figure and the "starting to monitor" sentence; never both.
+  const enough = availability30 != null && uptimeMonitoringState({ checks: recent, firstAt: first?.at, now }) === 'active';
   return {
     available: true,
     availability30: enough ? Number(availability30.toFixed(2)) : null,

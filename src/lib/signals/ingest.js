@@ -62,6 +62,9 @@ export async function ingestSignalsBatch(project, ev, { now = new Date(), log } 
   return 'applied';
 }
 
+/** How long after an OS-initiated erasure the site's signals.erased is read as its confirmation (O-R3B-1). */
+export const OS_ERASURE_CONFIRM_WINDOW_MS = 24 * 3600_000;
+
 export const sha256 = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
 
 /**
@@ -94,10 +97,18 @@ export async function applySignalsErased(project, ev, { resolveVisitor = findVis
     const match = leads.find((l) => sha256(l.leadId) === data.subjectHash);
     if (match) local = await eraseLeadSignalsLocal(project.id, match.leadId);
   }
-  // An OS-initiated erasure (its own SignalErasure row is pending) is acknowledged by this event too.
+  // An OS-initiated erasure is CONFIRMED by this event: its own SignalErasure row is updated, never a second row
+  // (O-R3B-1). That row may still be owed (pending / failed, any age) or already acknowledged by the signals-erase
+  // response (done) within the last OS_ERASURE_CONFIRM_WINDOW_MS; a row the site already confirmed is not matched.
   const acked = await prisma.signalErasure.updateMany({
-    where: { projectId: project.id, kind: data.kind, subjectHash: data.subjectHash, siteState: { in: ['pending', 'failed'] } },
-    data: { siteState: 'done', siteRows: data.rows, pendingSubject: null, siteNextAt: null },
+    where: {
+      projectId: project.id,
+      kind: data.kind,
+      subjectHash: data.subjectHash,
+      siteConfirmedAt: null,
+      OR: [{ siteState: { in: ['pending', 'failed'] } }, { origin: 'os', at: { gte: new Date(now.getTime() - OS_ERASURE_CONFIRM_WINDOW_MS) } }],
+    },
+    data: { siteState: 'done', siteRows: data.rows, siteConfirmedAt: now, pendingSubject: null, siteNextAt: null },
   });
   if (Number(acked?.count) > 0) return 'applied';
   await prisma.signalErasure.create({
@@ -113,6 +124,7 @@ export async function applySignalsErased(project, ev, { resolveVisitor = findVis
       at: data.at ? new Date(data.at) : now,
       siteState: 'done',
       siteRows: data.rows,
+      siteConfirmedAt: now,
     },
   });
   return 'applied';

@@ -131,6 +131,64 @@ export async function refreshEmdashSiteInfo(projectId, { interactive = false, no
   return info;
 }
 
+/** At most one background site-info refresh per project per this interval (per PM2 instance). */
+export const SITE_INFO_REFRESH_INTERVAL_MS = 15 * 60_000;
+
+/**
+ * Bounded background site-info refresh (e2e O-R3B-4: stored capabilities stayed stale for ~90 min because heartbeats
+ * come every 6 h). `request(projectId)` refreshes at once when the project was not refreshed in the last interval,
+ * otherwise schedules ONE trailing refresh at the end of the interval (so a change is never left for the next
+ * heartbeat). `markFresh(projectId)` records a refresh that happened elsewhere (a heartbeat carrying capabilities).
+ * State is per process: with PM2 cluster mode each instance refreshes a project at most once per interval.
+ * `refresh(projectId)` is refreshEmdashSiteInfo through the O-R3-5 path (recordHeartbeat, same validation).
+ */
+export function createSiteInfoRefresher({ refresh, intervalMs = SITE_INFO_REFRESH_INTERVAL_MS, now = () => Date.now(), setTimer = setTimeout } = {}) {
+  const last = new Map();
+  const timers = new Map();
+  const running = new Set();
+  async function run(projectId, log) {
+    timers.delete(projectId);
+    if (running.has(projectId)) return;
+    running.add(projectId);
+    last.set(projectId, now());
+    try {
+      await refresh(projectId);
+    } catch (err) {
+      // The stored values stay; the next request or heartbeat tries again. Not an error for the logs.
+      log?.info?.({ projectId, code: err instanceof CmsBridgeError ? err.code : 'INTERNAL' }, 'EmDash site-info refresh failed');
+    } finally {
+      running.delete(projectId);
+    }
+  }
+  return {
+    request(projectId, log) {
+      if (!projectId) return 'skipped';
+      const since = now() - (last.get(projectId) ?? -Infinity);
+      if (since >= intervalMs && !running.has(projectId)) {
+        run(projectId, log);
+        return 'now';
+      }
+      if (timers.has(projectId)) return 'scheduled';
+      const t = setTimer(() => run(projectId, log), Math.max(0, intervalMs - since));
+      t?.unref?.();
+      timers.set(projectId, t);
+      return 'scheduled';
+    },
+    markFresh(projectId) {
+      if (projectId) last.set(projectId, now());
+    },
+  };
+}
+
+/** The process-wide refresher used by the EmDash webhook (skips projects that are not paired and healthy). */
+export const siteInfoRefresher = createSiteInfoRefresher({
+  async refresh(projectId) {
+    const p = await prisma.project.findUnique({ where: { id: projectId }, select: { cmsType: true, cmsRepairNeededAt: true, cmsDisconnectedAt: true } });
+    if (!p || p.cmsType !== 'EMDASH' || p.cmsRepairNeededAt || p.cmsDisconnectedAt) return;
+    await refreshEmdashSiteInfo(projectId, { noRetry: true });
+  },
+});
+
 /** Pull the entry inventory into WpPage. Mirrors syncProjectPages' return shape. */
 export async function syncEmdashInventory(projectId, { interactive = false, deadlineMs = null, flagRejection = true } = {}) {
   const deadline = deadlineMs ? Date.now() + deadlineMs : null;

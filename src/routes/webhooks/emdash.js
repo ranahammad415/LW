@@ -45,6 +45,13 @@ export const OS_VERSION = '2026.10.16';
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const MIGRATION_PENDING_MESSAGE = 'Site migration in progress; retry later';
+/**
+ * Designed retryable refusals of one event (O-R3B-2): error code thrown by the apply step → the rejected message. The
+ * wire code stays INTERNAL (retryable), the reason leads the message; logged at info, never as an error.
+ */
+export const PARKED_EVENT_REFUSALS = Object.freeze({
+  LEAD_NOT_STORED: 'LEAD_NOT_STORED: the lead is not stored yet; retry after its lead.created',
+});
 const DATE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 
 function sendError(reply, code, message, details) {
@@ -158,6 +165,16 @@ export async function emdashWebhookRoutes(app, opts = {}) {
   const onPaired = opts.onPaired || (await import('../../lib/emdashSync.js')).scheduleInventoryAfterPairing;
   // v1.5.6 §32.1: confirm a revokePrev rotation with a health call signed with the new key.
   const onRevokeRotated = opts.onRevokeRotated || (await import('../../lib/emdashSync.js')).scheduleRevokeConfirm;
+  // O-R3B-4: bounded site-info refresh (≤ 1 per project per 15 min) so stored capabilities follow the site's settings
+  // between 6-hourly heartbeats. Tests with their own store pass one (or none).
+  const siteInfoRefresher = opts.siteInfoRefresher !== undefined ? opts.siteInfoRefresher : opts.store ? null : (await import('../../lib/emdashSync.js')).siteInfoRefresher;
+  const requestSiteInfo = (projectId, log) => {
+    try {
+      siteInfoRefresher?.request(projectId, log);
+    } catch (err) {
+      log?.info?.({ projectId, err: { message: err?.message } }, 'Could not schedule the site-info refresh');
+    }
+  };
   const rateLimit = createRateLimiter(
     Number(opts.eventsPerMin || process.env.CMS_EVENTS_RATE_PER_MIN) || 300
   );
@@ -371,6 +388,10 @@ export async function emdashWebhookRoutes(app, opts = {}) {
     const cred = await store.getCredential(project.id);
     const rings = credentialToRings(cred, now);
     await store.recordHeartbeat({ projectId: project.id, siteInfo: info, contract, now: new Date(now) });
+    // O-R3B-4: a heartbeat that carries capabilities refreshed them just now (recordHeartbeat, same validation); one
+    // without them keeps the stored ones and asks for a bounded site-info refresh instead.
+    if (info.capabilities && typeof info.capabilities === 'object' && !Array.isArray(info.capabilities)) siteInfoRefresher?.markFresh(project.id);
+    else requestSiteInfo(project.id, request.log);
 
     // Sign with the inbound key of the generation the site used (current in the normal case).
     const reqKeyId = Number(v.keyId);
@@ -527,6 +548,9 @@ export async function emdashWebhookRoutes(app, opts = {}) {
 
     const result = await processEventBatch({ store, project, events: batch.events, log: request.log });
     await store.touchLastSeen(project.id, new Date(now));
+    // O-R3B-4: an active site gets its stored capabilities refreshed at a bounded cadence (a settings change such as
+    // signals.config_changed arrives as an event; heartbeats only every 6 h). Background, after the response is built.
+    if (result.accepted.length) requestSiteInfo(project.id, request.log);
     if (result.storedCursor > 0) await store.setLastCursor(project.id, result.storedCursor);
 
     if (result.heal.length) {
@@ -699,17 +723,25 @@ export async function processEventBatch({ store, project, events, log }) {
       accepted.push(ev.eventId);
       storedCursor = Math.max(storedCursor, ev.cursor);
     } catch (err) {
-      // Lead events: never log the error object (it could echo lead data); code only.
-      if (ev.type.startsWith('lead.')) log?.error?.({ code: err?.code || 'INTERNAL', eventId: ev.eventId, type: ev.type }, 'EmDash event apply failed');
-      else log?.error?.({ err, eventId: ev.eventId, type: ev.type }, 'EmDash event apply failed');
+      const parked = Object.prototype.hasOwnProperty.call(PARKED_EVENT_REFUSALS, err?.code) ? err.code : null;
+      if (parked) {
+        // O-R3B-2: an expected, designed refusal (e.g. lead.attributed before its lead.created): the site's outbox parks
+        // the event and re-sends it. Not an error: info level, code only (never the error object).
+        log?.info?.({ code: parked, eventId: ev.eventId, type: ev.type }, 'EmDash event parked; the site retries it');
+      } else if (ev.type.startsWith('lead.')) {
+        // Lead events: never log the error object (it could echo lead data); code only.
+        log?.error?.({ code: err?.code || 'INTERNAL', eventId: ev.eventId, type: ev.type }, 'EmDash event apply failed');
+      } else log?.error?.({ err, eventId: ev.eventId, type: ev.type }, 'EmDash event apply failed');
       await store.releaseReceipt(project.id, ev.eventId).catch(() => {});
       seenInBatch.delete(ev.eventId);
       const validation = err?.code === 'VALIDATION';
       rejected.push({
         eventId: ev.eventId,
+        // The contract's per-event codes are VALIDATION | TOO_MANY_SNAPSHOTS | INTERNAL (§6.3): a parked event is a
+        // retryable INTERNAL whose message names the reason first ("LEAD_NOT_STORED: ...").
         code: validation ? 'VALIDATION' : 'INTERNAL',
         retryable: !validation,
-        message: validation ? String(err.message || 'Invalid event').slice(0, 300) : 'Could not apply the event; retry later',
+        message: validation ? String(err.message || 'Invalid event').slice(0, 300) : parked ? PARKED_EVENT_REFUSALS[parked] : 'Could not apply the event; retry later',
       });
     }
   }

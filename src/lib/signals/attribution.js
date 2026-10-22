@@ -156,6 +156,13 @@ export async function attributeLeads({ limit = 500, now = new Date(), log } = {}
   for (const row of rows) {
     let leadSession = null;
     if (row.sessionId) leadSession = await prisma.signalSession.findUnique({ where: { projectId_sessionId: { projectId: row.projectId, sessionId: row.sessionId } } });
+    if (!leadSession) {
+      // O-R3B-3: SignalSession.leadId names the session's FIRST lead only; the lead's own event names its session.
+      const ev =
+        (await prisma.signalEvent.findFirst({ where: { projectId: row.projectId, leadId: row.siteLeadId, type: 'lead_submitted' }, orderBy: { at: 'asc' }, select: { sessionId: true } })) ||
+        (await prisma.signalEvent.findFirst({ where: { projectId: row.projectId, leadId: row.siteLeadId }, orderBy: { at: 'asc' }, select: { sessionId: true } }));
+      if (ev) leadSession = await prisma.signalSession.findUnique({ where: { projectId_sessionId: { projectId: row.projectId, sessionId: ev.sessionId } } });
+    }
     if (!leadSession) leadSession = await prisma.signalSession.findFirst({ where: { projectId: row.projectId, leadId: row.siteLeadId }, orderBy: { startedAt: 'desc' } });
     if (!leadSession) {
       // Nothing to derive from yet (cookie-only, or the session is not sessionized yet): the sessionizer flags the row

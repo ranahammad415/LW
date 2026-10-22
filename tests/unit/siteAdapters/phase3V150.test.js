@@ -694,3 +694,15 @@ describe('v1.5.5 §31.1: serviceToken in the heartbeat body', () => {
     expect(st.problems.map((p) => p.code)).toEqual(['ROLE_INSUFFICIENT', 'SCOPE_MISSING']);
   });
 });
+
+describe('O-R3B-4: recordHeartbeat and stored capabilities', () => {
+  it('a body with capabilities replaces them; a body without keeps the stored ones (never wiped to {})', async () => {
+    const info = ex('site-info.response');
+    await prismaCmsStore.recordHeartbeat({ projectId: 'p1', siteInfo: { ...info, capabilities: { ...info.capabilities, signals: true } }, contract: 1 });
+    expect(calls('project.update').at(-1).args.data.cmsCapabilities).toMatchObject({ signals: true });
+    const { capabilities: _c, ...noCaps } = info;
+    await prismaCmsStore.recordHeartbeat({ projectId: 'p1', siteInfo: noCaps, contract: 1 });
+    expect(calls('project.update').at(-1).args.data).not.toHaveProperty('cmsCapabilities');
+    expect(calls('project.update').at(-1).args.data.cmsLastSeenAt).toBeTruthy();
+  });
+});
