@@ -7,6 +7,67 @@ function fmt(d) {
   return d.toISOString().slice(0, 10);
 }
 
+/** Health score v2 quick win: daily AI-assistant referrals (LlmReferralDaily). Source substrings → platform. */
+const LLM_SOURCE_TOKENS = ['chatgpt', 'openai', 'claude', 'gemini', 'perplexity', 'copilot'];
+
+export function llmPlatform(source) {
+  const s = String(source || '').toLowerCase();
+  if (s.includes('chatgpt') || s.includes('openai')) return 'chatgpt';
+  if (s.includes('claude')) return 'claude';
+  if (s.includes('gemini')) return 'gemini';
+  if (s.includes('perplexity')) return 'perplexity';
+  if (s.includes('copilot')) return 'copilot';
+  return 'other';
+}
+
+/** GA4 FilterExpression: sessionSource contains any LLM token (case-insensitive). */
+export const LLM_SOURCE_FILTER = Object.freeze({
+  orGroup: {
+    expressions: LLM_SOURCE_TOKENS.map((value) => ({
+      filter: { fieldName: 'sessionSource', stringFilter: { matchType: 'CONTAINS', value, caseSensitive: false } },
+    })),
+  },
+});
+
+/** Pure: GA4 rows {date: YYYYMMDD, sessionSource, sessions} → [{date: YYYY-MM-DD, platform, sessions}] summed per day+platform. */
+export function llmReferralRows(rows) {
+  const acc = new Map();
+  for (const r of rows || []) {
+    const d = String(r.date || '');
+    if (d.length !== 8) continue;
+    const date = `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
+    const platform = llmPlatform(r.sessionSource);
+    const key = `${date}|${platform}`;
+    acc.set(key, (acc.get(key) || 0) + Math.round(Number(r.sessions) || 0));
+  }
+  return [...acc].map(([k, sessions]) => {
+    const [date, platform] = k.split('|');
+    return { date, platform, sessions };
+  });
+}
+
+/** One extra GA4 report per project per sync (dimensions date × sessionSource, LLM sources only); upserts per day+platform. */
+export async function syncLlmReferrals(project, start, end, { report = runGa4Report } = {}) {
+  const rows = await report(project.ga4PropertyId, {
+    startDate: fmt(start),
+    endDate: fmt(end),
+    dimensions: ['date', 'sessionSource'],
+    metrics: ['sessions'],
+    dimensionFilter: LLM_SOURCE_FILTER,
+    limit: '5000',
+  });
+  const out = llmReferralRows(rows);
+  for (const r of out) {
+    const date = new Date(`${r.date}T00:00:00.000Z`);
+    await prisma.llmReferralDaily.upsert({
+      where: { projectId_date_platform: { projectId: project.id, date, platform: r.platform } },
+      create: { projectId: project.id, date, platform: r.platform, sessions: r.sessions },
+      update: { sessions: r.sessions },
+    });
+  }
+  return out.length;
+}
+
 export async function syncGa4Project(project) {
   if (!project.ga4PropertyId) return { projectId: project.id, status: 'skipped' };
 
@@ -120,12 +181,20 @@ export async function syncGa4Project(project) {
     upserts++;
   }
 
+  // LLM referrals per day (optional: a failure never fails the GA4 sync).
+  let llmRows = 0;
+  try {
+    llmRows = await syncLlmReferrals(project, start, end);
+  } catch {
+    llmRows = 0;
+  }
+
   await prisma.project.update({
     where: { id: project.id },
     data: { ga4LastSyncedAt: new Date() },
   });
 
-  return { projectId: project.id, status: 'ok', days: upserts };
+  return { projectId: project.id, status: 'ok', days: upserts, llmRows };
 }
 
 export async function runGa4Sync() {

@@ -31,6 +31,8 @@ export async function runGa4Report(propertyId, opts) {
       dimensions,
       metrics,
       limit: opts.limit || '10000',
+      // Optional GA4 FilterExpression (e.g. the LLM-referral source filter in ga4Sync.js).
+      ...(opts.dimensionFilter ? { dimensionFilter: opts.dimensionFilter } : {}),
     },
   });
 

@@ -4,6 +4,11 @@
 import { prisma } from '../prisma.js';
 import { getKeywordRankings, hasRealSerpProvider, domainFromUrl } from './providers.js';
 
+/** Today as a UTC midnight Date (KeywordRankDaily.date is @db.Date). */
+export function utcToday(now = new Date()) {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+}
+
 export async function syncDataForSeoProject(project) {
   const domain = domainFromUrl(project.dataforseoDomain || '');
   if (!domain) return { projectId: project.id, status: 'skipped', reason: 'no domain' };
@@ -26,14 +31,25 @@ export async function syncDataForSeoProject(project) {
   });
 
   let updated = 0;
+  const day = utcToday();
   for (const r of results) {
     const match = keywords.find((k) => k.keyword === r.keyword);
     if (!match) continue;
     if (r.position == null) continue;
+    const rank = Math.round(r.position);
     await prisma.keywordTrack.update({
       where: { id: match.id },
-      data: { currentRank: Math.round(r.position) },
+      data: { currentRank: rank },
     });
+    // Health score v2 quick win: daily rank history (one row per keyword per UTC day; a re-run updates it).
+    // Best effort: the paid rank lookup above is already stored on KeywordTrack even if this write fails.
+    await prisma.keywordRankDaily
+      .upsert({
+        where: { keywordId_date: { keywordId: match.id, date: day } },
+        create: { keywordId: match.id, projectId: project.id, date: day, rank },
+        update: { rank },
+      })
+      .catch(() => null);
     updated++;
   }
 
