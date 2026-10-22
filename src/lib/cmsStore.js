@@ -606,7 +606,12 @@ export const prismaCmsStore = {
     return applyLeadEvent(project, ev);
   },
 
-  async applySeoEvent(project, ev) {
+  async applySeoEvent(project, ev, log) {
+    // v1.8.0 §39.4: citation list mirror (rev order; a gap → seo-citations-list).
+    if (ev.type === 'seo.citation_changed') {
+      const { applyCitationChanged } = await import('./citations/citations.js');
+      return applyCitationChanged(project, ev, { log });
+    }
     const { applySeoEvent } = await import('./cmsSeoProfiles.js');
     return applySeoEvent(project.id, ev, { siteRevision: project?.cmsHealth?.contractRevision ?? null });
   },

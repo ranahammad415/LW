@@ -345,7 +345,12 @@ export const PAIRING_SYNC_DEADLINE_MS = 120_000;
 export function scheduleInventoryAfterPairing(projectId, log, { delayMs = PAIRING_SYNC_DELAY_MS } = {}) {
   const t = setTimeout(() => {
     syncEmdashInventory(projectId, { interactive: true, deadlineMs: PAIRING_SYNC_DEADLINE_MS, flagRejection: false })
-      .then((r) => log?.info?.({ projectId, result: r }, 'EmDash inventory after pairing'))
+      .then(async (r) => {
+        log?.info?.({ projectId, result: r }, 'EmDash inventory after pairing');
+        // v1.8.0 §39: first citation list right after pairing (capability read from the site-info the inventory stored).
+        const { pullCitationsIfCapable } = await import('./citations/citations.js');
+        await pullCitationsIfCapable(projectId).catch((err) => log?.warn?.({ projectId, code: err?.code }, 'Citation list after pairing failed'));
+      })
       .catch((err) => log?.warn?.({ projectId, err: { message: err?.message } }, 'EmDash inventory after pairing failed'));
   }, delayMs);
   t.unref?.();
@@ -419,6 +424,9 @@ export async function syncAllEmdashProjects() {
       // v1.6.0 §36.1: daily security-status {detail: full} + security-history + backup-status (+ v1.6.1 settings).
       const { pullSecurityForProject } = await import('./security/securitySync.js');
       await pullSecurityForProject(id).catch(() => {});
+      // v1.8.0 §39: the citation list (sites with seoCitations; read-only, no retries; events keep it current between pulls).
+      const { pullCitationsIfCapable } = await import('./citations/citations.js');
+      await pullCitationsIfCapable(id).catch(() => {});
     } catch (err) {
       results.push({ projectId: id, error: err.message });
     }

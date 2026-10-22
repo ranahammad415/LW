@@ -55,6 +55,8 @@ export const MUTATION_ROUTES = new Set([
   // v1.7.0 §38.1 (config-set: human OWNER / PM only; erase: a person or the OS erasure job)
   'signals-config-set',
   'signals-erase',
+  // v1.8.0 §39.3 (compare-and-set on baseRev; a person OWNER / PM or the OS listing monitor as kind system)
+  'seo-citations-upsert',
 ]);
 
 export class CmsBridgeError extends Error {
@@ -360,6 +362,10 @@ export const emdashRoutes = {
   signalsConfigSet: (conn, body, opts) => siteRequest(conn, 'signals-config-set', compact(body), opts),
   signalsSummary: (conn, q = {}, opts) => siteRequest(conn, 'signals-summary', compact({ hours: 24, ...q }), opts),
   signalsErase: (conn, body, opts) => siteRequest(conn, 'signals-erase', compact(body), opts),
+  /** v1.8.0 §39 (capability seoCitations / seoAiPrompts): two reads (no idempotency key) and one mutation. */
+  seoCitationsList: (conn, opts) => siteRequest(conn, 'seo-citations-list', {}, opts),
+  seoCitationsUpsert: (conn, body, opts) => siteRequest(conn, 'seo-citations-upsert', body, opts),
+  seoAiPrompts: (conn, opts) => siteRequest(conn, 'seo-ai-prompts', {}, opts),
 };
 
 function siteCaps(project) {

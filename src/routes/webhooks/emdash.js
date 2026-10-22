@@ -39,6 +39,7 @@ import { validateLeadEvent } from '../../lib/siteAdapters/leads.js';
 import { validateSecurityEvent, isSecurityEventType } from '../../lib/siteAdapters/security.js';
 import { REOPEN_EVENT, reopenEventMessage, reopenNotice } from '../../lib/siteAdapters/reopen.js';
 import { validateSignalsEvent, isSignalsEventType } from '../../lib/signals/validate.js';
+import { validateCitationEvent } from '../../lib/citations/validate.js';
 import { isMigrationActive } from '../../lib/cmsMigration.js';
 
 export const OS_VERSION = '2026.10.16';
@@ -128,6 +129,11 @@ export function validateEvent(ev) {
       return 'proposal.proposal_id is required';
     }
     if (ev.type === 'seo.check_failed' && (!ev.check || typeof ev.check.page_id !== 'string')) return 'check.page_id is required';
+    // v1.8.0 §39.4: seo.citation_changed carries typed data (rev, source, by, citation, changes); never snapshotText / lead.
+    if (ev.type === 'seo.citation_changed') {
+      const citErr = validateCitationEvent(ev);
+      if (citErr) return citErr;
+    }
   } else if (ev.type.startsWith('content.')) {
     if (ev.seq !== undefined) return 'seq must be absent on content.* events';
     const e = ev.entry;
@@ -699,7 +705,7 @@ export async function processEventBatch({ store, project, events, log }) {
         // v1.5.0 §26.1: PII only in the leads store; receipts keep ids only.
         outcome = (await store.applyLeadEvent?.(project, ev)) || 'stored';
       } else if (ev.type.startsWith('seo.')) {
-        outcome = (await store.applySeoEvent?.(project, ev)) || 'stored';
+        outcome = (await store.applySeoEvent?.(project, ev, log)) || 'stored';
       } else if (isSignalsEventType(ev.type)) {
         // v1.7.0 §38: visit signals (bulk insert, no session logic here), site erasures, settings mirror.
         outcome = (await store.applySignalsEvent?.(project, ev, log)) || 'stored';

@@ -6,7 +6,7 @@
 import { prisma } from '../prisma.js';
 
 export const STALE_RUN_MS = 45 * 60_000;
-export const RUN_KINDS = Object.freeze(['integrations_sync', 'local_rank', 'local_grid', 'local_profile']);
+export const RUN_KINDS = Object.freeze(['integrations_sync', 'local_rank', 'local_grid', 'local_profile', 'citations_check']);
 
 /** Public shape of a run (staff only; summary is OS-built JSON, no secrets). */
 export function runView(run) {

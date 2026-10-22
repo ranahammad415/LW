@@ -83,6 +83,8 @@ import { pmSiteMetricsRoutes } from './routes/pm/siteMetrics.js';
 import { clientSiteMetricsRoutes } from './routes/client/siteMetrics.js';
 import { pmLocalSeoRoutes } from './routes/pm/localSeo.js';
 import { clientLocalSeoRoutes } from './routes/client/localSeo.js';
+import { pmSeoMonitoringRoutes } from './routes/pm/seoMonitoring.js';
+import { clientSeoMonitoringRoutes } from './routes/client/seoMonitoring.js';
 import { pmSignalsRoutes } from './routes/pm/signals.js';
 import { clientSignalsRoutes } from './routes/client/signals.js';
 import { startSignalsJobs } from './lib/signals/jobs.js';
@@ -298,6 +300,8 @@ app.register(clientSiteMetricsRoutes, { prefix: '/api/client' });
 // Local SEO (docs/ledger/features/local-seo.md): GBP identity, location, Maps ranks, geo-grid; client Maps tile.
 app.register(pmLocalSeoRoutes, { prefix: '/api/pm' });
 app.register(clientLocalSeoRoutes, { prefix: '/api/client' });
+app.register(pmSeoMonitoringRoutes, { prefix: '/api/pm' });
+app.register(clientSeoMonitoringRoutes, { prefix: '/api/client' });
 app.register(pmSignalsRoutes, { prefix: '/api/pm' });
 app.register(clientSignalsRoutes, { prefix: '/api/client' });
 app.register(pmDigestRoutes, { prefix: '/api/pm' });
@@ -539,6 +543,29 @@ try {
       if (out.tasks) app.log.info(out, 'Local rank task collection');
     } catch (err) {
       app.log.error({ err }, 'Local rank task collection failed');
+    }
+  });
+  // EmDash contract 1.8.0 §39 (leader only, paid, both off by default; one run per project per month, capped):
+  // 05:15 on the 2nd: citations / NAP monitor `seo.citations` (CITATIONS_MONITOR_ENABLED, CITATIONS_MAX_PER_RUN);
+  // 05:45 on the 2nd: AI-visibility runs over the site's prompts (AI_VISIBILITY_MONTHLY_ENABLED, AI_VISIBILITY_MAX_*).
+  cron.schedule('15 5 2 * *', async () => {
+    if (!isLeader()) return;
+    try {
+      const { runCitationsMonitorJob } = await import('./lib/citations/monitor.js');
+      const out = await runCitationsMonitorJob({ log: app.log });
+      if (!out.skipped) app.log.info(out, 'Citations monitor monthly run complete');
+    } catch (err) {
+      app.log.error({ err }, 'Citations monitor monthly run failed');
+    }
+  });
+  cron.schedule('45 5 2 * *', async () => {
+    if (!isLeader()) return;
+    try {
+      const { runAiVisibilityMonthlyJob } = await import('./lib/analytics/aiVisibilityScheduled.js');
+      const out = await runAiVisibilityMonthlyJob({ log: app.log });
+      if (!out.skipped) app.log.info(out, 'AI visibility monthly run complete');
+    } catch (err) {
+      app.log.error({ err }, 'AI visibility monthly run failed');
     }
   });
   // Uptime (UPTIME_ENABLED, default on): prober every UPTIME_INTERVAL_MIN minutes (in-process overlap guard), rollup

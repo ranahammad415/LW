@@ -41,6 +41,49 @@ async function mapPool(items, concurrency, worker) {
   return results;
 }
 
+/** Scheduled runs only call the paid DataForSEO LLM-mentions snapshot when this is 'true' (default off). */
+export function isScheduledDfsSnapshotEnabled(env = process.env) {
+  return String(env.AI_VISIBILITY_DFS_SNAPSHOT_ENABLED ?? 'false').toLowerCase() === 'true';
+}
+
+const escRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * 1-based position of the first item of the answer's list (numbered "1." / "1)" or bulleted "-", "*", "•" lines) that
+ * names the brand or the domain; null when the answer has no list or the brand is not in one. Pure.
+ */
+export function mentionPosition(text, { domain = null, brands = [] } = {}) {
+  const lines = String(text || '').split(/\r?\n/);
+  const items = lines.filter((l) => /^\s*(?:\d{1,2}[.)]|[-*•])\s+\S/.test(l));
+  if (!items.length) return null;
+  const host = String(domain || '').toLowerCase().replace(/^www\./, '');
+  const res = [host ? new RegExp(escRe(host), 'i') : null]
+    .concat((brands || []).filter((b) => String(b || '').trim().length >= 3).map((b) => new RegExp(`\\b${String(b).trim().split(/\s+/).map(escRe).join('\\s+')}\\b`, 'i')))
+    .filter(Boolean);
+  const idx = items.findIndex((l) => res.some((re) => re.test(l)));
+  return idx >= 0 ? idx + 1 : null;
+}
+
+/** AiUsageLog row per scheduled probe (feature ai_visibility_monthly), like lib/ai.js logUsage: never throws. */
+async function logProbeUsage({ model, usage, latencyMs, success, clientId }) {
+  try {
+    await prisma.aiUsageLog.create({
+      data: {
+        model: String(model || 'unknown').slice(0, 100),
+        feature: 'ai_visibility_monthly',
+        clientId: clientId || null,
+        tokensIn: Number.isInteger(usage?.prompt_tokens) ? usage.prompt_tokens : 0,
+        tokensOut: Number.isInteger(usage?.completion_tokens) ? usage.completion_tokens : 0,
+        latencyMs: Math.max(0, Math.round(latencyMs || 0)),
+        success: !!success,
+        errorCode: success ? null : 'PROBE_FAILED',
+      },
+    });
+  } catch {
+    /* observability never breaks the run */
+  }
+}
+
 function truncate(text, max = RESPONSE_MAX) {
   const s = String(text || '');
   return s.length > max ? `${s.slice(0, max)}…` : s;
@@ -149,14 +192,18 @@ export async function executeAiVisibilityRun(runId, opts = {}) {
     const brands = brandTokensForProject(project);
     if (project.client?.agencyName) brands.unshift(project.client.agencyName);
 
-    const confirmed = normalizeProbeList(opts.probes || [], { min: 1, max: 20 });
-    const fingerprint = confirmed.length ? fingerprintProbeList(confirmed) : null;
+    // Scheduled runs (contract 1.8.0 §39.5): the site's prompts, already selected and capped by the caller.
+    const scheduled = Array.isArray(opts.prompts) && opts.prompts.length > 0;
+    const confirmed = scheduled ? [] : normalizeProbeList(opts.probes || [], { min: 1, max: 20 });
+    const fingerprint = scheduled ? fingerprintProbeList(opts.prompts.map((p) => p.text)) : confirmed.length ? fingerprintProbeList(confirmed) : null;
     let probeRows;
     let warning = null;
     let rangeStart = null;
     let rangeEnd = null;
 
-    if (confirmed.length > 0) {
+    if (scheduled) {
+      probeRows = opts.prompts.map((p) => ({ probeQuery: String(p.text).slice(0, 500), sourceQuery: 'site-prompt', prompt: p }));
+    } else if (confirmed.length > 0) {
       probeRows = confirmed.map((q) => ({
         probeQuery: q,
         sourceQuery: 'site-crawl',
@@ -214,6 +261,7 @@ export async function executeAiVisibilityRun(runId, opts = {}) {
             sourceQuery: probe.sourceQuery,
             platform,
             model: modelMap[platform],
+            prompt: probe.prompt || null,
           });
         }
       }
@@ -231,18 +279,32 @@ export async function executeAiVisibilityRun(runId, opts = {}) {
       },
     });
 
+    const probe = opts.probe || probeVisibilityQuery;
+    const promptFields = (p) =>
+      p
+        ? {
+            promptId: String(p.id).slice(0, 120),
+            town: p.town ? String(p.town).slice(0, 100) : null,
+            service: p.service ? String(p.service).slice(0, 200) : null,
+            branded: p.branded === true,
+          }
+        : {};
     const freshResults = await mapPool(jobs, CONCURRENCY, async (job) => {
+      const started = Date.now();
       try {
-        const { text, model } = await probeVisibilityQuery({
+        // Scheduled runs: one attempt per cell (no retries inside the loop) and the provider-reported cost.
+        const { text, model, usage, costUsd } = await probe({
           platform: job.platform,
           model: job.model,
           query: job.query,
+          ...(scheduled ? { maxAttempts: 1, includeCost: true } : {}),
         });
         const { cited, citationType } = detectCitation(text, {
           domain,
           brandNames: brands,
         });
         const competitors = extractCompetitorDomains(text, domain);
+        if (scheduled) await logProbeUsage({ model: model || job.model, usage, latencyMs: Date.now() - started, success: true, clientId: project.clientId });
         return {
           runId,
           query: job.query.slice(0, 500),
@@ -253,8 +315,12 @@ export async function executeAiVisibilityRun(runId, opts = {}) {
           citationType: cited ? citationType : 'none',
           responseText: truncate(text),
           competitorsJson: competitors,
+          ...promptFields(job.prompt),
+          mentionPosition: cited ? mentionPosition(text, { domain, brands }) : null,
+          costUsd: typeof costUsd === 'number' ? costUsd : null,
         };
       } catch (err) {
+        if (scheduled) await logProbeUsage({ model: job.model, usage: null, latencyMs: Date.now() - started, success: false, clientId: project.clientId });
         return {
           runId,
           query: job.query.slice(0, 500),
@@ -265,6 +331,9 @@ export async function executeAiVisibilityRun(runId, opts = {}) {
           citationType: 'error',
           responseText: truncate(`Error: ${err.message || 'probe failed'}`),
           competitorsJson: [],
+          ...promptFields(job.prompt),
+          mentionPosition: null,
+          costUsd: null,
         };
       }
     });
@@ -284,7 +353,10 @@ export async function executeAiVisibilityRun(runId, opts = {}) {
     });
 
     let dfsPayload;
-    if (jobs.length === 0 && opts.priorRunId) {
+    if (scheduled && !isScheduledDfsSnapshotEnabled()) {
+      // Scheduled runs skip the paid DataForSEO LLM-mentions snapshot unless AI_VISIBILITY_DFS_SNAPSHOT_ENABLED=true.
+      dfsPayload = { ok: false, skipped: true, error: 'not part of scheduled runs', domain: domain || '' };
+    } else if (jobs.length === 0 && opts.priorRunId) {
       const priorDfs = await prisma.aiVisibilityDfsSnapshot.findUnique({
         where: { runId: opts.priorRunId },
       });
@@ -322,10 +394,13 @@ export async function executeAiVisibilityRun(runId, opts = {}) {
     const warnings = [
       warning,
       reuseNote,
-      dfsPayload.skipped ? `DFS skipped: ${dfsPayload.error || 'unavailable'}` : null,
+      dfsPayload.skipped && !scheduled ? `DFS skipped: ${dfsPayload.error || 'unavailable'}` : null,
     ]
       .filter(Boolean)
       .join(' · ');
+
+    const costs = freshResults.map((r) => r.costUsd).filter((c) => typeof c === 'number');
+    const costUsd = costs.length ? Number(costs.reduce((t, c) => t + c, 0).toFixed(5)) : null;
 
     await prisma.aiVisibilityRun.update({
       where: { id: runId },
@@ -333,6 +408,7 @@ export async function executeAiVisibilityRun(runId, opts = {}) {
         status: 'completed',
         finishedAt: new Date(),
         error: warnings ? warnings.slice(0, 1000) : null,
+        costUsd,
       },
     });
 
@@ -343,6 +419,8 @@ export async function executeAiVisibilityRun(runId, opts = {}) {
       modelCount: platforms.length,
       probedCells: jobs.length,
       reusedCells: reusedResults.length,
+      errorCells: freshResults.filter((r) => r.citationType === 'error').length,
+      costUsd,
     };
   } catch (err) {
     await prisma.aiVisibilityRun.update({

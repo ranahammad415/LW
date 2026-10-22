@@ -34,7 +34,7 @@ export function getOpenRouterModelMap() {
  * @param {{ model: string, system?: string, user: string, maxTokens?: number }} args
  * @returns {Promise<{ text: string, model: string, usage?: object }>}
  */
-export async function openRouterChat({ model, system, user, maxTokens = 800 }) {
+export async function openRouterChat({ model, system, user, maxTokens = 800, maxAttempts = 3, includeCost = false }) {
   const apiKey = process.env.OPENROUTER_API_KEY?.trim();
   if (!apiKey) throw new Error('OPENROUTER_API_KEY is not configured');
 
@@ -54,7 +54,8 @@ export async function openRouterChat({ model, system, user, maxTokens = 800 }) {
   }
 
   let lastErr;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  const attempts = Math.max(1, Math.min(3, Number(maxAttempts) || 1));
+  for (let attempt = 0; attempt < attempts; attempt++) {
     try {
       const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
@@ -64,6 +65,8 @@ export async function openRouterChat({ model, system, user, maxTokens = 800 }) {
           messages,
           max_tokens: maxTokens,
           temperature: 0.3,
+          // OpenRouter reports usage.cost (USD credits) when asked; the scheduled AI-visibility runs store it.
+          ...(includeCost ? { usage: { include: true } } : {}),
         }),
         signal: AbortSignal.timeout(60000),
       });
@@ -77,13 +80,14 @@ export async function openRouterChat({ model, system, user, maxTokens = 800 }) {
         throw new Error(json.error?.message || `OpenRouter ${res.status}`);
       }
       const text = json.choices?.[0]?.message?.content || '';
-      return { text: String(text), model, usage: json.usage || null };
+      const costUsd = typeof json.usage?.cost === 'number' && Number.isFinite(json.usage.cost) ? json.usage.cost : null;
+      return { text: String(text), model, usage: json.usage || null, costUsd };
     } catch (err) {
       lastErr = err;
       if (err?.name === 'AbortError' || err?.name === 'TimeoutError') {
         throw new Error('OpenRouter request timed out');
       }
-      if (attempt < 2 && /rate|429|temporar/i.test(err.message || '')) {
+      if (attempt < attempts - 1 && /rate|429|temporar/i.test(err.message || '')) {
         await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
         continue;
       }
@@ -96,7 +100,7 @@ export async function openRouterChat({ model, system, user, maxTokens = 800 }) {
 /**
  * Ask a model for a search-style answer that may cite brands/URLs.
  */
-export async function probeVisibilityQuery({ platform, model, query }) {
+export async function probeVisibilityQuery({ platform, model, query, maxAttempts = 3, includeCost = false }) {
   const system =
     `You are answering as the ${platform} AI assistant would for a real user search/recommendation query. ` +
     `Be specific. When recommending businesses, agencies, or websites, include real-looking domain names and brand names. ` +
@@ -106,5 +110,7 @@ export async function probeVisibilityQuery({ platform, model, query }) {
     system,
     user: query,
     maxTokens: 900,
+    maxAttempts,
+    includeCost,
   });
 }
