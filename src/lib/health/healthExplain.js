@@ -21,7 +21,8 @@ export const FACTOR_LABELS = Object.freeze({
   V1: 'Google clicks', V2: 'Search impressions', V3: 'Average position', V4: 'CTR vs expected',
   E1: 'Sessions', E2: 'Engagement quality', E3: 'Bounce rate',
   L1: 'Leads (forms, calls, emails)', L2: 'Lead conversion rate', L3: 'GA4 conversions',
-  R1: 'Average rating', R2: 'New reviews', R3: 'Review reply rate', R4: 'Google Business actions',
+  R1: 'Average rating', R2: 'New reviews', R3: 'Review reply rate', R4: 'Google Business actions', R5: 'Listings consistency',
+  A1: 'AI citation rate',
   S1: 'Security state', S2: 'Backups', S3: 'Site connection',
 });
 
@@ -126,6 +127,8 @@ export const SENTENCES = {
   },
   R3: (f) => level(f, 'Recent reviews are being answered', 'Some recent reviews have no reply yet'),
   R4: (f) => moveSentence(f, 'Calls, direction requests and website clicks from your Google Business Profile are'),
+  R5: (f) => level(f, 'Your business details match across your online listings', 'Some of your online listings show outdated business details'),
+  A1: (f) => level(f, 'AI assistants often mention your business when people ask', 'AI assistants rarely mention your business yet'),
   S1: (f) => {
     if (!isNum(f.score)) return null;
     if (f.raw?.cur === 'ok') return { kind: 'up', weight: 5, text: 'Your website is protected' };

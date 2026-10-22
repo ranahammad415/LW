@@ -4,9 +4,9 @@
  */
 import { z } from 'zod';
 import { prisma } from '../prisma.js';
-import { DEFAULT_CONFIG_V1, PILLARS, PROFILES } from './defaultConfig.js';
+import { DEFAULT_CONFIG_V1, DEFAULT_CONFIG_V2, PILLARS, PROFILES } from './defaultConfig.js';
 
-export { DEFAULT_CONFIG_V1, PILLARS, PROFILES };
+export { DEFAULT_CONFIG_V1, DEFAULT_CONFIG_V2, PILLARS, PROFILES };
 
 export const CONFIG_TTL_MS = 5 * 60 * 1000;
 let cache = null; // { at, config }
@@ -65,6 +65,9 @@ const FACTOR_SCHEMAS = {
   S1: z.object({ ...factorBase, states: z.object({ ok: pct, warn: pct, fail: pct }) }),
   S2: z.object({ ...factorBase, days: z.number().int().min(1).max(60), scores: z.object({ okVerified: pct, ok: pct, miss1: pct, miss2plus: pct }) }),
   S3: z.object({ ...factorBase, ageDays: z.array(z.tuple([z.number().min(0).max(365), pct])).min(1).max(10), beyond: pct }),
+  // Config v2 (contract 1.8.0): optional, so version 1 (without them) stays valid and loadable.
+  R5: z.object({ ...factorBase, level: points, minChecked: z.number().int().min(1).max(200) }).optional(),
+  A1: z.object({ ...factorBase, level: points, maxAgeDays: z.number().int().min(7).max(120), minCells: z.number().int().min(1).max(1000) }).optional(),
 };
 
 const profileSchema = z

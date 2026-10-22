@@ -217,6 +217,47 @@ export function R4(s, cfg) {
   return volumeTrend('R4', cfg, s.gmb, (x) => (x.calls || 0) + (x.directions || 0) + (x.websiteClicks || 0));
 }
 
+/**
+ * R5 (config v2): listings consistency from the citation mirror (EmDash contract 1.8.0 §39). consistencyPct =
+ * correct / (correct + wrong) × 100 of the listings whose NAP was compared; level = pl(consistencyPct). null when
+ * fewer than `minChecked` listings were compared. Live scores only (the mirror has no history).
+ */
+export function R5(s, cfg) {
+  if (!s.citations?.linked) return unlinked('R5', cfg);
+  if (s.backfilled) return result('R5', cfg, { reason: 'no_data' });
+  const fc = cfg.factors.R5;
+  const correct = s.citations.statuses.filter((x) => x === 'correct').length;
+  const wrong = s.citations.statuses.filter((x) => x === 'wrong').length;
+  const checked = correct + wrong;
+  const pct = checked ? (correct / checked) * 100 : null;
+  const raw = { cur: r1(pct), prev: null, yoy: null };
+  if (checked < (fc.minChecked ?? 3)) return result('R5', cfg, { raw, reason: checked ? 'min_volume' : 'no_data' });
+  return result('R5', cfg, { l: pl(pct, fc.level), raw });
+}
+
+// ── AI visibility ──
+
+/**
+ * A1 (config v2): AI citation rate = cited / answered cells (prompt × platform, error cells excluded) of the latest
+ * completed non-demo AI-visibility run finished at most `maxAgeDays` before the score date; level = pl(rate %);
+ * trend = trend(rate − previous run's rate, in percentage points). null without such a run (or < minCells cells).
+ */
+export function A1(s, cfg) {
+  if (!s.ai?.linked) return unlinked('A1', cfg);
+  const fc = cfg.factors.A1;
+  const cutoff = new Date(Date.parse(`${s.date}T00:00:00Z`) - (fc.maxAgeDays ?? 45) * 86_400_000).toISOString().slice(0, 10);
+  const runs = [...s.ai.runs].sort((a, b) => (a.at < b.at ? -1 : 1));
+  const latest = runs.length ? runs[runs.length - 1] : null;
+  if (!latest || latest.at.slice(0, 10) < cutoff) return result('A1', cfg, { reason: 'no_data' });
+  const rate = latest.cells ? (latest.cited / latest.cells) * 100 : null;
+  const prevRun = runs.length > 1 ? runs[runs.length - 2] : null;
+  const prev = prevRun && prevRun.cells ? (prevRun.cited / prevRun.cells) * 100 : null;
+  const raw = { cur: r1(rate), prev: r1(prev), yoy: null };
+  if (latest.cells < (fc.minCells ?? 5)) return result('A1', cfg, { raw, reason: 'min_volume' });
+  const t = prev != null && prevRun.cells >= (fc.minCells ?? 5) ? trend(rate - prev, cfg.trendK) : null;
+  return result('A1', cfg, { t, l: pl(rate, fc.level), raw });
+}
+
 // ── Website & security ──
 
 /** Only these site states are scored by S1; anything else (`unknown`, the §38.9 check state `n/a`) is "no data". */
@@ -275,7 +316,7 @@ export function S3(s, cfg) {
   return result('S3', cfg, { l: step ? step[1] : fc.beyond, raw: { cur: r1(age), prev: null, yoy: null } });
 }
 
-export const FACTOR_REGISTRY = Object.freeze({ V1, V2, V3, V4, E1, E2, E3, L1, L2, L3, R1, R2, R3, R4, S1, S2, S3 });
+export const FACTOR_REGISTRY = Object.freeze({ V1, V2, V3, V4, E1, E2, E3, L1, L2, L3, R1, R2, R3, R4, R5, A1, S1, S2, S3 });
 
 /** Every configured factor that has an implementation, in registry order. */
 export function computeFactors(slice, cfg) {

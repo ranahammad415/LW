@@ -62,7 +62,12 @@ export async function loadHealthBundle(project, { from, to, cfg } = {}) {
   // Reviews feed R1–R3 from either source (native or DataForSEO): gated on a GBP identity, not the native location.
   const gbp = hasGbpIdentity(project);
 
-  const [gsc, ga4, gmb, reviews, leads, status, points, failChecks, runs] = await Promise.all([
+  // Config v2 factors (contract 1.8.0): only queried when the active config has them.
+  const wantR5 = !!cfg?.factors?.R5;
+  const wantA1 = !!cfg?.factors?.A1;
+  const a1From = new Date(asDate(start).getTime() - (cfg?.factors?.A1?.maxAgeDays ?? 45) * MS_DAY);
+
+  const [gsc, ga4, gmb, reviews, leads, status, points, failChecks, runs, citations, aiRuns] = await Promise.all([
     project.gscSiteUrl
       ? prisma.gscDailyMetric.findMany({ where: { projectId: pid, date: range }, select: { date: true, clicks: true, impressions: true, ctr: true, position: true } })
       : none,
@@ -94,6 +99,17 @@ export async function loadHealthBundle(project, { from, to, cfg } = {}) {
           take: 5000,
         })
       : none,
+    // R5: the citation mirror (current state only: there is no history, so backfilled dates get no R5).
+    wantR5 ? prisma.seoCitationMirror.findMany({ where: { projectId: pid }, select: { napStatus: true } }) : none,
+    // A1: completed, non-demo AI-visibility runs (admin or scheduled) with their cells.
+    wantA1
+      ? prisma.aiVisibilityRun.findMany({
+          where: { projectId: pid, status: 'completed', isDemo: false, finishedAt: { gte: a1From, lte: new Date(asDate(to).getTime() + MS_DAY - 1) } },
+          select: { id: true, finishedAt: true, results: { select: { cited: true, citationType: true } } },
+          orderBy: { finishedAt: 'asc' },
+          take: 60,
+        })
+      : none,
   ]);
 
   const rows = (list, map) => (Array.isArray(list) ? list.map((r) => ({ ...map(r), date: day(r.date) })) : null);
@@ -115,6 +131,13 @@ export async function loadHealthBundle(project, { from, to, cfg } = {}) {
       failChecks: Array.isArray(failChecks) ? failChecks : [],
       runs: Array.isArray(runs) ? runs.map((r) => ({ destinationId: r.destinationId || 'default', result: r.result, verified: r.verified === true, at: iso(r.finishedAt || r.createdAt) })) : [],
     },
+    citations: Array.isArray(citations) ? citations.map((c) => c.napStatus) : null,
+    aiRuns: Array.isArray(aiRuns)
+      ? aiRuns.map((r) => {
+          const cells = (r.results || []).filter((x) => x.citationType !== 'error');
+          return { at: iso(r.finishedAt), cells: cells.length, cited: cells.filter((x) => x.cited).length };
+        })
+      : null,
   };
 }
 
@@ -261,5 +284,11 @@ export function sliceBundle(bundle, date, cfg, { backfilled = false, now = Date.
     security: { linked: !!sec.security && (backfilled ? (sec.points || []).length > 0 : !!sec.status), state: securityState, criticalFail },
     backups: { linked: !!sec.backups, runs },
     connection,
+    // R5 (live only) and A1 (point in time: runs finished on or before the score date).
+    citations: { linked: Array.isArray(bundle.citations) && bundle.citations.length > 0, statuses: bundle.citations || [] },
+    ai: {
+      linked: Array.isArray(bundle.aiRuns),
+      runs: (bundle.aiRuns || []).filter((r) => r.at && r.at.slice(0, 10) <= w.date),
+    },
   };
 }
