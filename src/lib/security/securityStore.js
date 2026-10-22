@@ -9,7 +9,7 @@
  */
 import { prisma } from '../prisma.js';
 import { J } from './jsonNull.js';
-import { sanitizeSecurityEventData, sanitizeStatus, sanitizeHistory, sanitizeBackups, sanitizeRun, isoOrNull, ackEndedBy } from '../siteAdapters/security.js';
+import { sanitizeSecurityEventData, sanitizeStatus, sanitizeHistory, sanitizeBackups, sanitizeRun, isoOrNull, ackEndedBy, SECURITY_NA } from '../siteAdapters/security.js';
 
 const toDate = (v) => (v ? new Date(v) : null);
 const utcDay = (d = new Date()) => new Date(d).toISOString().slice(0, 10);
@@ -58,6 +58,9 @@ export async function applyCheckChange(projectId, change, { category = null, evi
   const existing = await prisma.securityCheckState.findUnique({ where: { projectId_checkId: { projectId, checkId: change.checkId } } });
   if (existing?.lastChangedAt && new Date(existing.lastChangedAt).getTime() > at.getTime()) return { applied: false, previous: existing.state };
   const nonOk = change.to !== 'ok';
+  // §38.9: n/a = the feature is switched off. Nothing of the old state may survive (O-R3-2: a check that went n/a kept
+  // "The agency backup is overdue", severity critical): summary = the site's n/a text, no evidence / fix / client text.
+  const na = change.to === SECURITY_NA;
   // §37.5: any state change ends a site acknowledgement (a new problem needs a new one). `siteChanged`: the event
   // itself is a state change on the site (check_failed, a status_changed entry), also when the OS never saw the
   // state in between (fail → ok → fail merged away: stored fail, incoming fail). O-R2-1.
@@ -74,6 +77,9 @@ export async function applyCheckChange(projectId, change, { category = null, evi
     ...(remediation != null ? { remediation } : {}),
     ...(nonOk && evidence !== undefined ? { evidence, evidenceAt: at } : {}),
     ...(!nonOk && !keepEvidence ? { evidence: null, evidenceAt: null } : {}),
+    ...(na
+      ? { summary: change.summary ?? null, reason: change.reason || 'disabled', clientSummary: null, remediation: null, evidence: null, evidenceAt: null, acknowledged: null }
+      : {}),
   };
   if (existing) {
     await prisma.securityCheckState.update({ where: { id: existing.id }, data: J(data) });
@@ -124,8 +130,11 @@ export async function applySecurityEvent(project, ev, { log } = {}) {
 
   switch (ev.type) {
     case 'security.status_changed': {
+      if (data.droppedChanges > 0) {
+        log?.warn?.({ projectId, eventId: ev.id, sent: data.changes.length + data.droppedChanges, dropped: data.droppedChanges }, 'security.status_changed: changes dropped by the sanitizer');
+      }
       for (const c of data.changes) {
-        const t = { checkId: c.id, from: c.from, to: c.to, at: c.at || evAt, severity: c.severity, summary: c.summary, clientSummary: c.clientSummary };
+        const t = { checkId: c.id, from: c.from, to: c.to, at: c.at || evAt, severity: c.severity, summary: c.summary, clientSummary: c.clientSummary, ...(c.reason ? { reason: c.reason } : {}) };
         const isNew = await recordTransition(projectId, t, 'event');
         await applyCheckChange(projectId, t, { siteChanged: true });
         if (isNew) raised.push(t);
@@ -257,9 +266,12 @@ async function upsertRun(projectId, row, origin) {
  * A stored check missing from a `full` status is not run there any more: it becomes unknown (never ok).
  * Returns the new transitions (for alerts).
  */
-export async function recordStatusPull(projectId, rawStatus, { now = new Date() } = {}) {
+export async function recordStatusPull(projectId, rawStatus, { now = new Date(), log } = {}) {
   const status = sanitizeStatus(rawStatus);
   if (!status) return { ok: false, transitions: [] };
+  if (status.droppedChecks > 0) {
+    log?.warn?.({ projectId, sent: status.sentChecks, stored: status.checks.length, dropped: status.droppedChecks }, 'Security status: checks dropped by the sanitizer');
+  }
   const stored = await prisma.securityCheckState.findMany({ where: { projectId } });
   const byId = new Map(stored.map((r) => [r.checkId, r]));
   const transitions = [];
@@ -274,7 +286,8 @@ export async function recordStatusPull(projectId, rawStatus, { now = new Date() 
       if (await recordTransition(projectId, t, 'pull')) transitions.push(t);
     }
     // evidence only for checks that are in play (n/a = switched off, §38.9: nothing to show)
-    const nonOk = c.state !== 'ok' && c.state !== 'n/a';
+    const na = c.state === SECURITY_NA;
+    const nonOk = c.state !== 'ok' && !na;
     const data = {
       category: c.category,
       severity: c.severity,
@@ -287,8 +300,9 @@ export async function recordStatusPull(projectId, rawStatus, { now = new Date() 
       lastChangedAt: toDate(c.lastChangedAt) || (changed ? new Date(at) : prev?.lastChangedAt ?? null),
       summary: c.summary,
       // A full status is authoritative for client visibility: no clientSummary = not client-visible (any more).
-      clientSummary: c.clientSummary,
-      remediation: c.remediation,
+      // n/a (§38.9): never client-visible, no fix text.
+      clientSummary: na ? null : c.clientSummary,
+      remediation: na ? null : c.remediation,
       refs: c.refs,
       // A transition stored by this pull that happened after the acknowledgement ends it (§37.5, O-R2-1), whatever
       // `active` the site computed when it answered.
@@ -307,7 +321,8 @@ export async function recordStatusPull(projectId, rawStatus, { now = new Date() 
       if (seen.has(prev.checkId) || prev.state === 'unknown') continue;
       const t = { checkId: prev.checkId, from: prev.state, to: 'unknown', at: now.toISOString(), severity: prev.severity, summary: 'No longer reported by the site (not run there).', clientSummary: null };
       if (await recordTransition(projectId, t, 'pull')) transitions.push(t);
-      await prisma.securityCheckState.update({ where: { id: prev.id }, data: J({ state: 'unknown', reason: 'not_run', since: now, lastChangedAt: now, evidence: null, evidenceAt: null, clientSummary: null, acknowledged: null }) });
+      // The old summary / fix text go too (O-R3-2: "The agency backup is overdue" stayed on a check the site no longer runs).
+      await prisma.securityCheckState.update({ where: { id: prev.id }, data: J({ state: 'unknown', reason: 'not_run', since: now, lastChangedAt: now, summary: t.summary, remediation: null, evidence: null, evidenceAt: null, clientSummary: null, acknowledged: null }) });
     }
   }
   const st = await prisma.securitySiteStatus.findUnique({ where: { projectId } });

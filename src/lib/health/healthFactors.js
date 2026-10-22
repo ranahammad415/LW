@@ -209,11 +209,18 @@ export function R4(s, cfg) {
 
 // ── Website & security ──
 
-/** S1: site security state (EmDash security capability). A failing critical/high check is always `fail`. */
+/** Only these site states are scored by S1; anything else (`unknown`, the §38.9 check state `n/a`) is "no data". */
+const S1_SCORED = new Set(['ok', 'warn', 'fail']);
+
+/**
+ * S1: site security state (EmDash security capability). A failing critical/high check is always `fail`.
+ * `n/a` (contract v1.7.0 §38.9: a feature switched off) is treated like unknown: excluded, never scored.
+ */
 export function S1(s, cfg) {
   if (!s.security.linked) return unlinked('S1', cfg);
   const fc = cfg.factors.S1;
-  const state = s.security.criticalFail ? 'fail' : s.security.state;
+  const raw = s.security.criticalFail ? 'fail' : s.security.state;
+  const state = S1_SCORED.has(raw) ? raw : null;
   const l = state && isNum(fc.states[state]) ? fc.states[state] : null;
   return result('S1', cfg, { l, raw: { cur: state || 'unknown', prev: null, yoy: null }, reason: l == null ? 'no_data' : 'ok' });
 }

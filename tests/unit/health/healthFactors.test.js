@@ -178,6 +178,16 @@ describe('website & security', () => {
     expect(run('S1', crit).score).toBe(100);
     expect(run('S1', bundle((b) => { b.security.status.overallState = 'unknown'; })).score).toBeNull();
   });
+  it('S1: the §38.9 state n/a is treated like unknown (excluded, never scored), even if a config carries a weight for it', () => {
+    const na = run('S1', bundle((b) => { b.security.status.overallState = 'n/a'; }));
+    expect(na).toMatchObject({ score: null, reason: 'no_data' });
+    expect(na.raw.cur).toBe('unknown');
+    const cfg = { ...CFG, factors: { ...CFG.factors, S1: { ...CFG.factors.S1, states: { ...CFG.factors.S1.states, 'n/a': 100 } } } };
+    const f = FACTOR_REGISTRY.S1(sliceBundle(bundle((b) => { b.security.status.overallState = 'n/a'; }), '2026-10-22', cfg, { now: NOW }), cfg);
+    expect(f.score).toBeNull();
+    const pt = bundle((b) => { b.security.points = [{ date: '2026-08-20', overallState: 'n/a' }]; });
+    expect(FACTOR_REGISTRY.S1(sliceBundle(pt, '2026-08-20', CFG, { now: NOW, backfilled: true }), CFG).score).toBeNull();
+  });
   it('S2 streaks per destination; empty → null; verified → 100', () => {
     const one = bundle((b) => { b.security.runs.push({ destinationId: 'agency-db', result: 'missed', verified: false, at: '2026-10-21T23:00:00.000Z' }); });
     expect(run('S2', one).score).toBe(50);

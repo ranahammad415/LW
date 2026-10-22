@@ -129,7 +129,7 @@ export async function pullSecurity(projectId, { interactive = false, log, now = 
     if (hasSecurity(project)) {
       await guard('status', async () => {
         const res = await emdashRoutes.securityStatus(conn, { detail: 'full' }, NO_RETRY);
-        const rec = await recordStatusPull(projectId, res?.status, { now });
+        const rec = await recordStatusPull(projectId, res?.status, { now, log });
         for (const t of rec.transitions) await alertForTransition(project, t, { now, log }).catch(() => {});
         return rec.ok ? 'ok' : 'INVALID';
       });

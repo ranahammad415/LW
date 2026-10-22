@@ -215,7 +215,8 @@ export function sanitizeStatus(s) {
   }
   const seen = new Set();
   const checks = [];
-  for (const c of (Array.isArray(s.checks) ? s.checks : []).slice(0, SECURITY_LIMITS.checks)) {
+  const sent = Array.isArray(s.checks) ? s.checks : [];
+  for (const c of sent.slice(0, SECURITY_LIMITS.checks)) {
     const sc = sanitizeCheck(c, { withEvidence: detail === 'full' });
     if (sc && !seen.has(sc.id)) {
       seen.add(sc.id);
@@ -232,6 +233,10 @@ export function sanitizeStatus(s) {
     overall: { state, score, counts: counts(s.overall.counts), since: isoOrNull(s.overall.since) },
     categories,
     checks,
+    // How many of the site's checks the sanitizer left out (invalid, duplicate or over the limit). The caller logs it
+    // when > 0, so a new state or field on the site is never dropped silently (release-3 e2e O-R3-2).
+    sentChecks: sent.length,
+    droppedChecks: sent.length - checks.length,
     disabled: (Array.isArray(s.disabled) ? s.disabled : []).filter(isCheckId).slice(0, SECURITY_LIMITS.checks),
     backups: sanitizeBackups(s.backups),
     scans: {
@@ -317,9 +322,11 @@ export function sanitizeSecurityEventData(type, raw) {
           severity: c.severity,
           summary: safeText(c.summary, SECURITY_LIMITS.summary),
           clientSummary: typeof c.clientSummary === 'string' && c.clientSummary.trim() ? safeText(c.clientSummary, SECURITY_LIMITS.clientSummary) : null,
+          ...(c.to === SECURITY_NA ? { reason: oneOf(c.reason, SECURITY_NA_REASONS) || 'disabled' } : {}),
         });
       }
-      return { data: { before, after, changes, truncated: d.truncated === true || d.changes.length > SECURITY_LIMITS.changes } };
+      const droppedChanges = Math.min(d.changes.length, SECURITY_LIMITS.changes) - changes.length;
+      return { data: { before, after, changes, droppedChanges, truncated: d.truncated === true || d.changes.length > SECURITY_LIMITS.changes } };
     }
     case 'security.scan_completed': {
       if (typeof d.scanId !== 'string' || !ID_RE.test(d.scanId)) return { error: 'data.scanId is invalid' };
