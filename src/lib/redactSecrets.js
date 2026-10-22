@@ -34,7 +34,9 @@ function isPlainObject(v) {
  * The PM preview link is a token-only capability that can approve the PM stage: clients must never receive it. Dropped
  * from every response to a CLIENT user and from every /api/client/* response (also an OWNER acting through X-Client-Id).
  */
-export const CLIENT_DROP_KEYS = new Set(['pmPreviewUrl']);
+// Health score v2: staff factor matrices, numeric security scores and security check ids never reach a client audience
+// (the client views are allow-lists already; this is the second layer).
+export const CLIENT_DROP_KEYS = new Set(['pmPreviewUrl', 'healthFactors', 'securityScore', 'checkId']);
 
 /**
  * The agent flag (User.isAgent, SEO Engine OS-01) is server-side only: an agent must look exactly like a human
