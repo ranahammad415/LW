@@ -5,7 +5,6 @@
 import { z } from 'zod';
 import { executeOsRequest, resolveRoute } from '../invoke.js';
 import { applyFieldsLimit } from '../redact.js';
-import { classifyRequest } from '../danger.js';
 
 const METHOD = z.enum(['GET', 'POST', 'PATCH', 'PUT', 'DELETE']);
 const RO = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
@@ -76,8 +75,3 @@ export const GENERIC_TOOLS = [
     },
   },
 ];
-
-/** Danger level of an os_api_request call before running it (used for audit rows of refused calls). */
-export function dangerOf(args) {
-  return classifyRequest({ method: args?.method, routePattern: args?.path, path: args?.path, query: args?.query, body: args?.body }).level;
-}
