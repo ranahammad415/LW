@@ -4486,6 +4486,10 @@ model McpConfirmation {
   tokenHash  String    @unique @db.VarChar(64)
   expiresAt  DateTime
   consumedAt DateTime?
+  /// dangerous (in-chat confirm) | critical (also needs the owner approval in the OS UI, MCP_CRITICAL_APPROVAL)
+  level        String    @default("dangerous") @db.VarChar(16)
+  approvedAt   DateTime?
+  approvedById String?   @db.VarChar(191)
   createdAt  DateTime  @default(now())
 
   @@index([expiresAt])

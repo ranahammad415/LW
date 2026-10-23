@@ -107,12 +107,32 @@ CREATE TABLE IF NOT EXISTS `mcpconfirmation` (
   `tokenHash` VARCHAR(64) NOT NULL,
   `expiresAt` DATETIME(3) NOT NULL,
   `consumedAt` DATETIME(3) NULL,
+  `level` VARCHAR(16) NOT NULL DEFAULT 'dangerous',
+  `approvedAt` DATETIME(3) NULL,
+  `approvedById` VARCHAR(191) NULL,
   `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   UNIQUE INDEX `mcpconfirmation_tokenHash_key`(`tokenHash`),
   INDEX `mcpconfirmation_expiresAt_idx`(`expiresAt`),
   INDEX `mcpconfirmation_userId_createdAt_idx`(`userId`, `createdAt`),
   PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- Critical-action approval columns (security review M3). In the CREATE above for fresh databases; added here for a
+-- database that already ran an earlier copy of this branch's migration.
+SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'mcpconfirmation' AND COLUMN_NAME = 'level');
+SET @sql := IF(@col = 0, 'ALTER TABLE `mcpconfirmation` ADD COLUMN `level` VARCHAR(16) NOT NULL DEFAULT ''dangerous''', 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'mcpconfirmation' AND COLUMN_NAME = 'approvedAt');
+SET @sql := IF(@col = 0, 'ALTER TABLE `mcpconfirmation` ADD COLUMN `approvedAt` DATETIME(3) NULL', 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'mcpconfirmation' AND COLUMN_NAME = 'approvedById');
+SET @sql := IF(@col = 0, 'ALTER TABLE `mcpconfirmation` ADD COLUMN `approvedById` VARCHAR(191) NULL', 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- ── mcpauditlog (no FKs on purpose; retention MCP_AUDIT_RETENTION_DAYS) ──
 CREATE TABLE IF NOT EXISTS `mcpauditlog` (
