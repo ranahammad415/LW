@@ -52,14 +52,15 @@ export function fillOnly(existing, patch) {
 }
 
 /**
- * The data gap of a restore (pure): database scopes only. Completed: [eventsLostAfter ?? pointInTime ?? startedAt,
- * completedAt]. Rolled back: what the site wrote between the confirmation and the rollback is gone with the rolled-back
- * database, so [startedAt ?? completedAt, rolledBackAt]. Null otherwise.
+ * The data gap of a restore (pure): database scopes only (files scopes: no restart, no bridge pause, no gap).
+ * Completed: [eventsLostAfter ?? pointInTime ?? startedAt, completedAt]. Rolled back (site team, 2026-10-23): the rollback
+ * swaps the pre-restore database back (counters raised again), so the restore's own gap is undone and the rows the site
+ * wrote between restore_completed.at and restore_rolled_back.at are lost: [completedAt ?? startedAt, rolledBackAt].
  */
 export function dataGapOf(row) {
   if (!row || !isDbScope(row.scope)) return null;
   if (row.result === 'rolled_back' && row.rolledBackAt) {
-    const from = row.startedAt || row.completedAt;
+    const from = row.completedAt || row.startedAt;
     return from ? { from: new Date(from), to: new Date(row.rolledBackAt) } : null;
   }
   if (row.result === 'ok' && row.completedAt) {
@@ -203,19 +204,66 @@ export async function clearOrphanLeads(row) {
   return res?.count || 0;
 }
 
-/** Leads / entries after the database changed for `row` (completion or rollback). */
+/** At most this many GHL mirrors are re-queued per restore / rollback (the lead-import queue then sends ≤ 20 a minute). */
+export const REMIRROR_MAX = 500;
+
+/**
+ * GoHighLevel leads whose site mirror (lead-import) the database swap removed (site team, 2026-10-23): re-queue them on
+ * the existing lead-import queue with a new idempotency epoch (`mirrorRestoreId`: the restoreId, or the rollbackId after
+ * a rollback) and `cmsMirrorLeadId` cleared; the new response sets it again. Once per restore and once per rollback
+ * (compare-and-set on SiteRestore.remirrorAt / remirrorRollbackAt), at most REMIRROR_MAX leads.
+ *   completed (db / full): ghl, not erased, mirrorState done, received after pointInTime and before completion
+ *     (older mirrors are in the restored backup and still exist);
+ *   rolled_back: ghl, not erased, done, received between completion and rollback, or re-mirrored by this restore
+ *     (that new mirror lived in the database rolled away; the site de-duplicates on provider + contact + form).
+ */
+export async function requeueGhlMirrors(row, phase, { now = new Date(), log } = {}) {
+  if (!row?.id || !isDbScope(row.scope)) return 0;
+  const claimCol = phase === 'rolled_back' ? 'remirrorRollbackAt' : 'remirrorAt';
+  let window;
+  let epoch;
+  if (phase === 'completed') {
+    if (!row.pointInTime || !row.completedAt) return 0;
+    window = { gt: new Date(row.pointInTime), lt: new Date(row.completedAt) };
+    epoch = row.restoreId;
+  } else {
+    if (!row.completedAt || !row.rolledBackAt) return 0;
+    window = { gt: new Date(row.completedAt), lt: new Date(row.rolledBackAt) };
+    epoch = row.rollbackId || `rb_${row.restoreId}`.slice(0, 64);
+  }
+  const claim = await prisma.siteRestore.updateMany({ where: { id: row.id, [claimCol]: null }, data: { [claimCol]: now } });
+  if (!claim?.count) return 0;
+  const base = { projectId: row.projectId, provider: 'ghl', erasedAt: null, mirrorState: 'done' };
+  const inWindow = [{ siteCreatedAt: window }, { siteCreatedAt: null, receivedAt: window }];
+  const OR = phase === 'rolled_back' ? [...inWindow, { mirrorRestoreId: row.restoreId }] : inWindow;
+  const leads = await prisma.cmsLead.findMany({ where: { ...base, OR }, select: { id: true }, orderBy: { receivedAt: 'asc' }, take: REMIRROR_MAX + 1 });
+  const ids = leads.slice(0, REMIRROR_MAX).map((l) => l.id);
+  if (!ids.length) return 0;
+  const res = await prisma.cmsLead.updateMany({
+    where: { id: { in: ids }, mirrorState: 'done' },
+    data: { mirrorState: 'pending', mirrorNextAt: now, mirrorAttempts: 0, mirrorError: null, cmsMirrorLeadId: null, mirrorRestoreId: epoch },
+  });
+  const n = res?.count || 0;
+  if (leads.length > REMIRROR_MAX) log?.warn?.({ projectId: row.projectId, restoreId: row.restoreId, requeued: n }, `Site restore: more than ${REMIRROR_MAX} GHL mirrors to re-create; the rest need a staff Retry`);
+  else log?.info?.({ projectId: row.projectId, restoreId: row.restoreId, phase, requeued: n }, 'Site restore: GHL lead mirrors re-queued (lead-import)');
+  return n;
+}
+
+/** Leads / entries / GHL mirrors after the database changed for `row` (completion or rollback). */
 async function reconcileAfterSwap(row, phase, { now, log }) {
   if (!isDbScope(row.scope)) return;
   if (phase === 'completed' && row.result === 'ok') {
     const from = row.pointInTime || row.eventsLostAfter;
     const n = await markOrphanLeads(row, { now, from, to: row.completedAt });
     if (n) log?.info?.({ projectId: row.projectId, restoreId: row.restoreId, leads: n }, 'Site restore: leads created after the backup point marked orphaned_by_restore');
+    await requeueGhlMirrors(row, 'completed', { now, log });
   }
   if (phase === 'rolled_back') {
     const cleared = await clearOrphanLeads(row);
     // What the site received between the restore and the rollback lived in the database that was rolled away.
     const n = row.completedAt && row.rolledBackAt ? await markOrphanLeads(row, { now, from: row.completedAt, to: row.rolledBackAt }) : 0;
     if (cleared || n) log?.info?.({ projectId: row.projectId, restoreId: row.restoreId, cleared, leads: n }, 'Site restore rolled back: orphan markers updated');
+    await requeueGhlMirrors(row, 'rolled_back', { now, log });
   }
 }
 
@@ -246,6 +294,10 @@ export async function applyRestoreEvent(project, type, data, ev, { log, now = ne
     'event'
   );
   if (!out.row) return 'stored';
+  if (phase === 'failed' && firstTime && out.existing?.result === 'ok') {
+    // Site team: restore_failed never follows restore_completed for one restoreId. Kept ok; reported as a site bug.
+    log?.warn?.({ projectId, restoreId: data.restoreId, phase: data.phase, errorCode: data.errorCode }, 'Site bug: backup.restore_failed after restore_completed for the same restoreId (result kept ok)');
+  }
   if (!firstTime) {
     log?.info?.({ projectId, restoreId: data.restoreId, phase, eventId: ev?.eventId }, 'Site restore phase already stored (re-sent event); gaps filled only');
     return 'stale';
@@ -282,7 +334,9 @@ export async function recordRestoreState(projectId, raw, { now = new Date(), log
   if (!state) return null;
   const l = state.lastRestore;
   if (l) {
-    const terminal = l.result === 'ok' ? { completedAt: toDate(l.at) } : l.result === 'failed' ? { failedAt: toDate(l.at) } : {};
+    // lastRestore.at is when the RESTORE finished, also for result rolled_back (the rollback time comes only from the
+    // restore_rolled_back event's `at`); rollbackAvailableUntil is null on a rolled_back record.
+    const terminal = l.result === 'ok' || l.result === 'rolled_back' ? { completedAt: toDate(l.at) } : l.result === 'failed' ? { failedAt: toDate(l.at) } : {};
     const out = await writeRestore(
       projectId,
       l.restoreId,

@@ -70,6 +70,9 @@ import { restoreLines } from '../../../src/lib/security/securityReport.js';
 import { probeStatusEndpoint, probeProject, applyIncidentLogic, computeDailyRollup, MAINTENANCE, _resetUptimeState } from '../../../src/lib/uptime.js';
 import { staffHealthView } from '../../../src/lib/health/healthViews.js';
 import { syncEmdashInventory } from '../../../src/lib/emdashSync.js';
+import { REMIRROR_MAX } from '../../../src/lib/security/restoreStore.js';
+import { leadImportIdempotencyKey } from '../../../src/lib/ghlForms/leadImport.js';
+import { RESTORE_FAILED, lastStatusSaidRestoreFailed } from '../../../src/lib/uptime.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(here, '../../fixtures/cms-contract');
@@ -217,6 +220,14 @@ describe('storage, idempotency per restoreId and phase, alerts', () => {
     await applyRestoreEvent(PROJECT, done.type, sanitizeRestoreEventData(done.type, done.data).data, done, { log: l });
     expect(rows()[0].dataGapFrom).toBeNull();
     expect(prisma._rows('cmsLead')[0].orphanedByRestoreId).toBeNull();
+    // files-subset as the site sends it (answer 3): no restart, no bridge pause, eventsLostAfter null → no gap, no orphan
+    const sub = structuredClone(evOf('backup.restore_completed'));
+    sub.data.restoreId = 'rst_subset';
+    sub.data.scope = 'files-subset';
+    sub.data.bridge = { countersRaised: false, eventsLostAfter: null };
+    await applyRestoreEvent(PROJECT, sub.type, sanitizeRestoreEventData(sub.type, sub.data).data, sub, { log: l });
+    expect(rows().find((r) => r.restoreId === 'rst_subset')).toMatchObject({ dataGapFrom: null, dataGapTo: null, eventsLostAfter: null, orphanedLeads: 0, remirrorAt: null });
+    expect(l.warn.mock.calls.some(([, msg]) => /WITHOUT raised counters/.test(msg))).toBe(false);
     const db = structuredClone(evOf('backup.restore_completed'));
     db.data.restoreId = 'rst_other';
     db.data.bridge.countersRaised = false;
@@ -229,8 +240,11 @@ describe('storage, idempotency per restoreId and phase, alerts', () => {
     expect(nextResult('running', 'completed')).toBe('ok');
     expect(nextResult('ok', 'failed')).toBe('ok');
     expect(nextResult('rolled_back', 'completed')).toBe('rolled_back');
-    expect(dataGapOf({ scope: 'db', result: 'rolled_back', startedAt: new Date('2026-11-03T09:12:02Z'), rolledBackAt: new Date('2026-11-05T07:40:00Z') })).toEqual({ from: new Date('2026-11-03T09:12:02Z'), to: new Date('2026-11-05T07:40:00Z') });
+    // site team answer 2: a rolled-back db / full restore's gap is completed.at → rolledBackAt (the restore's own gap is undone)
+    expect(dataGapOf({ scope: 'db', result: 'rolled_back', startedAt: new Date('2026-11-03T09:12:02Z'), completedAt: new Date('2026-11-03T09:14:20Z'), pointInTime: new Date('2026-11-02T08:30:00Z'), rolledBackAt: new Date('2026-11-05T07:40:00Z') })).toEqual({ from: new Date('2026-11-03T09:14:20Z'), to: new Date('2026-11-05T07:40:00Z') });
+    expect(dataGapOf({ scope: 'full', result: 'rolled_back', startedAt: new Date('2026-11-03T09:12:02Z'), rolledBackAt: new Date('2026-11-05T07:40:00Z') })).toEqual({ from: new Date('2026-11-03T09:12:02Z'), to: new Date('2026-11-05T07:40:00Z') });
     expect(dataGapOf({ scope: 'files-subset', result: 'ok', completedAt: new Date() })).toBeNull();
+    expect(dataGapOf({ scope: 'files', result: 'rolled_back', completedAt: new Date(), rolledBackAt: new Date() })).toBeNull();
     expect(RESTORE_ALERT_SEVERITY).toEqual({ started: 'info', completed: 'info', failed: 'critical', rolled_back: 'high' });
     expect(restoreAlertText('failed', { scope: 'db', phase: 'check', errorCode: 'INTEGRITY', retryable: false }).title).toBe('Site restore FAILED (database, phase check, INTEGRITY)');
   });
@@ -389,5 +403,148 @@ describe('inventory: entries missing after a database restore are orphaned_by_re
     expect(out.deleted).toBe(0);
     const pages = prisma._rows('wpPage');
     expect(pages.every((p) => p.orphanedByRestoreId === RID && p.status === 'publish')).toBe(true);
+  });
+});
+
+// ── site team answers (2026-10-23): rollback gap, failed-after-completed, GHL re-mirror, pull `at`, uptime ──
+const apply = (e, opts = {}) => applyRestoreEvent(PROJECT, e.type, sanitizeRestoreEventData(e.type, e.data).data, e, { log: log(), alert: false, ...opts });
+const ghl = (leadId, receivedAt, over = {}) =>
+  prisma.cmsLead.create({ data: { projectId: 'p1', leadId, provider: 'ghl', externalId: `c_${leadId}`, formId: 'ghl-contact', receivedAt: new Date(receivedAt), mirrorState: 'done', cmsMirrorLeadId: `m_${leadId}`, ...over } });
+const lead = (id) => prisma._rows('cmsLead').find((l) => l.leadId === id);
+
+describe('follow-up: rollback data gap and orphans (answer 2), failed after completed (answer 1)', () => {
+  it('a rolled-back full restore: gap completed.at → rolledBackAt; the restore\'s own orphans are cleared, the rollback window orphans', async () => {
+    await prisma.cmsLead.create({ data: { projectId: 'p1', leadId: 'before_restore', siteCreatedAt: new Date('2026-11-02T12:00:00Z') } });
+    await prisma.cmsLead.create({ data: { projectId: 'p1', leadId: 'between', siteCreatedAt: new Date('2026-11-04T12:00:00Z') } });
+    await apply(evOf('backup.restore_completed'));
+    expect(lead('before_restore').orphanedByRestoreId).toBe(RID);
+    await apply(evOf('backup.restore_rolled_back'));
+    const r = rows()[0];
+    expect(r.dataGapFrom.toISOString()).toBe('2026-11-03T09:14:20.000Z');
+    expect(r.dataGapTo.toISOString()).toBe('2026-11-05T07:40:00.000Z');
+    expect(lead('before_restore').orphanedByRestoreId).toBeNull();
+    expect(lead('between').orphanedByRestoreId).toBe(RID);
+  });
+  it('restore_failed after restore_completed (same restoreId): result stays ok, logged at WARN as a site bug', async () => {
+    await apply(evOf('backup.restore_completed'));
+    const f = structuredClone(evOf('backup.restore_failed'));
+    f.data.restoreId = RID;
+    const l = log();
+    await applyRestoreEvent(PROJECT, f.type, sanitizeRestoreEventData(f.type, f.data).data, f, { log: l, alert: false });
+    expect(rows()[0].result).toBe('ok');
+    expect(l.warn.mock.calls.some(([o, msg]) => /Site bug/.test(msg) && o.restoreId === RID)).toBe(true);
+  });
+});
+
+describe('follow-up: GHL lead mirrors re-queued after a database restore / rollback (answer 4)', () => {
+  it('re-queues only ghl + done + not erased + received after pointInTime and before completion; once per restore', async () => {
+    await ghl('g_after', '2026-11-02T12:00:00Z');
+    await ghl('g_before', '2026-11-01T12:00:00Z');
+    await ghl('g_erased', '2026-11-02T12:00:00Z', { erasedAt: new Date('2026-11-02T13:00:00Z') });
+    await ghl('g_failed', '2026-11-02T12:00:00Z', { mirrorState: 'failed', cmsMirrorLeadId: null });
+    await ghl('g_later', '2026-11-03T10:00:00Z');
+    await prisma.cmsLead.create({ data: { projectId: 'p1', leadId: 'site_lead', receivedAt: new Date('2026-11-02T12:00:00Z'), siteCreatedAt: new Date('2026-11-02T12:00:00Z') } });
+    const keyBefore = leadImportIdempotencyKey(lead('g_after'));
+    await apply(evOf('backup.restore_completed'));
+    expect(lead('g_after')).toMatchObject({ mirrorState: 'pending', cmsMirrorLeadId: null, mirrorRestoreId: RID, mirrorAttempts: 0 });
+    for (const id of ['g_before', 'g_erased', 'g_later']) expect(lead(id)).toMatchObject({ mirrorState: 'done', mirrorRestoreId: null });
+    expect(lead('g_failed').mirrorState).toBe('failed');
+    expect(lead('site_lead').mirrorState).toBeNull();
+    // a new idempotency key (the site's 24 h replay cache cannot answer with the lost mirror); unchanged without an epoch
+    const keyAfter = leadImportIdempotencyKey(lead('g_after'));
+    expect(keyAfter).not.toBe(keyBefore);
+    expect(keyAfter).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(leadImportIdempotencyKey({ ...lead('g_after'), mirrorRestoreId: null })).toBe(keyBefore);
+    expect(rows()[0].remirrorAt).toBeInstanceOf(Date);
+    // once per restoreId: the pull of the same restore (or a re-sent completion) never re-queues again
+    await prisma.cmsLead.updateMany({ where: { leadId: 'g_after' }, data: { mirrorState: 'done', cmsMirrorLeadId: 'm_new' } });
+    await recordBackupStatus('p1', ex('backup-status.response--restore'));
+    const again = { ...evOf('backup.restore_completed'), eventId: '01JB2RS0000000000000000099' };
+    await apply(again);
+    expect(lead('g_after')).toMatchObject({ mirrorState: 'done', cmsMirrorLeadId: 'm_new' });
+  });
+  it('after the rollback: leads received between completion and rollback, and the ones this restore re-mirrored', async () => {
+    await ghl('g_after', '2026-11-02T12:00:00Z');
+    await apply(evOf('backup.restore_completed'));
+    await prisma.cmsLead.updateMany({ where: { leadId: 'g_after' }, data: { mirrorState: 'done', cmsMirrorLeadId: 'm_restored_db' } });
+    await ghl('g_between', '2026-11-04T12:00:00Z');
+    await ghl('g_after_rollback', '2026-11-05T09:00:00Z');
+    await apply(evOf('backup.restore_rolled_back'));
+    const rbk = 'rbk_mvl4c3d2e1f0a9b8c7d6e5f4a3';
+    expect(lead('g_between')).toMatchObject({ mirrorState: 'pending', cmsMirrorLeadId: null, mirrorRestoreId: rbk });
+    expect(lead('g_after')).toMatchObject({ mirrorState: 'pending', cmsMirrorLeadId: null, mirrorRestoreId: rbk });
+    expect(lead('g_after_rollback')).toMatchObject({ mirrorState: 'done', mirrorRestoreId: null });
+    expect(rows()[0].remirrorRollbackAt).toBeInstanceOf(Date);
+  });
+  it('a files restore never re-queues; the cap is REMIRROR_MAX', async () => {
+    await ghl('g_after', '2026-11-02T12:00:00Z');
+    const files = structuredClone(evOf('backup.restore_completed'));
+    files.data.scope = 'files';
+    await apply(files);
+    expect(lead('g_after').mirrorState).toBe('done');
+    expect(REMIRROR_MAX).toBe(500);
+  });
+});
+
+describe('follow-up: pull of a rolled_back lastRestore (answer 5)', () => {
+  it('lastRestore.at is the restore finish time; rollbackAvailableUntil null', async () => {
+    const res = ex('backup-status.response--restore');
+    Object.assign(res.backups.restore.lastRestore, { result: 'rolled_back', rollbackAvailableUntil: null });
+    await recordBackupStatus('p1', res);
+    expect(rows()[0]).toMatchObject({ result: 'rolled_back', completedAt: new Date('2026-11-03T09:14:20Z'), rolledBackAt: null, rollbackAvailableUntil: null, dataGapFrom: null });
+  });
+});
+
+describe('follow-up: uptime around the swap (answer 6)', () => {
+  const project = { id: 'p1', name: 'Oasis', wpUrl: 'https://s.example', cmsType: 'EMDASH' };
+  const html503 = () => ({ status: 503, location: null, cert: null, body: Buffer.from('<html>503</html>') });
+  const json = (obj) => ({ status: 200, location: null, cert: null, body: Buffer.from(JSON.stringify(obj)) });
+  const startRestore = () => apply(evOf('backup.restore_started')); // started 2026-11-03T09:12:02Z
+  beforeEach(() => _resetUptimeState());
+
+  it('connection errors, proxy 502 and timeouts on both URLs inside the window are maintenance', async () => {
+    await startRestore();
+    const errs = [
+      async () => { throw Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }); },
+      async () => ({ status: 502, location: null, cert: null, body: Buffer.alloc(0) }),
+      async () => { throw Object.assign(new Error('timeout'), { code: 'LW_TIMEOUT' }); },
+    ];
+    let t = Date.parse('2026-11-03T09:13:00Z');
+    for (const request of errs) {
+      const out = await probeProject(project, { now: new Date((t += 60_000)), request, sleep: async () => {} });
+      expect(out.incident).toBe('maintenance');
+    }
+    expect(prisma._rows('uptimeIncident')).toEqual([]);
+  });
+
+  it('a 503 page on /_agency/status more than 30 min after restore_started (no completion) becomes a real incident', async () => {
+    await startRestore();
+    const a = await probeProject(project, { now: new Date('2026-11-03T09:44:00Z'), request: async () => html503(), sleep: async () => {} });
+    expect(a.incident).toBe('failing');
+    const b = await probeProject(project, { now: new Date('2026-11-03T09:46:00Z'), request: async () => html503(), sleep: async () => {} });
+    expect(b.incident).toBe('down');
+    expect(spies.notify.map((n) => n.slug)).toContain('site_down');
+  });
+
+  it('status reason "restore-failed" is a real incident at once, also when the next probes only get 503 pages', async () => {
+    await startRestore();
+    const request = async (url) => (url.endsWith('/_agency/status') ? json({ state: 'maintenance', maintenance: { reason: 'restore-failed', since: '2026-11-03T09:13:00Z' }, uptime: { db: 'fail' } }) : html503());
+    const a = await probeProject(project, { now: new Date('2026-11-03T09:14:00Z'), request, sleep: async () => {} });
+    expect(a.incident).toBe('down');
+    expect(prisma._rows('uptimeIncident')[0]).toMatchObject({ cause: RESTORE_FAILED });
+    expect(await lastStatusSaidRestoreFailed('p1', new Date('2026-11-03T09:15:00Z'))).toBe(true);
+    // a second project-less check: the remembered reason beats the restore window
+    prisma._reset();
+    await seedPeople();
+    await startRestore();
+    await prisma.uptimeCheck.create({ data: { projectId: 'p1', at: new Date('2026-11-03T09:14:00Z'), target: 'status', source: 'os', ok: false, httpStatus: 200, errorClass: RESTORE_FAILED } });
+    const b = await probeProject(project, { now: new Date('2026-11-03T09:16:00Z'), request: async () => html503(), sleep: async () => {} });
+    expect(b.incident).toBe('down');
+  });
+
+  it('a JSON "maintenance" that started more than 30 min ago is not trusted as a window', async () => {
+    const s = await probeStatusEndpoint('https://s.example', { request: async () => json({ state: 'maintenance', maintenance: { reason: 'restore', since: '2026-11-03T09:00:00Z' } }), clock: () => Date.parse('2026-11-03T09:45:00Z') });
+    expect(s).toMatchObject({ ok: false, errorClass: 'marker' });
+    expect(s.maintenance).toBeUndefined();
   });
 });

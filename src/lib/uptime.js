@@ -212,6 +212,11 @@ const BAD_MARKERS = new Set(['down', 'error', 'fail', 'failed', 'degraded', 'cri
 export const SCHEDULER_STALE = 'sched_stale';
 /** errorClass of a probe taken during a site restore's maintenance window (v1.9.1 §41.5): never counts towards DOWN. */
 export const MAINTENANCE = 'maintenance';
+/** errorClass when the site says its restore failed (maintenance reason "restore-failed": the live database may be
+ *  missing; the site then serves a 503 page everywhere until someone intervenes). A real incident, opened at once. */
+export const RESTORE_FAILED = 'restore_failed';
+/** A JSON "maintenance" older than this (maintenance.since) is no longer trusted as a planned window. */
+export const MAINTENANCE_MAX_MS = 30 * 60_000;
 
 /**
  * EmDash `/_agency/status`. Returns null when the endpoint is missing (404 / non-JSON / redirect), else
@@ -245,7 +250,14 @@ export async function probeStatusEndpoint(origin, { request = httpsGetOnce, cloc
   const lc = (v) => String(v ?? '').toLowerCase();
   // v1.9.1 §41.5: a restore is swapping the database (public site 503 + Retry-After 120 for 1–3 minutes). Planned:
   // recorded as `maintenance`, never an incident or a page.
-  if (lc(json.state) === 'maintenance') return { ok: false, httpStatus: r.status, ms, errorClass: MAINTENANCE, maintenance: true };
+  if (lc(json.state) === 'maintenance') {
+    const reason = lc(json.maintenance?.reason);
+    if (reason === 'restore-failed') return { ok: false, httpStatus: r.status, ms, errorClass: RESTORE_FAILED };
+    const since = Date.parse(json.maintenance?.since);
+    // a swap takes 1–3 minutes: a "maintenance" that started more than 30 minutes ago is a stuck site, not a window
+    if (Number.isFinite(since) && clock() - since > MAINTENANCE_MAX_MS) return { ok: false, httpStatus: r.status, ms, errorClass: 'marker' };
+    return { ok: false, httpStatus: r.status, ms, errorClass: MAINTENANCE, maintenance: true };
+  }
   const scheduler = lc(json.uptime?.scheduler);
   const marker = r.status !== 200 || lc(json.uptime?.db) !== 'ok' || json.uptime?.scheduler === false || BAD_MARKERS.has(scheduler);
   if (marker) return { ok: false, httpStatus: r.status, ms, errorClass: 'marker' };
@@ -264,6 +276,7 @@ const REASON_TEXT = {
   redirect: 'too many or unsafe redirects',
   marker: 'the site reports a problem',
   maintenance: 'planned maintenance (site restore)',
+  restore_failed: 'the site restore failed (the site reports restore-failed)',
 };
 
 /** Short OS-written text for staff (never a raw socket message, so no IPs or headers). */
@@ -352,7 +365,7 @@ export async function maybeAlertTls(project, tlsExpiresAt, { now = new Date(), e
 /**
  * Incident state machine after a home probe was stored. Returns 'up' | 'recovered' | 'failing' | 'down' | 'still_down'.
  */
-export async function applyIncidentLogic(project, result, { now = new Date(), env, log } = {}) {
+export async function applyIncidentLogic(project, result, { now = new Date(), env, log, immediate = false } = {}) {
   const open = await prisma.uptimeIncident.findUnique({ where: { openProjectId: project.id } });
   if (result.ok) {
     if (!open) return 'up';
@@ -366,14 +379,17 @@ export async function applyIncidentLogic(project, result, { now = new Date(), en
     await prisma.uptimeIncident.update({ where: { id: open.id }, data: { lastError } });
     return 'still_down';
   }
-  const recent = await prisma.uptimeCheck.findMany({
-    where: { projectId: project.id, target: 'home', source: 'os' },
-    orderBy: { at: 'desc' },
-    take: DOWN_AFTER_FAILURES,
-    select: { ok: true, at: true, errorClass: true },
-  });
+  // immediate (a failed site restore, v1.9.1): DOWN on this one probe, no second failure needed.
+  const recent = immediate
+    ? [{ ok: false, at: now, errorClass: result.errorClass }]
+    : await prisma.uptimeCheck.findMany({
+        where: { projectId: project.id, target: 'home', source: 'os' },
+        orderBy: { at: 'desc' },
+        take: DOWN_AFTER_FAILURES,
+        select: { ok: true, at: true, errorClass: true },
+      });
   // A probe inside a restore maintenance window never counts towards DOWN (v1.9.1 §41.5).
-  if (recent.length < DOWN_AFTER_FAILURES || recent.some((r) => r.ok || r.errorClass === MAINTENANCE)) return 'failing';
+  if (!immediate && (recent.length < DOWN_AFTER_FAILURES || recent.some((r) => r.ok || r.errorClass === MAINTENANCE))) return 'failing';
   let incident;
   try {
     incident = await prisma.uptimeIncident.create({
@@ -385,6 +401,22 @@ export async function applyIncidentLogic(project, result, { now = new Date(), en
   }
   await sendDownAlert(project, incident, { now, env, log });
   return 'down';
+}
+
+/**
+ * True when the latest maintenance-type answer of /_agency/status (last 2 h) said reason "restore-failed" and the
+ * endpoint has not answered ok since (the site then serves a minimal 503 page everywhere, v1.9.1).
+ */
+export async function lastStatusSaidRestoreFailed(projectId, now = new Date()) {
+  const since = new Date(now.getTime() - 2 * 60 * 60_000);
+  const last = await prisma.uptimeCheck.findFirst({
+    where: { projectId, target: 'status', at: { gte: since }, errorClass: { in: [MAINTENANCE, RESTORE_FAILED] } },
+    orderBy: { at: 'desc' },
+    select: { at: true, errorClass: true },
+  });
+  if (last?.errorClass !== RESTORE_FAILED) return false;
+  const okAfter = await prisma.uptimeCheck.findFirst({ where: { projectId, target: 'status', ok: true, at: { gt: last.at } }, select: { id: true } });
+  return !okAfter;
 }
 
 // ── Prober job ──────────────────────────────────────────────────────────────
@@ -401,19 +433,26 @@ export async function probeProject(project, { now = new Date(), request, sleep, 
   // EmDash: the status endpoint first, so a failed home probe during a restore swap is recorded as maintenance
   // (v1.9.1 §41.5: `/_agency/status` says state "maintenance"; or the OS saw a backup.restore_started that has not
   // finished, or one that finished minutes ago, while the process restarts). Never paged.
+  // The window covers any failure of the home probe (connection errors, 502 / 503, timeouts: the 10–40 s restart has
+  // no HTTP answer at all), not only a JSON "maintenance". It ends 30 min after restore_started without a completion
+  // (a 503 page on /_agency/status then opens a real incident). A site that last said reason "restore-failed" is a
+  // real incident at once.
   let s = null;
   let maintenance = false;
+  let restoreFailed = false;
   if (project.cmsType === 'EMDASH') {
     s = await probeStatusEndpoint(url, { request, clock });
     if (!r.ok) {
-      maintenance = !!s?.maintenance;
-      if (!maintenance) {
+      if (s?.errorClass === RESTORE_FAILED) restoreFailed = true;
+      else if (s?.maintenance) maintenance = true;
+      else if (await lastStatusSaidRestoreFailed(project.id, now)) restoreFailed = true;
+      else {
         const { restoreMaintenanceWindow } = await import('./security/restoreStore.js');
         maintenance = !!(await restoreMaintenanceWindow(project.id, now).catch(() => null));
       }
     }
   }
-  const home = maintenance ? { ...r, errorClass: MAINTENANCE } : r;
+  const home = maintenance ? { ...r, errorClass: MAINTENANCE } : restoreFailed ? { ...r, errorClass: RESTORE_FAILED } : r;
   await prisma.uptimeCheck.create({
     data: { projectId: project.id, at: now, target: 'home', source: 'os', ok: home.ok, httpStatus: home.httpStatus, ms: home.ms, errorClass: home.errorClass, tlsExpiresAt: home.tlsExpiresAt },
   });
@@ -424,7 +463,8 @@ export async function probeProject(project, { now = new Date(), request, sleep, 
     log?.info?.({ projectId: project.id, httpStatus: r.httpStatus }, 'Uptime: site in a restore maintenance window; no incident');
     return { ok: false, errorClass: MAINTENANCE, incident: 'maintenance' };
   }
-  const incident = await applyIncidentLogic(project, r, { now, env, log });
+  const incident = await applyIncidentLogic(project, home, { now, env, log, immediate: restoreFailed });
+  if (restoreFailed) log?.warn?.({ projectId: project.id, httpStatus: r.httpStatus }, 'Uptime: the site reports a failed restore; incident opened');
   if (r.tlsExpiresAt) await maybeAlertTls(project, r.tlsExpiresAt, { now, env, log });
   return { ok: r.ok, errorClass: r.errorClass, incident };
 }

@@ -36,9 +36,15 @@ const LEAD_IMPORT_NAME = 'Agency OS lead import';
 const s = (v, max) => (typeof v === 'string' && v.length ? v.slice(0, max) : undefined);
 const sitePathOrNull = (v) => (typeof v === 'string' && v.startsWith('/') && !v.startsWith('//') ? v.slice(0, 2048) : null);
 
-/** Deterministic UUID-shaped idempotency key (contract §7: a UUID, the same on every retry). */
+/**
+ * Deterministic UUID-shaped idempotency key (contract §7: a UUID, the same on every retry). v1.9.1: a lead re-mirrored
+ * after a database restore / rollback (`mirrorRestoreId` = that restoreId / rollbackId) gets a NEW key, so the site's
+ * 24 h replay cache can never answer with the response of the mirror that the swap removed. Unchanged otherwise.
+ */
 export function leadImportIdempotencyKey(lead) {
-  const h = crypto.createHash('sha256').update(['lead-import', lead.provider || 'ghl', lead.externalId || '', lead.formId || '', lead.leadId].join(':')).digest('hex');
+  const parts = ['lead-import', lead.provider || 'ghl', lead.externalId || '', lead.formId || '', lead.leadId];
+  if (lead.mirrorRestoreId) parts.push(lead.mirrorRestoreId);
+  const h = crypto.createHash('sha256').update(parts.join(':')).digest('hex');
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-${((parseInt(h[16], 16) & 0x3) | 0x8).toString(16)}${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
 
@@ -105,7 +111,7 @@ export function classifyLeadImportError(err) {
 const LEAD_SELECT = {
   id: true, projectId: true, leadId: true, provider: true, formId: true, formName: true, sourcePath: true, utm: true, fields: true,
   siteCreatedAt: true, receivedAt: true, externalId: true, externalUrl: true, erasedAt: true, erasedReason: true,
-  mirrorState: true, mirrorAttempts: true, mirrorNextAt: true, cmsMirrorLeadId: true,
+  mirrorState: true, mirrorAttempts: true, mirrorNextAt: true, cmsMirrorLeadId: true, mirrorRestoreId: true,
   attribution: { select: { id: true, siteSnapshot: true } },
 };
 

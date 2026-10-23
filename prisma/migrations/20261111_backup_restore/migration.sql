@@ -34,6 +34,12 @@ SET @idx := (SELECT COUNT(*) FROM information_schema.STATISTICS
 SET @sql := IF(@idx = 0, 'CREATE INDEX `cmslead_projectId_orphanedByRestoreId_idx` ON `cmslead`(`projectId`, `orphanedByRestoreId`)', 'SELECT 1');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
+-- v1.9.1 follow-up: the lead-import idempotency epoch of a GHL lead re-mirrored after a restore / rollback.
+SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'cmslead' AND COLUMN_NAME = 'mirrorRestoreId');
+SET @sql := IF(@col = 0, 'ALTER TABLE `cmslead` ADD COLUMN `mirrorRestoreId` VARCHAR(64) NULL', 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- ── siterestore (one row per site restore, keyed on the site's restoreId; kept indefinitely) ──
 CREATE TABLE IF NOT EXISTS `siterestore` (
   `id` VARCHAR(191) NOT NULL,
@@ -67,6 +73,8 @@ CREATE TABLE IF NOT EXISTS `siterestore` (
   `dataGapFrom` DATETIME(3) NULL,
   `dataGapTo` DATETIME(3) NULL,
   `orphanedLeads` INTEGER NOT NULL DEFAULT 0,
+  `remirrorAt` DATETIME(3) NULL,
+  `remirrorRollbackAt` DATETIME(3) NULL,
   `origin` VARCHAR(8) NOT NULL,
   `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `updatedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
@@ -75,3 +83,14 @@ CREATE TABLE IF NOT EXISTS `siterestore` (
   PRIMARY KEY (`id`),
   CONSTRAINT `siterestore_projectId_fkey` FOREIGN KEY (`projectId`) REFERENCES `project`(`id`) ON DELETE CASCADE ON UPDATE CASCADE
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- v1.9.1 follow-up columns, also for a database that ran an earlier copy of this migration (CREATE TABLE above skipped).
+SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'siterestore' AND COLUMN_NAME = 'remirrorAt');
+SET @sql := IF(@col = 0, 'ALTER TABLE `siterestore` ADD COLUMN `remirrorAt` DATETIME(3) NULL', 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'siterestore' AND COLUMN_NAME = 'remirrorRollbackAt');
+SET @sql := IF(@col = 0, 'ALTER TABLE `siterestore` ADD COLUMN `remirrorRollbackAt` DATETIME(3) NULL', 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;

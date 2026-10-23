@@ -1736,6 +1736,9 @@ model CmsLead {
   mirrorError       String?   @db.VarChar(40)
   /// Erased in the OS while the provider still holds the contact: the "delete it in GoHighLevel too" checklist item.
   externalErasePending Boolean @default(false)
+  /// v1.9.1: the restoreId (or rollbackId) whose database swap removed the site mirror; part of the lead-import
+  /// idempotency key so the re-import after a restore / rollback is a new request (null = the first mirror).
+  mirrorRestoreId     String?  @db.VarChar(64)
   /// v1.9.1 §41.4: the site lead disappeared with a database restore (created on the site after the restore's point in
   /// time). Marked, never deleted; our copy is kept (reconciliation UI later). Cleared when that restore is rolled back.
   orphanedByRestoreId String?  @db.VarChar(64)
@@ -2003,6 +2006,9 @@ model SiteRestore {
   dataGapTo              DateTime?
   /// Site leads marked orphanedByRestoreId by this restore.
   orphanedLeads          Int       @default(0)
+  /// GHL lead mirrors re-queued after the completion (once per restore) / after the rollback (once per rollback).
+  remirrorAt             DateTime?
+  remirrorRollbackAt     DateTime?
   /// event | pull (how the row was first created)
   origin                 String    @db.VarChar(8)
   createdAt              DateTime  @default(now())
