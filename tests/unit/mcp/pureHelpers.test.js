@@ -151,6 +151,8 @@ describe('authorize validation', () => {
   it('valid → stored values (default scope both, resource canonical)', () => {
     expect(validateAuthorizeQuery(good, client, cfg)).toEqual({ ok: true, value: { clientId: 'c1', redirectUri: 'https://claude.ai/cb', state: 'st', scope: 'os:read os:write', resource: cfg.resource, codeChallenge: good.code_challenge } });
     expect(validateAuthorizeQuery({ ...good, scope: 'os:read', resource: cfg.resource }, client, cfg).value.scope).toBe('os:read');
+    expect(validateAuthorizeQuery({ ...good, resource: 'https://Account.localwaves.ai/api/mcp/' }, client, cfg).ok).toBe(true);
+    expect(validateAuthorizeQuery({ ...good, resource: 'https://account.localwaves.ai/api/other' }, client, cfg).error).toBe('invalid_target');
     expect(normalizeScope('os:write')).toBe('os:read os:write');
     expect(buildRedirect('https://claude.ai/cb?x=1', { code: 'c', state: 's', empty: '' })).toBe('https://claude.ai/cb?x=1&code=c&state=s');
   });

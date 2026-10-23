@@ -4,6 +4,7 @@
  * Errors follow RFC 6749 §5.2: 400 { error, error_description } (401 for invalid_client).
  */
 import { verifyPkceS256 } from './pkce.js';
+import { sameResource } from '../config.js';
 import { authenticateClient } from './clients.js';
 import { publicJsonHeaders } from './metadata.js';
 import { issueTokenPair, revokeGrantAndFamily, revokeTokenByValue, rotateRefreshToken, sameHash, sha256Hex, looksLikeSecret, PREFIX, isMcpPaused } from './tokens.js';
@@ -34,7 +35,7 @@ export async function exchangeCode(db, { body, client, cfg, now = new Date() }) 
   if (!row.codeExpiresAt || new Date(row.codeExpiresAt).getTime() <= now.getTime()) return fail('Authorization code expired');
   if (body.redirect_uri !== row.redirectUri) return fail('redirect_uri does not match');
   if (!verifyPkceS256(body.code_verifier, row.codeChallenge)) return fail('PKCE verification failed');
-  if (body.resource !== undefined && body.resource !== row.resource) return fail('Unknown resource', 'invalid_target');
+  if (body.resource !== undefined && !sameResource(body.resource, row.resource)) return fail('Unknown resource', 'invalid_target');
   const claimed = await db.mcpAuthRequest.updateMany({ where: { id: row.id, status: 'approved' }, data: { status: 'consumed' } });
   if (claimed.count !== 1) {
     await revokeGrantAndFamily(db, { grantId: row.grantId, reason: 'code_replay', now });

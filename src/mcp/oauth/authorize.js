@@ -8,7 +8,7 @@
  * The SPA never sees state, code_challenge or redirect_uri: they stay on the row. Errors go back to the client's
  * redirect_uri only once the client and that exact redirect_uri are known; otherwise a plain 400 page.
  */
-import { MCP_SCOPES } from '../config.js';
+import { MCP_SCOPES, sameResource } from '../config.js';
 import { isValidCodeChallenge } from './pkce.js';
 import { generateSecret, isMcpPaused, sha256Hex, PREFIX } from './tokens.js';
 import { writeAudit } from '../audit.js';
@@ -63,7 +63,7 @@ export function validateAuthorizeQuery(query, client, cfg) {
   const scope = normalizeScope(q(query.scope), client.scope || 'os:read os:write');
   if (!scope) return back('invalid_scope', 'Unsupported scope');
   const resource = q(query.resource);
-  if (resource !== undefined && resource !== null && resource !== cfg.resource) return back('invalid_target', 'Unknown resource');
+  if (resource !== undefined && resource !== null && !sameResource(resource, cfg.resource)) return back('invalid_target', 'Unknown resource');
   return { ok: true, value: { clientId: client.id, redirectUri, state: state || null, scope, resource: cfg.resource, codeChallenge: challenge } };
 }
 

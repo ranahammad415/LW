@@ -11,6 +11,20 @@ const DEFAULT_CORS = 'https://claude.ai,https://claude.com';
 
 export const MCP_SCOPES = ['os:read', 'os:write'];
 
+/** RFC 8707 resource comparison, tolerant of a trailing slash and host case (clients echo the URL they were given). */
+export function sameResource(a, b) {
+  const norm = (v) => {
+    try {
+      const u = new URL(String(v));
+      return `${u.protocol}//${u.host.toLowerCase()}${u.pathname.replace(/\/+$/, '')}${u.search}`;
+    } catch {
+      return null;
+    }
+  };
+  const x = norm(a);
+  return x !== null && x === norm(b);
+}
+
 function bool(v) {
   return String(v ?? '').trim().toLowerCase() === 'true';
 }

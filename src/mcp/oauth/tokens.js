@@ -8,6 +8,7 @@
  */
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'crypto';
 import { AUTH_USER_SELECT } from '../../lib/apiTokens.js';
+import { sameResource } from '../config.js';
 
 export const PREFIX = { code: 'mcpc_', access: 'mcpa_', refresh: 'mcpr_', confirm: 'mcpx_' };
 const SECRET_RE = /^mcp[acrx]_[A-Za-z0-9_-]{43}$/;
@@ -116,7 +117,7 @@ export async function rotateRefreshToken(db, { raw, clientId, resource, cfg, now
   }
   if (row.revokedAt) return fail('Refresh token revoked');
   if (new Date(row.expiresAt).getTime() <= now.getTime()) return fail('Refresh token expired');
-  if (resource && resource !== row.resource) return fail('Resource does not match the original grant');
+  if (resource && !sameResource(resource, row.resource)) return fail('Resource does not match the original grant');
   const why = grantUsable(grant, grant.user, cfg, now);
   if (why) return fail(why);
   const claimed = await db.mcpToken.updateMany({ where: { id: row.id, usedAt: null }, data: { usedAt: now } });
