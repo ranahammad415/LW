@@ -67,9 +67,11 @@ export async function mcpEndpointRoutes(app, { cfg, db, rootApp, getCatalog }) {
     mcpCorsHeaders(request, reply, cfg);
     return reply.code(204).send();
   };
-  app.options('/api/mcp', preflight);
+  // config.cors false: these routes set their own CORS headers (@fastify/cors would answer the preflight itself with
+  // FRONTEND_URL origins only).
+  app.options('/api/mcp', { config: { cors: false } }, preflight);
 
-  app.post('/api/mcp', { bodyLimit: 262_144, config: { rateLimit: { max: 120, timeWindow: '1 minute' } } }, async (request, reply) => {
+  app.post('/api/mcp', { bodyLimit: 262_144, config: { cors: false, rateLimit: { max: 120, timeWindow: '1 minute' } } }, async (request, reply) => {
     mcpCorsHeaders(request, reply, cfg);
     const auth = await verifyMcpBearer(db, request, cfg);
     if (!auth.ok) {
@@ -91,6 +93,6 @@ export async function mcpEndpointRoutes(app, { cfg, db, rootApp, getCatalog }) {
     reply.header('Allow', 'POST');
     return reply.code(405).send(jsonRpcError(-32000, 'Method not allowed: this server is stateless and answers POST only'));
   };
-  app.get('/api/mcp', notAllowed);
-  app.delete('/api/mcp', notAllowed);
+  app.get('/api/mcp', { config: { cors: false } }, notAllowed);
+  app.delete('/api/mcp', { config: { cors: false } }, notAllowed);
 }

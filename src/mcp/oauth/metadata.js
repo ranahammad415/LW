@@ -47,7 +47,8 @@ export async function metadataRoutes(app, { cfg }) {
   const prm = protectedResourceMetadata(cfg);
   const asm = authorizationServerMetadata(cfg);
   const sendPrm = async (_request, reply) => publicJsonHeaders(reply).send(prm);
-  app.get(`/.well-known/oauth-protected-resource${cfg.resourcePath}`, sendPrm);
-  app.get('/.well-known/oauth-protected-resource', sendPrm);
-  app.get('/.well-known/oauth-authorization-server', async (_request, reply) => publicJsonHeaders(reply).send(asm));
+  const own = { config: { cors: false } }; // own CORS headers (public JSON, no credentials)
+  app.get(`/.well-known/oauth-protected-resource${cfg.resourcePath}`, own, sendPrm);
+  app.get('/.well-known/oauth-protected-resource', own, sendPrm);
+  app.get('/.well-known/oauth-authorization-server', own, async (_request, reply) => publicJsonHeaders(reply).send(asm));
 }

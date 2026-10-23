@@ -41,7 +41,7 @@ export function registerMcp(app, { cfg, collector, db = prisma }) {
     // Browser preflights for the public OAuth JSON endpoints (no credentials).
     const preflight = async (_request, reply) => publicJsonHeaders(reply).code(204).send();
     for (const p of ['/api/mcp/oauth/register', '/api/mcp/oauth/token', '/api/mcp/oauth/revoke', '/.well-known/oauth-authorization-server', '/.well-known/oauth-protected-resource', `/.well-known/oauth-protected-resource${cfg.resourcePath}`]) {
-      scope.options(p, preflight);
+      scope.options(p, { config: { cors: false } }, preflight);
     }
     await scope.register(metadataRoutes, { cfg });
     await scope.register(registerRoute, { cfg, db });

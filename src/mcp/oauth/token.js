@@ -49,7 +49,7 @@ export async function exchangeCode(db, { body, client, cfg, now = new Date() }) 
 }
 
 export async function tokenRoutes(app, { cfg, db }) {
-  app.post('/api/mcp/oauth/token', { config: { rateLimit: { max: 60, timeWindow: '15 minutes' } }, bodyLimit: 16_384 }, async (request, reply) => {
+  app.post('/api/mcp/oauth/token', { config: { cors: false, rateLimit: { max: 60, timeWindow: '15 minutes' } }, bodyLimit: 16_384 }, async (request, reply) => {
     publicJsonHeaders(reply);
     const body = request.body && typeof request.body === 'object' ? request.body : {};
     const auth = await authenticateClient(db, request);
@@ -78,7 +78,7 @@ export async function tokenRoutes(app, { cfg, db }) {
     return oauthError(reply, 'unsupported_grant_type', 'grant_type must be authorization_code or refresh_token');
   });
 
-  app.post('/api/mcp/oauth/revoke', { config: { rateLimit: { max: 60, timeWindow: '15 minutes' } }, bodyLimit: 16_384 }, async (request, reply) => {
+  app.post('/api/mcp/oauth/revoke', { config: { cors: false, rateLimit: { max: 60, timeWindow: '15 minutes' } }, bodyLimit: 16_384 }, async (request, reply) => {
     publicJsonHeaders(reply);
     const auth = await authenticateClient(db, request);
     if (!auth.ok) return oauthError(reply, auth.error, auth.description);

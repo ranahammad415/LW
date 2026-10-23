@@ -167,7 +167,7 @@ export async function authenticateClient(db, request) {
 export async function registerRoute(app, { cfg, db }) {
   app.post(
     '/api/mcp/oauth/register',
-    { config: { rateLimit: { max: 10, timeWindow: '1 hour' } }, bodyLimit: 16_384 },
+    { config: { cors: false, rateLimit: { max: 10, timeWindow: '1 hour' } }, bodyLimit: 16_384 },
     async (request, reply) => {
       publicJsonHeaders(reply);
       const parsed = validateRegistration(request.body, cfg);

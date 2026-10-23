@@ -94,6 +94,9 @@ beforeAll(async () => {
   const collector = installMcpRouteCollector(app);
   app.addHook('preSerialization', async (request, _reply, payload) => redactResponseSecrets(payload, 0, responseDropKeys(request)));
   registerApiTokenHooks(app);
+  // Same CORS plugin + settings shape as index.js (FRONTEND_URL origins, credentials).
+  const { default: cors } = await import('@fastify/cors');
+  await app.register(cors, { origin: [SPA], credentials: true });
   app.decorate('verifyJwt', verifyJwt);
   app.decorate('requireOwner', requireOwner);
   app.decorate('requirePM', requirePM);
@@ -123,6 +126,22 @@ describe('OAuth flow', () => {
     expect(res.headers['cache-control']).toBe('no-store');
     const bad = await app.inject({ method: 'POST', url: '/api/mcp', headers: { authorization: 'Bearer mcpa_nope', accept: ACCEPT }, payload: {} });
     expect(bad.headers['www-authenticate']).toMatch(/error="invalid_token"/);
+  });
+
+  it('CORS: /api/mcp preflight answers claude.ai (not only FRONTEND_URL); OAuth JSON is CORS *, no credentials', async () => {
+    const pre = await app.inject({ method: 'OPTIONS', url: '/api/mcp', headers: { origin: 'https://claude.ai', 'access-control-request-method': 'POST', 'access-control-request-headers': 'authorization,content-type' } });
+    expect(pre.statusCode).toBe(204);
+    expect(pre.headers['access-control-allow-origin']).toBe('https://claude.ai');
+    expect(pre.headers['access-control-allow-headers']).toMatch(/Authorization/);
+    const evil = await app.inject({ method: 'OPTIONS', url: '/api/mcp', headers: { origin: 'https://evil.example', 'access-control-request-method': 'POST' } });
+    expect(evil.headers['access-control-allow-origin']).toBeUndefined();
+    const tokenPre = await app.inject({ method: 'OPTIONS', url: '/api/mcp/oauth/token', headers: { origin: 'https://claude.ai', 'access-control-request-method': 'POST' } });
+    expect(tokenPre.headers['access-control-allow-origin']).toBe('*');
+    expect(tokenPre.headers['access-control-allow-credentials']).toBeUndefined();
+    // Routes outside the MCP plugin keep the normal FRONTEND_URL CORS.
+    const other = await app.inject({ method: 'OPTIONS', url: '/api/users/me', headers: { origin: SPA, 'access-control-request-method': 'GET' } });
+    expect(other.headers['access-control-allow-origin']).toBe(SPA);
+    expect(other.headers['access-control-allow-credentials']).toBe('true');
   });
 
   it('discovery documents are public, no-store, CORS *', async () => {
