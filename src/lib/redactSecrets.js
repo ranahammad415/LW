@@ -20,6 +20,9 @@ const DROP_KEYS = new Set([
   'tokenHash',
   // Agency Google refresh token (encrypted) never leaves the API either (SEO Engine OS-16 hardening).
   'refreshTokenEnc',
+  // Agency Bing Webmaster credential (features/bing-webmaster.md): the encrypted API key and the Phase 3 OAuth token.
+  'apiKeyEnc',
+  'accessTokenEnc',
 ]);
 export const REDACTED = '[REDACTED]';
 const MAX_DEPTH = 12;
@@ -52,6 +55,11 @@ export const CLIENT_DROP_KEYS = new Set([
   'gmbSyncError',
   'competitorCid',
   'matchedBy',
+  // Bing Webmaster (features/bing-webmaster.md): sync error text, raw crawl-issue flags and URL hashes are staff-only
+  // (client views are allow-lists already; this is the second layer).
+  'bingSyncError',
+  'issuesRaw',
+  'urlHash',
 ]);
 
 /**

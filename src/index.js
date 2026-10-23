@@ -83,6 +83,8 @@ import { pmSiteMetricsRoutes } from './routes/pm/siteMetrics.js';
 import { clientSiteMetricsRoutes } from './routes/client/siteMetrics.js';
 import { pmLocalSeoRoutes } from './routes/pm/localSeo.js';
 import { clientLocalSeoRoutes } from './routes/client/localSeo.js';
+import { pmBingRoutes } from './routes/pm/bing.js';
+import { clientBingRoutes } from './routes/client/bing.js';
 import { pmSeoMonitoringRoutes } from './routes/pm/seoMonitoring.js';
 import { clientSeoMonitoringRoutes } from './routes/client/seoMonitoring.js';
 import { pmSignalsRoutes } from './routes/pm/signals.js';
@@ -303,6 +305,8 @@ app.register(clientSiteMetricsRoutes, { prefix: '/api/client' });
 // Local SEO (docs/ledger/features/local-seo.md): GBP identity, location, Maps ranks, geo-grid; client Maps tile.
 app.register(pmLocalSeoRoutes, { prefix: '/api/pm' });
 app.register(clientLocalSeoRoutes, { prefix: '/api/client' });
+app.register(pmBingRoutes, { prefix: '/api/pm' });
+app.register(clientBingRoutes, { prefix: '/api/client' });
 app.register(pmSeoMonitoringRoutes, { prefix: '/api/pm' });
 app.register(clientSeoMonitoringRoutes, { prefix: '/api/client' });
 app.register(pmSignalsRoutes, { prefix: '/api/pm' });
@@ -537,6 +541,32 @@ try {
       if (!out.skipped) app.log.info(out, 'Local grid weekly run complete');
     } catch (err) {
       app.log.error({ err }, 'Local grid weekly run failed');
+    }
+  });
+  // Bing Webmaster (docs/ledger/features/bing-webmaster.md), leader only: 05:45 nightly sync (after GSC 05:00 and the
+  // 05:30 native sync; free API, throttled by BING_MAX_RPS, stops at the first Throttle error; BING_WEBMASTER_ENABLED
+  // master switch) and 06:25 paid DataForSEO Bing ranks (BING_RANK_ENABLED, default off; standard queue, collected by
+  // the */10 collector below).
+  cron.schedule('45 5 * * *', async () => {
+    if (!isLeader()) return;
+    try {
+      const { runBingSync } = await import('./lib/bing/bingSync.js');
+      const out = await runBingSync({ log: app.log });
+      if (!out.skipped) {
+        app.log.info({ total: out.total, success: out.success, errors: out.errors, throttled: out.throttled, stopped: out.stopped, calls: out.calls }, 'Bing Webmaster nightly sync complete');
+      }
+    } catch (err) {
+      app.log.error({ code: err?.code }, 'Bing Webmaster nightly sync failed');
+    }
+  });
+  cron.schedule('25 6 * * *', async () => {
+    if (!isLeader()) return;
+    try {
+      const { runBingRankJob } = await import('./lib/bing/bingRank.js');
+      const out = await runBingRankJob({ log: app.log });
+      if (!out.skipped) app.log.info(out, 'Bing rank daily run complete');
+    } catch (err) {
+      app.log.error({ err }, 'Bing rank daily run failed');
     }
   });
   // Maps standard queue (contract-180): collect posted DataForSEO tasks every 10 minutes (task_get is free; a task

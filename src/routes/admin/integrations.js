@@ -17,6 +17,40 @@ import { startBackgroundRun, getRun, runView } from '../../lib/analytics/syncRun
 import { rejectAgentRefresh } from '../pm/siteMetrics.js';
 import { runConnectionHealth, probeProjectGmbDfs } from '../../lib/analytics/connectionHealth.js';
 import { DisconnectError, disconnectAgencyGoogle, isConsentStale } from '../../lib/analytics/googleDisconnect.js';
+import { isAgentOrToken } from '../../lib/apiTokens.js';
+import { getUserSites, BingApiError } from '../../lib/bing/client.js';
+import {
+  getBingConnectionStatus,
+  saveBingConnection,
+  disconnectBing,
+  isPlausibleApiKey,
+  isBingEnabled,
+} from '../../lib/bing/bingAuth.js';
+import {
+  listBingSites,
+  primeBingSitesCache,
+  invalidateBingSitesCache,
+  runAutoBind,
+  isListedVerifiedSite,
+} from '../../lib/bing/bingBinding.js';
+import { runBingSync } from '../../lib/bing/bingSync.js';
+import { bingFleet } from '../../lib/bing/bingViews.js';
+
+/** Staff-facing reply for a Bing failure: kind + Bing's message word, never the URL or the key. */
+function bingFailure(reply, request, err, what) {
+  if (err?.code === 'BING_NOT_CONNECTED') {
+    return reply.status(409).send({ code: 'NOT_CONNECTED', message: 'Connect the agency Bing Webmaster account first.' });
+  }
+  request.log.warn({ code: err?.code, kind: err?.kind }, `${what} failed`);
+  const status = err?.kind === 'auth' ? 401 : err?.kind === 'throttle' ? 429 : 502;
+  const hint =
+    err?.kind === 'auth'
+      ? 'Bing rejected the API key. Generate a new key in Bing Webmaster → Settings → API Access.'
+      : err?.kind === 'throttle'
+        ? 'Bing is throttling requests. Try again later.'
+        : `Bing did not answer (${err?.message || 'error'}). Try again later.`;
+  return reply.status(status).send({ code: err?.code || 'BING_FAILED', kind: err?.kind || 'other', message: hint });
+}
 
 const accessSecret = process.env.JWT_ACCESS_SECRET;
 const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
@@ -189,7 +223,15 @@ export async function adminIntegrationsRoutes(app) {
             gsc = { error: err.message };
           }
           const native = await runNativeAnalyticsSync(request.log);
-          return { gsc, ...native };
+          // Bing Webmaster (features/bing-webmaster.md): skipped when disabled or not connected; never fails the run.
+          let bing;
+          try {
+            bing = await runBingSync({ log: request.log });
+          } catch (err) {
+            request.log.error({ code: err?.code }, 'Manual Bing sync failed');
+            bing = { error: err?.code || 'BING_FAILED' };
+          }
+          return { gsc, ...native, bing };
         }
       );
       return reply.status(202).send({ run: runView(run), existing });
@@ -206,6 +248,70 @@ export async function adminIntegrationsRoutes(app) {
       return reply.send(runView(run));
     }
   );
+
+  // ── Agency Bing Webmaster (features/bing-webmaster.md) ─────────────────
+  // API-key mode only (OAuth is Phase 3). The key is sent once, validated with one GetUserSites call, stored
+  // AES-256-GCM encrypted and never returned, logged or echoed. Writes: people only (HUMAN_ONLY); API tokens cannot
+  // reach /api/admin/integrations/bing/* at all (lib/apiTokens.js DENIED_PREFIXES).
+  const bingWrite = { onRequest: [app.verifyJwt, requireOwner, rejectAgentRefresh], config: { rateLimit: { max: 6, timeWindow: '10 minutes' } } };
+
+  app.get('/integrations/bing/status', { onRequest: [app.verifyJwt, requireOwner] }, async (_request, reply) => {
+    reply.header('cache-control', 'no-store');
+    return reply.send(await getBingConnectionStatus());
+  });
+
+  app.post('/integrations/bing/connect', bingWrite, async (request, reply) => {
+    const apiKey = typeof request.body?.apiKey === 'string' ? request.body.apiKey.trim() : '';
+    const accountLabel = typeof request.body?.accountLabel === 'string' ? request.body.accountLabel.trim().slice(0, 255) : null;
+    if (!isPlausibleApiKey(apiKey)) {
+      return reply.status(400).send({ code: 'BAD_KEY', message: 'Paste the API key from Bing Webmaster → Settings → API Access.' });
+    }
+    let sites;
+    try {
+      sites = await getUserSites({ credential: { mode: 'api_key', apiKey } });
+    } catch (err) {
+      if (err instanceof BingApiError && err.kind === 'auth') {
+        return reply.status(422).send({ code: 'BING_KEY_REJECTED', message: 'Bing rejected this API key. Check it and try again.' });
+      }
+      return bingFailure(reply, request, err, 'Bing key validation');
+    }
+    const connection = await saveBingConnection({ apiKey, accountLabel, connectedById: request.user.id });
+    primeBingSitesCache(sites);
+    request.log.info({ sites: sites.length, verified: sites.filter((s) => s.verified).length }, 'Agency Bing Webmaster connected');
+    return reply.send({ connected: true, connection, sites });
+  });
+
+  app.post('/integrations/bing/disconnect', { onRequest: [app.verifyJwt, requireOwner, rejectAgentRefresh] }, async (request, reply) => {
+    const changed = await disconnectBing();
+    invalidateBingSitesCache();
+    request.log.info({ changed }, 'Agency Bing Webmaster disconnected');
+    return reply.send({ connected: false, disconnected: changed });
+  });
+
+  app.get('/integrations/properties/bing', { onRequest: [app.verifyJwt, requireOwner] }, async (request, reply) => {
+    try {
+      const force = request.query?.refresh === '1' || request.query?.refresh === 'true';
+      return reply.send(await listBingSites({ force }));
+    } catch (err) {
+      return bingFailure(reply, request, err, 'List Bing sites');
+    }
+  });
+
+  app.post('/integrations/bing/auto-bind', bingWrite, async (request, reply) => {
+    let sites;
+    try {
+      sites = (await listBingSites({ force: true })).sites;
+    } catch (err) {
+      return bingFailure(reply, request, err, 'Bing auto-bind');
+    }
+    const out = await runAutoBind({ sites });
+    return reply.send({ bound: out.bound, ambiguous: out.ambiguous, unmatched: out.unmatched });
+  });
+
+  app.get('/integrations/bing/fleet', { onRequest: [app.verifyJwt, requireOwner] }, async (_request, reply) => {
+    reply.header('cache-control', 'no-store');
+    return reply.send({ enabled: isBingEnabled(), ...(await bingFleet()) });
+  });
 
   // ── List GSC sites ─────────────────────────────────────────────────────
   app.get(
@@ -358,6 +464,9 @@ export async function adminIntegrationsRoutes(app) {
           gmbLastSyncedAt: true,
           dataforseoDomain: true,
           targetMarket: true,
+          bingSiteUrl: true,
+          bingLastSyncedAt: true,
+          bingSyncError: true,
           client: { select: { agencyName: true, websiteUrl: true } },
         },
       });
@@ -383,6 +492,29 @@ export async function adminIntegrationsRoutes(app) {
       if (!project) return reply.status(404).send({ message: 'Project not found' });
 
       const data = {};
+      // Bing site binding (features/bing-webmaster.md): people only; must be one of the VERIFIED sites Bing lists
+      // (exact string), else 422 BING_SITE_UNKNOWN. An empty value unbinds (stored Bing data is kept).
+      if (body.bingSiteUrl !== undefined) {
+        if (isAgentOrToken(request)) {
+          return reply.status(403).send({ code: 'HUMAN_ONLY', message: 'Agent accounts and API tokens cannot change the Bing binding' });
+        }
+        const want = body.bingSiteUrl ? String(body.bingSiteUrl).trim() : '';
+        if (want && want !== project.bingSiteUrl) {
+          let sites;
+          try {
+            sites = (await listBingSites()).sites;
+          } catch (err) {
+            return bingFailure(reply, request, err, 'List Bing sites');
+          }
+          if (!isListedVerifiedSite(want, sites)) {
+            return reply.status(422).send({ code: 'BING_SITE_UNKNOWN', message: 'That site is not a verified site of the agency Bing account. Pick one from the list.' });
+          }
+        }
+        if (want !== (project.bingSiteUrl || '')) {
+          data.bingSiteUrl = want || null;
+          data.bingSyncError = null;
+        }
+      }
       if (body.gscSiteUrl !== undefined) data.gscSiteUrl = body.gscSiteUrl || null;
       if (body.ga4PropertyId !== undefined) {
         data.ga4PropertyId = body.ga4PropertyId || null;
@@ -459,6 +591,9 @@ export async function adminIntegrationsRoutes(app) {
           localLocationName: true,
           dataforseoDomain: true,
           targetMarket: true,
+          bingSiteUrl: true,
+          bingLastSyncedAt: true,
+          bingSyncError: true,
         },
       });
       return reply.send(updated);
@@ -525,6 +660,9 @@ export async function adminIntegrationsRoutes(app) {
           localLocationName: true,
           dataforseoDomain: true,
           targetMarket: true,
+          bingSiteUrl: true,
+          bingLastSyncedAt: true,
+          bingSyncError: true,
           gscLastSyncedAt: true,
           ga4LastSyncedAt: true,
           gmbLastSyncedAt: true,

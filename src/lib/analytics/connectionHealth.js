@@ -20,6 +20,8 @@ import { getAgencyConnectionStatus, isAgencyGoogleOAuthConfigured } from './goog
 import { isOpenRouterConfigured } from '../openrouter/client.js';
 import { isAiConfigured } from '../ai.js';
 import { dfsKeywordForProject } from './gmbIdentifier.js';
+import { getBingConnectionStatus, isBingEnabled } from '../bing/bingAuth.js';
+import { listBingSites } from '../bing/bingBinding.js';
 
 function check(id, label, status, message, extra = {}) {
   return { id, label, status, message, ...extra };
@@ -70,6 +72,29 @@ async function checkDataForSeoAuth() {
       ? `Balance ~${money.balance}`
       : task?.status_message || 'Authenticated';
   return check('dataforseo_auth', 'DataForSEO auth', 'ok', balance, { latencyMs });
+}
+
+/**
+ * bing_webmaster: warn when not connected / disabled / 0 verified sites; fail with the error kind when Bing rejects the
+ * call. Never the key; the message names counts only.
+ */
+export async function checkBingWebmaster({ fetchImpl, sleep } = {}) {
+  const label = 'Bing Webmaster';
+  if (!isBingEnabled()) return check('bing_webmaster', label, 'warn', 'Turned off (BING_WEBMASTER_ENABLED=false)');
+  let status;
+  try {
+    status = await getBingConnectionStatus();
+  } catch (err) {
+    return check('bing_webmaster', label, 'fail', 'Bing connection state could not be read');
+  }
+  if (!status.connected) return check('bing_webmaster', label, 'warn', 'Not connected — add the API key in Integrations');
+  const { ok, result, error, latencyMs } = await timed(() => listBingSites({ force: true, fetchImpl, sleep }));
+  if (!ok) {
+    return check('bing_webmaster', label, 'fail', `Bing call failed (${error?.kind || 'error'}: ${error?.message || 'unknown'})`, { latencyMs, kind: error?.kind || null });
+  }
+  const verified = result.sites.filter((s) => s.verified).length;
+  if (!verified) return check('bing_webmaster', label, 'warn', `Connected, but 0 verified sites (${result.sites.length} listed)`, { latencyMs, verified, sites: result.sites.length });
+  return check('bing_webmaster', label, 'ok', `Connected · ${verified} verified site${verified === 1 ? '' : 's'} of ${result.sites.length}`, { latencyMs, verified, sites: result.sites.length });
 }
 
 export async function runConnectionHealth() {
@@ -180,6 +205,9 @@ export async function runConnectionHealth() {
     }
   }
 
+  // Agency Bing Webmaster (features/bing-webmaster.md): one GetUserSites call when connected.
+  checks.push(await checkBingWebmaster());
+
   // Binding summary
   const projects = await prisma.project.findMany({
     where: { client: { isActive: true } },
@@ -191,9 +219,11 @@ export async function runConnectionHealth() {
       gmbPlaceId: true,
       dataforseoDomain: true,
       targetMarket: true,
+      bingSiteUrl: true,
     },
   });
   const summary = {
+    bing: projects.filter((p) => p.bingSiteUrl).length,
     total: projects.length,
     gsc: projects.filter((p) => p.gscSiteUrl).length,
     ga4: projects.filter((p) => p.ga4PropertyId).length,
@@ -207,7 +237,7 @@ export async function runConnectionHealth() {
       'bindings',
       'Project bindings',
       summary.total === 0 ? 'warn' : 'ok',
-      `${summary.total} active projects · GSC ${summary.gsc} · GA4 ${summary.ga4} · GMB native ${summary.gmbNative} · GMB DFS ${summary.gmbDfs} · domain ${summary.domain} · market ${summary.targetMarket}`,
+      `${summary.total} active projects · GSC ${summary.gsc} · GA4 ${summary.ga4} · GMB native ${summary.gmbNative} · GMB DFS ${summary.gmbDfs} · domain ${summary.domain} · market ${summary.targetMarket} · Bing ${summary.bing}`,
       { summary }
     )
   );
