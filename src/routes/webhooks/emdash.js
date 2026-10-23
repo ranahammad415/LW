@@ -145,6 +145,24 @@ export function validateEvent(ev) {
   return null;
 }
 
+/**
+ * v1.9.1 §41.4: after a database restore the site raises cursor / review / entry, so no COUNTER_REGRESSION is expected.
+ * One that comes anyway within 48 h of a restore is logged at ERROR with the restore (the site team must hear about
+ * it); otherwise the usual warning. Never hidden, never treated differently (the project is still flagged re-pair).
+ */
+export async function logCounterRegression({ store, projectId, regression, log, now = new Date() }) {
+  const restore = await Promise.resolve(store.findRecentRestore?.(projectId, now)).catch(() => null);
+  if (restore) {
+    log?.error?.(
+      { projectId, regression, restoreId: restore.restoreId, scope: restore.scope, result: restore.result, countersRaised: restore.countersRaised ?? null },
+      'EmDash counter regression AFTER A SITE RESTORE (contract §41.4 says the site raises its counters; report this to the site team)'
+    );
+    return 'after_restore';
+  }
+  log?.warn?.({ projectId, regression }, 'EmDash counter regression');
+  return 'plain';
+}
+
 /** In-memory per-project /events rate limit (contract §10: 300/min/project; per PM2 instance). */
 function createRateLimiter(perMin) {
   const buckets = new Map();
@@ -548,7 +566,7 @@ export async function emdashWebhookRoutes(app, opts = {}) {
     );
     if (regression) {
       await store.flagRepairNeeded(project.id, regression, request.log);
-      request.log.warn({ projectId: project.id, regression }, 'EmDash counter regression');
+      await logCounterRegression({ store, projectId: project.id, regression, log: request.log, now: new Date(now) });
       return sendError(reply, 'COUNTER_REGRESSION', `${regression}: re-pair this site as a new siteId`);
     }
 

@@ -1,7 +1,7 @@
 /**
  * Test helper: a small JSON Schema (2020-12 subset) checker for the contract fixtures (no new dependency). Supports
  * type, properties, required, additionalProperties (false / schema), enum, const, pattern, minLength / maxLength,
- * maxProperties, items, anyOf / oneOf, format date-time, and $ref to "common.json#/$defs/x" or "#/$defs/x".
+ * maxProperties, items, anyOf / oneOf, allOf, if / then / else, not, format date-time, and $ref to "common.json#/$defs/x" or "#/$defs/x".
  * Returns a list of problems ([] = valid). Enough for request bodies the OS builds; not a general validator.
  */
 import { readFileSync } from 'node:fs';
@@ -35,6 +35,13 @@ export function schemaErrors(value, schema, file = 'common.json', at = '$') {
     return schemaErrors(value, r.schema, r.file, at);
   }
   const errs = [];
+  // allOf, if / then / else and not (the events.request per-type data rules, contract 1.6.0+).
+  if (Array.isArray(schema.allOf)) for (const s of schema.allOf) errs.push(...schemaErrors(value, s, file, at));
+  if (schema.if !== undefined) {
+    const branch = schemaErrors(value, schema.if, file, at).length === 0 ? schema.then : schema.else;
+    if (branch !== undefined) errs.push(...schemaErrors(value, branch, file, at));
+  }
+  if (schema.not !== undefined && schemaErrors(value, schema.not, file, at).length === 0) errs.push(`${at}: matches a "not" schema`);
   if (schema.anyOf || schema.oneOf) {
     const list = schema.anyOf || schema.oneOf;
     if (!list.some((s) => schemaErrors(value, s, file, at).length === 0)) errs.push(`${at}: matches no anyOf branch`);

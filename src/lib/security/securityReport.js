@@ -92,7 +92,7 @@ function okDaysFor(points, checkId) {
 /** Gather everything for one project and month (pure reads). */
 export async function gatherReportData(projectId, month) {
   const { start, end, from, to, days } = monthRange(month);
-  const [project, status, points, transitions, runs, checks, incidents] = await Promise.all([
+  const [project, status, points, transitions, runs, checks, incidents, restores] = await Promise.all([
     prisma.project.findUnique({ where: { id: projectId }, select: { id: true, name: true, cmsType: true, cmsCapabilities: true, client: { select: { agencyName: true } } } }),
     prisma.securitySiteStatus.findUnique({ where: { projectId } }),
     prisma.securityDailyPoint.findMany({ where: { projectId, date: { gte: from, lte: to } }, orderBy: { date: 'asc' } }),
@@ -100,15 +100,52 @@ export async function gatherReportData(projectId, month) {
     prisma.securityBackupRun.findMany({ where: { projectId, OR: [{ startedAt: { gte: start, lt: end } }, { finishedAt: { gte: start, lt: end } }] }, take: 2000 }),
     prisma.securityCheckState.findMany({ where: { projectId } }),
     prisma.securityIncident.findMany({ where: { projectId, lastAt: { gte: start } }, orderBy: { lastAt: 'asc' } }),
+    // v1.9.1 §41 / §7.3: restores finished, failed or rolled back this month (the report line).
+    prisma.siteRestore.findMany({
+      where: { projectId, OR: [{ completedAt: { gte: start, lt: end } }, { failedAt: { gte: start, lt: end } }, { rolledBackAt: { gte: start, lt: end } }] },
+      orderBy: { updatedAt: 'asc' },
+      take: 50,
+    }),
   ]);
   // v1.7.0 plan §6.4: "Where your enquiries came from" (sites with capabilities.signals only).
   const signals = project ? await gatherSignalsReport(project, month).catch(() => null) : null;
-  return { project, status, points, transitions, runs, checks, incidents, month, days, signals };
+  return { project, status, points, transitions, runs, checks, incidents, restores: restores || [], month, days, signals };
+}
+
+const SCOPE_TEXT = { db: 'content (database)', files: 'images and files', 'files-subset': 'selected images and files', full: 'content, images and files' };
+
+/**
+ * v1.9.1 §41: one line per restore this month (pure). Client: "Site restored to <date>" in plain words (failures are
+ * the agency's business: agency edition only). Agency: scope, source, role, duration, rollback window, gap, orphans.
+ */
+export function restoreLines(restores, admin) {
+  const list = (restores || []).filter((r) => admin || r.result === 'ok' || r.result === 'rolled_back');
+  if (!list.length) return '';
+  const stamp = (d) => (d ? `${new Date(d).toISOString().replace('T', ' ').slice(0, 16)} UTC` : 'an unknown time');
+  const line = (r) => {
+    const what = SCOPE_TEXT[r.scope] || 'the site';
+    let text;
+    if (r.result === 'rolled_back') text = `A restore of ${what} was undone on ${fmtDay(r.rolledBackAt)}; the site is back as it was before.`;
+    else if (r.result === 'failed') text = `A restore of ${what} failed on ${fmtDay(r.failedAt)} (nothing was changed on the site).`;
+    else text = `Site restored to ${stamp(r.pointInTime)} (${what}) on ${fmtDay(r.completedAt)}.`;
+    if (!admin) return esc(text);
+    const bits = [
+      r.sourceOwner ? `source ${r.sourceOwner}${r.sourceType ? `/${r.sourceType}` : ''}` : null,
+      r.byRole ? `by ${r.byRole}` : null,
+      Number.isInteger(r.durationMs) ? `took ${Math.round(r.durationMs / 1000)} s` : null,
+      r.failedAt ? `phase ${r.phase || '?'}, ${r.errorCode || 'INTERNAL'}` : null,
+      r.rollbackAvailableUntil ? `rollback until ${fmtDay(r.rollbackAvailableUntil)}` : null,
+      r.dataGapFrom && r.dataGapTo ? `data gap ${stamp(r.dataGapFrom)} → ${stamp(r.dataGapTo)}` : null,
+      r.orphanedLeads ? `${r.orphanedLeads} lead(s) orphaned by the restore` : null,
+    ].filter(Boolean);
+    return `${esc(text)} <span class="small muted">(${esc(bits.join('; '))}) [${esc(r.restoreId)}]</span>`;
+  };
+  return `<p>Restores this month:</p><ul>${list.map((r) => `<li>${line(r)}</li>`).join('')}</ul>`;
 }
 
 /** Build both editions (pure). */
 export function renderSecurityReport(data, { planNote = null, agencyName = 'Your agency' } = {}) {
-  const { project, status, points, transitions, runs, checks, incidents, month, days, signals = null } = data;
+  const { project, status, points, transitions, runs, checks, incidents, month, days, signals = null, restores = [] } = data;
   const byId = new Map((checks || []).map((c) => [c.checkId, c]));
   const endState = points.length ? points[points.length - 1].overallState : status?.overallState || 'unknown';
   const counts = { ok: 0, warn: 0, fail: 0, unknown: 0 };
@@ -181,7 +218,7 @@ ${admin && points.length ? `<p class="small muted">Score ${esc(points[0].score)}
       ['Days with a successful agency backup', `${agencyOkDays} of ${days}`],
       ['Off-site copy', backups?.agency?.offsite?.lastOkAt ? `last ${fmtDay(backups.agency.offsite.lastOkAt)}` : 'not reported'],
       ['Last restore test', restore ? `${restore.result === 'ok' ? 'passed' : 'did not pass'} on ${fmtDay(restore.at)}` : 'none yet'],
-    ])}</table>${clientDest.length ? `<p>Your own backup destinations:</p>${li(clientDest, (d) => `${esc(d.label)}: last success ${esc(fmtDay(d.lastOkAt))}${d.fails ? `, ${d.fails} problem${d.fails === 1 ? '' : 's'} this month` : ''}`)}` : ''}`);
+    ])}</table>${clientDest.length ? `<p>Your own backup destinations:</p>${li(clientDest, (d) => `${esc(d.label)}: last success ${esc(fmtDay(d.lastOkAt))}${d.fails ? `, ${d.fails} problem${d.fails === 1 ? '' : 's'} this month` : ''}`)}` : ''}${restoreLines(restores, admin)}`);
     parts.push(`<h2>3. Protection</h2><table>${rows(protection)}</table>`);
     parts.push(`<h2>4. Accounts</h2><table>${rows(accounts)}</table>`);
     parts.push(`<h2>5. Software</h2><table>${rows(software)}</table>`);

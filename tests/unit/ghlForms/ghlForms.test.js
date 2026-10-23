@@ -514,7 +514,7 @@ describe('contract 1.9.0: form_submit, lead.attributed externalRef, site-info fo
       { id: 'ghl-contact', name: 'Oasis Contact Form', provider: 'ghl', external: true },
     ]);
     expect(SITE_INFO.capabilities.leadImport).toBe(true);
-    expect(CONTRACT_REVISION).toBe('1.9.0');
+    expect(CONTRACT_REVISION).toBe('1.9.1');
   });
 });
 

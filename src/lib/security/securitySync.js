@@ -142,7 +142,7 @@ export async function pullSecurity(projectId, { interactive = false, log, now = 
     if (hasBackups(project)) {
       await guard('backups', async () => {
         const res = await emdashRoutes.backupStatus(conn, NO_RETRY);
-        const rec = await recordBackupStatus(projectId, res, { now });
+        const rec = await recordBackupStatus(projectId, res, { now, log });
         for (const d of rec.newFailures) await checkBackupFailures(project, d, { now, log }).catch(() => {});
         await detectMissedBackups(project, rec.backups, { now, log });
         return rec.backups ? 'ok' : 'NO_RECORD';

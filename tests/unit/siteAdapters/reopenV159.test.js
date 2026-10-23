@@ -74,7 +74,7 @@ describe('contract fixtures and revision', () => {
   it('ships the v1.5.9 example and the OS claims contractRevision 1.9.0 (>= 1.5.9)', () => {
     expect(readdirSync(path.join(here, '../../fixtures/cms-contract/examples'))).toContain('events.request--reopened.json');
     expect(batch().events.map((e) => e.type)).toEqual(['content.saved', 'pipeline_unscheduled', 'pipeline_reopened']);
-    expect(CONTRACT_REVISION).toBe('1.9.0');
+    expect(CONTRACT_REVISION).toBe('1.9.1');
     expect(EVENT_LABELS.pipeline_reopened).toBe('Back to client review');
   });
 });

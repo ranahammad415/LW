@@ -208,6 +208,14 @@ export async function applySecurityEvent(project, ev, { log } = {}) {
       await upsertSiteStatus(projectId, { lastRestoreTest: { at: data.restoreTest.at, result: data.restoreTest.result } });
       return 'applied';
     }
+    case 'backup.restore_started':
+    case 'backup.restore_completed':
+    case 'backup.restore_failed':
+    case 'backup.restore_rolled_back': {
+      // v1.9.1 §41: keyed on restoreId, idempotent per restoreId and phase (lib/security/restoreStore.js).
+      const { applyRestoreEvent } = await import('./restoreStore.js');
+      return applyRestoreEvent(project, ev.type, data, ev, { log });
+    }
     case 'backup.missed': {
       // A synthetic run row so the destination's failure streak counts it (and the admin backups tab shows it).
       await upsertRun(projectId, {
@@ -344,7 +352,23 @@ export async function recordStatusPull(projectId, rawStatus, { now = new Date(),
     lastPullError: null,
   });
   await upsertDailyPoint(projectId, utcDay(now), { overallState: status.overall.state, score: status.overall.score, counts: status.overall.counts });
+  await recordRestoreFromBackups(projectId, status.backups, { now, log });
   return { ok: true, transitions, status };
+}
+
+/**
+ * v1.9.1 §41.2: `backups.restore` (backup-status and securityStatus.backups). Absent below 1.9.1: nothing happens.
+ * A failure here never fails the pull (logged).
+ */
+async function recordRestoreFromBackups(projectId, backups, { now, log } = {}) {
+  if (!backups?.restore) return null;
+  try {
+    const { recordRestoreState } = await import('./restoreStore.js');
+    return await recordRestoreState(projectId, backups.restore, { now, log });
+  } catch (err) {
+    log?.warn?.({ err: { message: err?.message }, projectId }, 'Site restore state from the pull not stored');
+    return null;
+  }
 }
 
 export async function upsertDailyPoint(projectId, date, { overallState, score, counts = undefined, checks = undefined }) {
@@ -362,13 +386,14 @@ export async function recordHistory(projectId, rawPoints) {
 /**
  * backup-status → site status backups + runs. Returns failed runs that were new to the OS (for alerts).
  */
-export async function recordBackupStatus(projectId, res, { now = new Date() } = {}) {
+export async function recordBackupStatus(projectId, res, { now = new Date(), log } = {}) {
   const backups = sanitizeBackups(res?.backups);
   await upsertSiteStatus(projectId, {
     backups,
     backupsReportedAt: toDate(isoOrNull(res?.reportedAt)) || now,
     ...(backups?.lastRestoreTest ? { lastRestoreTest: backups.lastRestoreTest } : {}),
   });
+  await recordRestoreFromBackups(projectId, backups, { now, log });
   const labels = new Map((backups?.client || []).map((d) => [d.destinationId, d]));
   const newFailures = [];
   const runs = (Array.isArray(res?.runs) ? res.runs : []).slice(0, 30).map(sanitizeRun).filter(Boolean);

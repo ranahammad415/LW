@@ -22,6 +22,8 @@ const UNIQUES = {
   cmsLead: [['projectId', 'leadId']],
   externalFormEndpoint: [['tokenHash'], ['projectId', 'provider']],
   externalFormReceipt: [['dedupeKey']],
+  siteRestore: [['projectId', 'restoreId']],
+  securityAlertLog: [['projectId', 'alertKey']],
 };
 
 const DEFAULTS = {
@@ -31,8 +33,9 @@ const DEFAULTS = {
   signalEvent: () => ({ sessionizedAt: null, payloadCompactedAt: null, visitorId: null, refSource: null, country: null, leadId: null, botScore: 0 }),
   signalSession: () => ({ rescoreBotScore: null, leadCount: 0, formSubmits: 0 }),
   signalConfigMirror: () => ({ stale: false, rev: null, config: null, buffer: null }),
-  cmsLead: () => ({ erasedAt: null, erasedReason: null, siteCreatedAt: null, receivedAt: new Date(), provider: 'emdash', externalId: null, externalUrl: null, cmsMirrorLeadId: null, mirrorState: null, mirrorAttempts: 0, mirrorNextAt: null, mirrorError: null, externalErasePending: false }),
+  cmsLead: () => ({ erasedAt: null, erasedReason: null, siteCreatedAt: null, receivedAt: new Date(), provider: 'emdash', externalId: null, externalUrl: null, cmsMirrorLeadId: null, mirrorState: null, mirrorAttempts: 0, mirrorNextAt: null, mirrorError: null, externalErasePending: false, orphanedByRestoreId: null, orphanedAt: null }),
   externalFormEndpoint: () => ({ provider: 'ghl', headerSecretHash: null, rotatedAt: null, prevTokenHash: null, prevValidUntil: null, revokedAt: null, lastReceivedAt: null, createdAt: new Date() }),
+  siteRestore: () => ({ scope: null, pointInTime: null, sourceOwner: null, sourceDestinationId: null, sourceType: null, byRole: null, rollbackPoint: null, preExport: null, phase: null, startedAt: null, completedAt: null, failedAt: null, durationMs: null, counts: null, schemaFrom: null, schemaTo: null, countersRaised: null, eventsLostAfter: null, errorCode: null, retryable: null, rollbackId: null, rolledBackAt: null, rolledBackByRole: null, rollbackAvailableUntil: null, dataGapFrom: null, dataGapTo: null, orphanedLeads: 0, createdAt: new Date(), updatedAt: new Date() }),
   externalFormReceipt: () => ({ provider: 'ghl', receivedAt: new Date(), reason: null, shape: null, payloadHash: null, dedupeKey: null, externalId: null, formId: null, leadId: null, duplicateOf: null, ipHash: null, bytes: 0 }),
 };
 

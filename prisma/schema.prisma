@@ -731,6 +731,7 @@ model Project {
   securityDailyPoints  SecurityDailyPoint[]
   securityBackupRuns   SecurityBackupRun[]
   securityIncidents    SecurityIncident[]
+  siteRestores         SiteRestore[]
   securityAlertLogs    SecurityAlertLog[]
   securityReports      SecurityMonthlyReport[]
   securityConfig       SecurityConfigMirror?
@@ -1343,6 +1344,10 @@ model WpPage {
   /// v1.5.0 WP → EmDash move record: { status: migrated | redirected | dropped | unmatched, oldWpPostId, oldUrl,
   /// newPath?, redirectType? }. Rows are never deleted by the move.
   cmsMigration       Json?
+  /// v1.9.1 §41.4: the EmDash entry was missing from the first full inventory after a database restore (or its
+  /// rollback). Marked instead of status `deleted`; cleared when the entry is seen again.
+  orphanedByRestoreId String? @db.VarChar(64)
+  orphanedAt          DateTime?
 
   project            Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
   task               Task?               @relation(fields: [taskId], references: [id], onDelete: SetNull)
@@ -1731,6 +1736,10 @@ model CmsLead {
   mirrorError       String?   @db.VarChar(40)
   /// Erased in the OS while the provider still holds the contact: the "delete it in GoHighLevel too" checklist item.
   externalErasePending Boolean @default(false)
+  /// v1.9.1 §41.4: the site lead disappeared with a database restore (created on the site after the restore's point in
+  /// time). Marked, never deleted; our copy is kept (reconciliation UI later). Cleared when that restore is rolled back.
+  orphanedByRestoreId String?  @db.VarChar(64)
+  orphanedAt          DateTime?
 
   project Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
   photos  CmsLeadPhoto[]
@@ -1742,6 +1751,7 @@ model CmsLead {
   @@index([projectId, provider, externalId])
   @@index([projectId, cmsMirrorLeadId])
   @@index([mirrorState, mirrorNextAt])
+  @@index([projectId, orphanedByRestoreId])
   @@map("cmslead")
 }
 
@@ -1947,6 +1957,62 @@ model SecurityIncident {
 
   @@unique([projectId, incidentId])
   @@map("securityincident")
+}
+
+/// v1.9.1 §41: one restore made in the site admin (the OS never starts one). Keyed on the site's restoreId; written by
+/// the backup.restore_* events (idempotent per restoreId and phase: a re-sent restore_started with a new eventId only
+/// fills gaps) and by backup-status `backups.restore` (origin pull). Kept indefinitely (like incidents).
+model SiteRestore {
+  id                     String    @id @default(uuid())
+  projectId              String
+  restoreId              String    @db.VarChar(64)
+  /// db | files | files-subset | full (null: only a rollback of an unknown restore was seen)
+  scope                  String?   @db.VarChar(16)
+  /// The backup's time (archive stamp).
+  pointInTime            DateTime?
+  /// agency | client | host; destinationId = a client destination (as in backups.client[]); type = s3, ftps, local, ...
+  sourceOwner            String?   @db.VarChar(8)
+  sourceDestinationId    String?   @db.VarChar(64)
+  sourceType             String?   @db.VarChar(32)
+  /// IDENTITY_ROLE_CLASSES: owner | editor | agent | system (never a user name or id)
+  byRole                 String?   @db.VarChar(8)
+  rollbackPoint          Boolean?
+  preExport              Boolean?
+  /// running | ok | failed | rolled_back
+  result                 String    @db.VarChar(16)
+  /// The failing phase (restore_failed) or the last active phase seen in backup-status.
+  phase                  String?   @db.VarChar(16)
+  startedAt              DateTime?
+  completedAt            DateTime?
+  failedAt               DateTime?
+  durationMs             Int?
+  /// { pages, posts, leads, media, files } after the restart
+  counts                 Json?
+  schemaFrom             String?   @db.VarChar(128)
+  schemaTo               String?   @db.VarChar(128)
+  countersRaised         Boolean?
+  eventsLostAfter        DateTime?
+  errorCode              String?   @db.VarChar(16)
+  retryable              Boolean?
+  rollbackId             String?   @db.VarChar(64)
+  rolledBackAt           DateTime?
+  rolledBackByRole       String?   @db.VarChar(8)
+  rollbackAvailableUntil DateTime?
+  /// Health v2 / signals `data_gap` marker (database scopes): site-sourced rows in [from, to] are not comparable.
+  dataGapFrom            DateTime?
+  dataGapTo              DateTime?
+  /// Site leads marked orphanedByRestoreId by this restore.
+  orphanedLeads          Int       @default(0)
+  /// event | pull (how the row was first created)
+  origin                 String    @db.VarChar(8)
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @default(now()) @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, restoreId])
+  @@index([projectId, startedAt])
+  @@map("siterestore")
 }
 
 /// Alert dedupe: one alert per key per 24 h across PM2 instances (compare-and-set on sentAt).

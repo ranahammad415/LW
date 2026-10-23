@@ -630,6 +630,12 @@ export const prismaCmsStore = {
     return applySecurityEvent(project, ev, { log });
   },
 
+  /** v1.9.1 §41.4: a site restore around a COUNTER_REGRESSION (for the log line only). */
+  async findRecentRestore(projectId, now = new Date()) {
+    const { findRecentRestore } = await import('./security/restoreStore.js');
+    return findRecentRestore(projectId, now);
+  },
+
   /** v1.7.0 §38: signals.batch (bulk insert), signals.erased (our copy follows), signals.config_changed (mirror). */
   async applySignalsEvent(project, ev, log) {
     if (ev.type === 'signals.batch') {

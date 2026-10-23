@@ -33,6 +33,16 @@ export const BACKUP_ERROR_CODES = Object.freeze(['AUTH', 'NETWORK', 'QUOTA', 'TI
 export const BACKUP_RUN_RESULTS = Object.freeze(['ok', 'failed', 'running']);
 export const SECURITY_EVENT_TYPES = Object.freeze(['security.status_changed', 'security.check_failed', 'security.scan_completed', 'security.incident']);
 export const BACKUP_EVENT_TYPES = Object.freeze(['backup.completed', 'backup.failed', 'backup.verified', 'backup.missed']);
+/** v1.9.1 §41: restores made in the site admin (the OS never starts one; it reads state and stores these events). */
+export const BACKUP_RESTORE_EVENT_TYPES = Object.freeze(['backup.restore_started', 'backup.restore_completed', 'backup.restore_failed', 'backup.restore_rolled_back']);
+export const RESTORE_SCOPES = Object.freeze(['db', 'files', 'files-subset', 'full']);
+/** Scopes that replace the site's database (data gap, orphaned site entities, counters raised). */
+export const RESTORE_DB_SCOPES = Object.freeze(['db', 'full']);
+export const RESTORE_RESULTS = Object.freeze(['ok', 'failed', 'rolled_back']);
+export const RESTORE_SOURCE_OWNERS = Object.freeze(['agency', 'client', 'host']);
+export const RESTORE_PHASES = Object.freeze(['locate', 'download', 'stage', 'check', 'sandbox', 'await_confirm', 'pre_export', 'stage_files', 'commit', 'restarting', 'plan', 'done']);
+/** The OS handshake capability that lets the site drain its backup feed (§41.3). */
+export const OS_CAPABILITY_BACKUP_RESTORE_EVENTS = 'backupRestoreEvents';
 export const SECURITY_SEVERITY_WEIGHTS = Object.freeze({ critical: 25, high: 10, medium: 4, low: 1 });
 
 /** Contract SECURITY_LIMITS (§36.5). */
@@ -173,7 +183,123 @@ export function sanitizeBackups(b) {
     agency: { db: archiveState(agency.db), files: archiveState(agency.files), offsite },
     client,
     lastRestoreTest: isObj(rt) && isoOrNull(rt.at) && ['ok', 'failed'].includes(rt.result) ? { at: isoOrNull(rt.at), result: rt.result } : null,
+    // v1.9.1 §41.2: absent from sites below 1.9.1 (the key is then left out, never invented).
+    ...(b.restore !== undefined ? { restore: sanitizeRestoreState(b.restore) } : {}),
   };
+}
+
+// ---------------------------------------------------------------- v1.9.1 §41: restores
+
+const isId = (v) => typeof v === 'string' && ID_RE.test(v);
+
+/** restoreSource. null when invalid. Never a host, bucket, path or archive name (the schema has no such field). */
+export function sanitizeRestoreSource(s) {
+  if (!isObj(s)) return null;
+  const owner = oneOf(s.owner, RESTORE_SOURCE_OWNERS);
+  if (!owner || typeof s.type !== 'string' || !DEST_TYPE_RE.test(s.type)) return null;
+  return { owner, destinationId: isId(s.destinationId) ? s.destinationId : null, type: s.type };
+}
+
+function restoreCounts(c) {
+  if (!isObj(c)) return null;
+  const out = {};
+  for (const k of ['pages', 'posts', 'leads', 'media', 'files']) if (nonNegInt(c[k]) !== null) out[k] = c[k];
+  return out;
+}
+
+/**
+ * backupRestoreState (backup-status `backups.restore`, also inside securityStatus.backups). Returns
+ * `{ lastRestore, active }` (each null when absent or invalid), or null when the whole value is unusable.
+ */
+export function sanitizeRestoreState(r) {
+  if (!isObj(r)) return null;
+  const l = r.lastRestore;
+  let lastRestore = null;
+  if (isObj(l) && isId(l.restoreId) && isoOrNull(l.at) && RESTORE_SCOPES.includes(l.scope) && RESTORE_RESULTS.includes(l.result) && IDENTITY_ROLE_CLASSES.includes(l.byRole)) {
+    const source = sanitizeRestoreSource(l.source);
+    if (source) {
+      lastRestore = {
+        restoreId: l.restoreId,
+        at: isoOrNull(l.at),
+        scope: l.scope,
+        pointInTime: isoOrNull(l.pointInTime),
+        source,
+        result: l.result,
+        byRole: l.byRole,
+        rollbackAvailableUntil: isoOrNull(l.rollbackAvailableUntil),
+      };
+    }
+  }
+  const a = r.active;
+  const active =
+    isObj(a) && isId(a.restoreId) && RESTORE_PHASES.includes(a.phase) && isoOrNull(a.startedAt) && RESTORE_SCOPES.includes(a.scope)
+      ? { restoreId: a.restoreId, phase: a.phase, startedAt: isoOrNull(a.startedAt), scope: a.scope }
+      : null;
+  return { lastRestore, active };
+}
+
+/** The `data` of a backup.restore_* event (§41.3). Returns { data } or { error }. */
+export function sanitizeRestoreEventData(type, d) {
+  if (!isObj(d)) return { error: 'data is required on backup.restore_* events' };
+  if (!isId(d.restoreId)) return { error: 'data.restoreId is invalid' };
+  switch (type) {
+    case 'backup.restore_started': {
+      const source = sanitizeRestoreSource(d.source);
+      if (!RESTORE_SCOPES.includes(d.scope) || !source || !IDENTITY_ROLE_CLASSES.includes(d.byRole) || typeof d.rollbackPoint !== 'boolean') {
+        return { error: 'data.scope, source, byRole and rollbackPoint are required' };
+      }
+      return {
+        data: {
+          restoreId: d.restoreId,
+          scope: d.scope,
+          pointInTime: isoOrNull(d.pointInTime),
+          source,
+          byRole: d.byRole,
+          rollbackPoint: d.rollbackPoint,
+          preExport: typeof d.preExport === 'boolean' ? d.preExport : null,
+        },
+      };
+    }
+    case 'backup.restore_completed': {
+      const source = sanitizeRestoreSource(d.source);
+      if (!RESTORE_SCOPES.includes(d.scope) || !source || nonNegInt(d.durationMs) === null) return { error: 'data.scope, source and durationMs are required' };
+      const sc = isObj(d.schema) ? d.schema : null;
+      const br = isObj(d.bridge) && typeof d.bridge.countersRaised === 'boolean' ? d.bridge : null;
+      return {
+        data: {
+          restoreId: d.restoreId,
+          scope: d.scope,
+          pointInTime: isoOrNull(d.pointInTime),
+          source,
+          durationMs: d.durationMs,
+          counts: restoreCounts(d.counts),
+          schema: sc ? { from: safeText(sc.from, 128), to: safeText(sc.to, 128) } : null,
+          bridge: br ? { countersRaised: br.countersRaised, eventsLostAfter: isoOrNull(br.eventsLostAfter) } : null,
+        },
+      };
+    }
+    case 'backup.restore_failed': {
+      if (!RESTORE_SCOPES.includes(d.scope) || !RESTORE_PHASES.includes(d.phase) || typeof d.retryable !== 'boolean' || typeof d.errorCode !== 'string') {
+        return { error: 'data.scope, phase, errorCode and retryable are required' };
+      }
+      return {
+        data: {
+          restoreId: d.restoreId,
+          scope: d.scope,
+          phase: d.phase,
+          // Unknown codes become INTERNAL (as for backup runs, §36.3); never a provider message.
+          errorCode: BACKUP_ERROR_CODES.includes(d.errorCode) ? d.errorCode : 'INTERNAL',
+          retryable: d.retryable,
+        },
+      };
+    }
+    case 'backup.restore_rolled_back': {
+      if (!isId(d.rollbackId) || !isoOrNull(d.at) || !IDENTITY_ROLE_CLASSES.includes(d.byRole)) return { error: 'data.rollbackId, at and byRole are required' };
+      return { data: { restoreId: d.restoreId, rollbackId: d.rollbackId, at: isoOrNull(d.at), byRole: d.byRole } };
+    }
+    default:
+      return { data: null };
+  }
 }
 
 /** backupRun. null when invalid (dropped). */
@@ -408,6 +534,11 @@ export function sanitizeSecurityEventData(type, raw) {
       if (!dest || !isoOrNull(d.expectedAt) || nonNegInt(d.graceMin) === null) return { error: 'data.destination, expectedAt and graceMin are required' };
       return { data: { destination: dest, expectedAt: isoOrNull(d.expectedAt), graceMin: d.graceMin } };
     }
+    case 'backup.restore_started':
+    case 'backup.restore_completed':
+    case 'backup.restore_failed':
+    case 'backup.restore_rolled_back':
+      return sanitizeRestoreEventData(type, d);
     case 'security.config_changed': {
       if (!Number.isInteger(d.rev) || d.rev < 1 || !isoOrNull(d.at) || !SECURITY_CONFIG_SOURCES.includes(d.source) || !Array.isArray(d.changes)) {
         return { error: 'data.rev, at, source and changes are required' };
@@ -613,7 +744,12 @@ export function sanitizeConfig(cfg) {
 /** Envelope-level check used by validateEvent (routes/webhooks/emdash.js). Returns an error message or null. */
 export function validateSecurityEvent(ev) {
   if (ev.snapshotText !== undefined || ev.lead !== undefined) return 'security.* / backup.* events never carry snapshotText or lead';
-  if (!SECURITY_EVENT_TYPES.includes(ev.type) && !BACKUP_EVENT_TYPES.includes(ev.type) && !SECURITY_CONFIG_EVENT_TYPES.includes(ev.type)) return null; // unknown: stored only
+  if (
+    !SECURITY_EVENT_TYPES.includes(ev.type) &&
+    !BACKUP_EVENT_TYPES.includes(ev.type) &&
+    !BACKUP_RESTORE_EVENT_TYPES.includes(ev.type) &&
+    !SECURITY_CONFIG_EVENT_TYPES.includes(ev.type)
+  ) return null; // unknown: stored only
   const res = sanitizeSecurityEventData(ev.type, ev.data);
   return res.error || null;
 }

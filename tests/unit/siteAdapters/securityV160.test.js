@@ -120,7 +120,7 @@ describe('ingest validation, bounds and redaction', () => {
     expect(full.backups.client[0].label).toBe('Office NAS');
     const summary = sanitizeStatus(ex('security-status.response').status);
     for (const c of summary.checks) expect(c.evidence).toBeUndefined();
-    expect(CONTRACT_REVISION).toBe('1.9.0');
+    expect(CONTRACT_REVISION).toBe('1.9.1');
     expect(ERROR_CODES.UNKNOWN_CHECK.status).toBe(422);
     for (const r of ['security-config-set', 'security-run', 'security-ack']) expect(MUTATION_ROUTES.has(r)).toBe(true);
     for (const r of ['security-status', 'security-history', 'backup-status', 'logs-pull', 'security-config-get']) expect(MUTATION_ROUTES.has(r)).toBe(false);

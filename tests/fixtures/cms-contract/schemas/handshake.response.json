@@ -70,6 +70,10 @@
             },
             "seoProfiles": {
               "type": "boolean"
+            },
+            "backupRestoreEvents": {
+              "type": "boolean",
+              "description": "v1.9.1 (§41): the OS validates and stores backup.restore_* (and backup.completed / failed / verified) events; the site drains its backup feed only then"
             }
           },
           "required": []

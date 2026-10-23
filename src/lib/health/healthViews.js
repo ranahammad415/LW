@@ -132,8 +132,8 @@ export async function clientHealthAt(clientId, endDate) {
 // ── staff ──
 
 /** Pure: the staff view of one project row (factors as healthFactors, with labels and contributions). */
-export function staffHealthView(row, { cfg, historyRows = [], explain = [], compare = 28 } = {}) {
-  if (!row) return { row: null, profile: null, config: { version: cfg?.version ?? null }, history: historyRows, explain: [], compare };
+export function staffHealthView(row, { cfg, historyRows = [], explain = [], compare = 28, markers = [] } = {}) {
+  if (!row) return { row: null, profile: null, config: { version: cfg?.version ?? null }, history: historyRows, explain: [], compare, markers };
   const contrib = contributions(row);
   const b = bandInfo(row.score, cfg);
   return {
@@ -161,19 +161,33 @@ export function staffHealthView(row, { cfg, historyRows = [], explain = [], comp
     history: historyRows.map((h) => ({ date: h.date, score: h.score })),
     explain,
     compare,
+    // v1.9.1 §41.4: `data_gap` windows (a database restore of the EmDash site): site-sourced counts (leads, signals)
+    // inside them are not comparable. Staff only; the score itself is not changed.
+    markers,
   };
+}
+
+/** Restore data gaps of the last HISTORY_DAYS days (never fails the view). */
+async function healthMarkers(projectId) {
+  try {
+    const { restoreDataGaps } = await import('../security/restoreStore.js');
+    return await restoreDataGaps(projectId, { since: new Date(Date.now() - HISTORY_DAYS * 86400_000) });
+  } catch {
+    return [];
+  }
 }
 
 /** GET /api/pm/projects/:id/health?compare=7|28 */
 export async function loadProjectStaffView(projectId, { compare = 28 } = {}) {
   const cfg = await getActiveConfig();
   const row = await prisma.healthScoreDaily.findFirst({ where: { projectId }, orderBy: { date: 'desc' } });
-  if (!row) return staffHealthView(null, { cfg, compare });
+  const markers = await healthMarkers(projectId);
+  if (!row) return staffHealthView(null, { cfg, compare, markers });
   const [base, hist] = await Promise.all([
     prisma.healthScoreDaily.findUnique({ where: { projectId_date: { projectId, date: addDays(row.date, -compare) } } }),
     history('healthScoreDaily', { projectId }),
   ]);
-  return staffHealthView(row, { cfg, historyRows: hist, explain: base ? explainChange(row, base).slice(0, 20) : [], compare });
+  return staffHealthView(row, { cfg, historyRows: hist, explain: base ? explainChange(row, base).slice(0, 20) : [], compare, markers });
 }
 
 /** GET /api/pm/clients/:clientId/health (staff): rollup, projects with weights, weighted why-changed, note. */

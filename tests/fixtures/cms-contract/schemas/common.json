@@ -4422,6 +4422,150 @@
           "if": {
             "properties": {
               "type": {
+                "const": "backup.restore_started"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "common.json#/$defs/backupRestoreStartedData"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "snapshotText"
+                  ]
+                },
+                {
+                  "required": [
+                    "lead"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "backup.restore_completed"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "common.json#/$defs/backupRestoreCompletedData"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "snapshotText"
+                  ]
+                },
+                {
+                  "required": [
+                    "lead"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "backup.restore_failed"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "common.json#/$defs/backupRestoreFailedData"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "snapshotText"
+                  ]
+                },
+                {
+                  "required": [
+                    "lead"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "backup.restore_rolled_back"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "data"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "common.json#/$defs/backupRestoreRolledBackData"
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "snapshotText"
+                  ]
+                },
+                {
+                  "required": [
+                    "lead"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
                 "const": "signals.batch"
               }
             },
@@ -5495,6 +5639,17 @@
               "type": "null"
             }
           ]
+        },
+        "restore": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/backupRestoreState",
+              "description": "v1.9.1 (§41): the last restore made in the site admin and the one in progress; absent from sites below 1.9.1"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -6270,6 +6425,404 @@
         "destination",
         "expectedAt",
         "graceMin"
+      ]
+    },
+    "restoreSource": {
+      "type": "object",
+      "properties": {
+        "owner": {
+          "enum": [
+            "agency",
+            "client",
+            "host"
+          ]
+        },
+        "destinationId": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/id",
+              "description": "a client destination's id (agency / host: null)"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": {
+          "type": "string",
+          "pattern": "^[a-z0-9_-]{1,32}$"
+        }
+      },
+      "required": [
+        "owner",
+        "type"
+      ],
+      "description": "Where the archive came from; never a host, bucket, path or archive name"
+    },
+    "restoreScope": {
+      "enum": [
+        "db",
+        "files",
+        "files-subset",
+        "full"
+      ]
+    },
+    "backupRestoreState": {
+      "type": "object",
+      "properties": {
+        "lastRestore": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "restoreId": {
+                  "$ref": "common.json#/$defs/id"
+                },
+                "at": {
+                  "$ref": "common.json#/$defs/dateTime",
+                  "description": "when it finished (or started, while failed before finishing)"
+                },
+                "scope": {
+                  "$ref": "common.json#/$defs/restoreScope"
+                },
+                "pointInTime": {
+                  "anyOf": [
+                    {
+                      "$ref": "common.json#/$defs/dateTime",
+                      "description": "the backup's time (archive stamp)"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "source": {
+                  "$ref": "common.json#/$defs/restoreSource"
+                },
+                "result": {
+                  "enum": [
+                    "ok",
+                    "failed",
+                    "rolled_back"
+                  ]
+                },
+                "byRole": {
+                  "enum": [
+                    "owner",
+                    "editor",
+                    "agent",
+                    "system"
+                  ]
+                },
+                "rollbackAvailableUntil": {
+                  "anyOf": [
+                    {
+                      "$ref": "common.json#/$defs/dateTime",
+                      "description": "Roll back is offered in the site admin until then (rollback point kept 7 days by default)"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "restoreId",
+                "at",
+                "scope",
+                "source",
+                "result",
+                "byRole"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "active": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "restoreId": {
+                  "$ref": "common.json#/$defs/id"
+                },
+                "phase": {
+                  "enum": [
+                    "locate",
+                    "download",
+                    "stage",
+                    "check",
+                    "sandbox",
+                    "await_confirm",
+                    "pre_export",
+                    "stage_files",
+                    "commit",
+                    "restarting",
+                    "plan",
+                    "done"
+                  ]
+                },
+                "startedAt": {
+                  "$ref": "common.json#/$defs/dateTime"
+                },
+                "scope": {
+                  "$ref": "common.json#/$defs/restoreScope"
+                }
+              },
+              "required": [
+                "restoreId",
+                "phase",
+                "startedAt",
+                "scope"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "lastRestore",
+        "active"
+      ]
+    },
+    "backupRestoreStartedData": {
+      "type": "object",
+      "properties": {
+        "restoreId": {
+          "$ref": "common.json#/$defs/id"
+        },
+        "scope": {
+          "$ref": "common.json#/$defs/restoreScope"
+        },
+        "pointInTime": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "$ref": "common.json#/$defs/restoreSource"
+        },
+        "byRole": {
+          "enum": [
+            "owner",
+            "editor",
+            "agent",
+            "system"
+          ]
+        },
+        "rollbackPoint": {
+          "type": "boolean"
+        },
+        "preExport": {
+          "type": "boolean",
+          "description": "a safety export of the current database reached the agency copy first"
+        }
+      },
+      "required": [
+        "restoreId",
+        "scope",
+        "source",
+        "byRole",
+        "rollbackPoint"
+      ]
+    },
+    "backupRestoreCompletedData": {
+      "type": "object",
+      "properties": {
+        "restoreId": {
+          "$ref": "common.json#/$defs/id"
+        },
+        "scope": {
+          "$ref": "common.json#/$defs/restoreScope"
+        },
+        "pointInTime": {
+          "anyOf": [
+            {
+              "$ref": "common.json#/$defs/dateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "$ref": "common.json#/$defs/restoreSource"
+        },
+        "durationMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "counts": {
+          "type": "object",
+          "properties": {
+            "pages": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "posts": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "leads": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "media": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "files": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [],
+          "description": "after the restart: published pages / posts, leads, media rows, upload files (files scopes)"
+        },
+        "schema": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "to": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 128
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [],
+          "description": "last EmDash migration of the backup and after the first start (older backups are migrated forward)"
+        },
+        "bridge": {
+          "type": "object",
+          "properties": {
+            "countersRaised": {
+              "type": "boolean"
+            },
+            "eventsLostAfter": {
+              "anyOf": [
+                {
+                  "$ref": "common.json#/$defs/dateTime",
+                  "description": "database scopes: site events created after this time were in the replaced database and are gone (expect a data gap)"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "countersRaised"
+          ]
+        }
+      },
+      "required": [
+        "restoreId",
+        "scope",
+        "source",
+        "durationMs"
+      ]
+    },
+    "backupRestoreFailedData": {
+      "type": "object",
+      "properties": {
+        "restoreId": {
+          "$ref": "common.json#/$defs/id"
+        },
+        "scope": {
+          "$ref": "common.json#/$defs/restoreScope"
+        },
+        "phase": {
+          "enum": [
+            "locate",
+            "download",
+            "stage",
+            "check",
+            "sandbox",
+            "await_confirm",
+            "pre_export",
+            "stage_files",
+            "commit",
+            "restarting",
+            "plan",
+            "done"
+          ]
+        },
+        "errorCode": {
+          "enum": [
+            "AUTH",
+            "NETWORK",
+            "QUOTA",
+            "TIMEOUT",
+            "INTEGRITY",
+            "CONFIG",
+            "INTERNAL"
+          ]
+        },
+        "retryable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "restoreId",
+        "scope",
+        "phase",
+        "errorCode",
+        "retryable"
+      ],
+      "description": "Only for a restore a person confirmed (a Verify that fails before the confirmation is not reported)"
+    },
+    "backupRestoreRolledBackData": {
+      "type": "object",
+      "properties": {
+        "restoreId": {
+          "$ref": "common.json#/$defs/id",
+          "description": "the restore that was undone"
+        },
+        "rollbackId": {
+          "$ref": "common.json#/$defs/id"
+        },
+        "at": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "byRole": {
+          "enum": [
+            "owner",
+            "editor",
+            "agent",
+            "system"
+          ]
+        }
+      },
+      "required": [
+        "restoreId",
+        "rollbackId",
+        "at",
+        "byRole"
       ]
     },
     "backupRun": {

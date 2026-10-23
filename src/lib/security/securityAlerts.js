@@ -232,6 +232,79 @@ export async function alertIncident(project, data, { now = new Date(), log, env 
   return { routed: 'incident', recipients };
 }
 
+// ---------------------------------------------------------------- v1.9.1 §41: site restores (alerting matrix §5.6)
+
+/** Severity per restore phase (restore architecture §7.3). */
+export const RESTORE_ALERT_SEVERITY = Object.freeze({ started: 'info', completed: 'info', failed: 'critical', rolled_back: 'high' });
+/** One alert per restore and phase, ever (a re-sent restore_started never alerts twice). */
+export const RESTORE_ALERT_WINDOW_MS = 365 * 24 * 60 * 60 * 1000;
+const SCOPE_WORDS = Object.freeze({ db: 'database', files: 'all files', 'files-subset': 'selected files', full: 'database and files' });
+
+const utcStamp = (d) => (d ? `${new Date(d).toISOString().replace('T', ' ').slice(0, 16)} UTC` : 'an unknown time');
+function minutesText(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return null;
+  const s = Math.round(ms / 1000);
+  return s < 90 ? `${s} s` : `${Math.round(s / 60)} min`;
+}
+
+/** Title / details of a restore alert (pure; OS wording, no site text, no ids beyond the scope words). */
+export function restoreAlertText(phase, row) {
+  const scope = SCOPE_WORDS[row.scope] || 'site';
+  const point = utcStamp(row.pointInTime);
+  const by = row.byRole ? `the site ${row.byRole}` : 'a site administrator';
+  switch (phase) {
+    case 'started':
+      return {
+        title: `Site restore started (${scope}, backup of ${point})`,
+        details: `Started by ${by}. The public site may answer 503 for 1 to 3 minutes while it restarts; uptime alerts are held for this window. Agency OS never starts or stops a restore: it is done in the site admin, Backups, Restore.`,
+      };
+    case 'completed': {
+      const took = minutesText(row.durationMs);
+      return {
+        title: `Site restored to ${point} (${scope})`,
+        details: `${took ? `Took ${took}. ` : ''}${row.rollbackAvailableUntil ? `Roll back is possible in the site admin until ${utcStamp(row.rollbackAvailableUntil)}. ` : ''}${row.dataGapFrom ? 'Site data between the backup and the restore is not comparable (data gap).' : ''}`.trim(),
+      };
+    }
+    case 'failed':
+      return {
+        title: `Site restore FAILED (${scope}, phase ${row.phase || 'unknown'}, ${row.errorCode || 'INTERNAL'})`,
+        details: `${row.retryable ? 'The site says it can be retried.' : 'The site says it cannot simply be retried.'} Check the site admin, Backups, Restore; Agency OS does not retry or roll back.`,
+      };
+    case 'rolled_back':
+      return {
+        title: 'Site restore rolled back',
+        details: `${row.rolledBackByRole ? `Rolled back by the site ${row.rolledBackByRole}` : 'Rolled back'} at ${utcStamp(row.rolledBackAt)}; the site is back to its state before the restore.`,
+      };
+    default:
+      return { title: 'Site restore', details: '' };
+  }
+}
+
+/**
+ * One alert per restore phase through the security path (`security_alert`, in-app + e-mail): started / completed →
+ * info to on-call (OWNERs when nobody is on call); failed → critical to on-call + every OWNER (Slack too);
+ * rolled_back → high to on-call (OWNERs when nobody is on call).
+ */
+export async function alertRestore(project, phase, row, { now = new Date(), log, env = process.env } = {}) {
+  const severity = RESTORE_ALERT_SEVERITY[phase];
+  if (!severity || !row?.restoreId) return { routed: 'none' };
+  if (!(await claimAlert(project.id, `restore:${row.restoreId}:${phase}`.slice(0, 191), { now, windowMs: RESTORE_ALERT_WINDOW_MS }))) return { routed: 'deduped' };
+  const [oncall, owners] = await Promise.all([onCallUserIds(), ownerIds()]);
+  const recipients = severity === 'critical' ? [...new Set([...oncall, ...owners])] : oncall.length ? oncall : owners;
+  const name = await projectName(project);
+  const { title, details } = restoreAlertText(phase, row);
+  await notify({
+    slug: 'security_alert',
+    recipientIds: recipients,
+    variables: { projectName: escapeHtml(name), title: escapeHtml(title), details: escapeHtml(details), severity },
+    actionUrl: securityUrl(project.id),
+    metadata: { projectId: project.id, kind: 'site_restore', phase },
+  });
+  if (severity === 'critical') await sendSecuritySlack(`:rotating_light: ${title} on ${name}.`, { env, log });
+  log?.info?.({ projectId: project.id, phase, severity, recipients: recipients.length }, 'Site restore alert sent');
+  return { routed: severity, recipients };
+}
+
 /**
  * Daily digest (leader-only cron, 08:00 UTC): per project, the medium/low failures and every warning that started in
  * the last 24 h and are still in that state, minus acknowledged ones, to the project's PM. One digest per project per

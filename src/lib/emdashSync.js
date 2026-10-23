@@ -232,7 +232,7 @@ export async function syncEmdashInventory(projectId, { interactive = false, dead
 
   const existing = await prisma.wpPage.findMany({
     where: { projectId },
-    select: { id: true, wpPostId: true, contentHash: true, content: true, status: true, cmsOutlineHash: true, cmsEntryId: true, cmsMigration: true },
+    select: { id: true, wpPostId: true, contentHash: true, content: true, status: true, cmsOutlineHash: true, cmsEntryId: true, cmsMigration: true, syncedAt: true, orphanedByRestoreId: true },
   });
   // Review HIGH-1: WordPress rows kept by a migration are never updated, re-created over or marked deleted here.
   const byNo = new Map(existing.filter((p) => !isForeignWpPage(p)).map((p) => [Number(p.wpPostId), p]));
@@ -253,6 +253,8 @@ export async function syncEmdashInventory(projectId, { interactive = false, dead
       outlineQueue.push({ wpPostId, entryId: entry.entryId, variant: outlineVariant, outlineHash });
     }
     const revisionId = data.cmsDraftRevisionId || data.cmsLiveRevisionId || null;
+    // v1.9.1: an entry orphaned by a restore that shows up again (e.g. after a rollback) is no longer orphaned.
+    if (prev?.orphanedByRestoreId) Object.assign(data, { orphanedByRestoreId: null, orphanedAt: null });
     if (!prev) {
       const page = await prisma.wpPage.create({ data: { projectId, wpPostId, ...data, content: '', syncedAt: now } });
       await prisma.wpPageSnapshot.create({
@@ -295,9 +297,23 @@ export async function syncEmdashInventory(projectId, { interactive = false, dead
   }
 
   let deleted = 0;
+  let orphaned = 0;
   if (complete) {
+    // v1.9.1 §41.4: an entry last seen before the site's latest database restore (or rollback) disappeared with it:
+    // marked orphaned_by_restore (row and status kept), not `deleted`. Reconciliation UI later.
+    let swap = null;
+    if ([...byNo.values()].some((p) => !seen.has(Number(p.wpPostId)) && p.status !== 'deleted' && !p.orphanedByRestoreId)) {
+      const { latestDatabaseSwap } = await import('./security/restoreStore.js');
+      swap = await latestDatabaseSwap(projectId).catch(() => null);
+    }
     for (const [no, prev] of byNo) {
       if (!seen.has(no) && prev.status !== 'deleted') {
+        if (prev.orphanedByRestoreId) continue;
+        if (swap && prev.syncedAt && new Date(prev.syncedAt).getTime() < swap.at.getTime()) {
+          await prisma.wpPage.update({ where: { id: prev.id }, data: { orphanedByRestoreId: swap.restoreId, orphanedAt: now } });
+          orphaned += 1;
+          continue;
+        }
         await prisma.wpPage.update({ where: { id: prev.id }, data: { status: 'deleted', syncedAt: now } });
         deleted += 1;
       }
@@ -307,7 +323,7 @@ export async function syncEmdashInventory(projectId, { interactive = false, dead
   const outlinesFetched = await fetchOmittedOutlines(projectId, conn, outlineQueue, { interactive });
   if (created || updated || deleted || outlinesFetched) reconcileProjectMapsSafe(projectId);
   if (created || deleted) import('./wpSync.js').then((m) => m.autoSyncSitemap(projectId, { emdash: true })).catch(() => {});
-  return { synced: items.length, created, updated, deleted, outlinesFetched, outlinesDeferred: Math.max(0, outlineQueue.length - outlinesFetched) };
+  return { synced: items.length, created, updated, deleted, ...(orphaned ? { orphaned } : {}), outlinesFetched, outlinesDeferred: Math.max(0, outlineQueue.length - outlinesFetched) };
 }
 
 /**

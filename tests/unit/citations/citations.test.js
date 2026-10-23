@@ -144,7 +144,7 @@ beforeEach(() => {
 
 describe('contract 1.8.0 fixtures and shapes', () => {
   it('claims 1.9.0 (>= 1.8.0); upsert is a mutation (idempotency key), the two reads are not; three route helpers exist', () => {
-    expect(CONTRACT_REVISION).toBe('1.9.0');
+    expect(CONTRACT_REVISION).toBe('1.9.1');
     expect(MUTATION_ROUTES.has('seo-citations-upsert')).toBe(true);
     expect(MUTATION_ROUTES.has('seo-citations-list')).toBe(false);
     expect(MUTATION_ROUTES.has('seo-ai-prompts')).toBe(false);

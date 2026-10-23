@@ -12,6 +12,7 @@ import { prisma } from '../prisma.js';
 import { hasSecurity, hasBackups, hasSecurityConfig, backupOverdue } from './securitySync.js';
 import { actorName, osUserNames } from './securityConfig.js';
 import { ackMutes } from '../siteAdapters/security.js';
+import { clientRestoreTile, staffRestoreView, loadRestores } from './restoreStore.js';
 
 export const CLIENT_SENTENCES = Object.freeze({
   ok: 'Your site is protected and backed up.',
@@ -45,7 +46,7 @@ function archivesOk(dbArchive, filesArchive, now) {
 }
 
 /** Pure: stored rows → the client view. Exported for the "no non-client fields" tests. */
-export function buildClientSecurityView({ status, checks }, { now = Date.now() } = {}) {
+export function buildClientSecurityView({ status, checks, restores = [] }, { now = Date.now() } = {}) {
   const disabled = disabledSet(status);
   const items = (checks || [])
     .filter((c) => c.clientSummary && (c.state === 'fail' || c.state === 'warn') && !disabled.has(c.checkId))
@@ -78,6 +79,8 @@ export function buildClientSecurityView({ status, checks }, { now = Date.now() }
       backup: b ? { agency, destinations } : null,
       lastScanAt: iso(status?.scansLastFullAt),
       uptime: null,
+      // v1.9.1 §41 / §7.3: "Site restored to <pointInTime>" (allow-list: state, two dates, content yes/no)
+      restore: clientRestoreTile(restores, { now }),
     },
     items,
     updatedAt: iso(status?.statusAt || status?.lastPullAt),
@@ -86,14 +89,20 @@ export function buildClientSecurityView({ status, checks }, { now = Date.now() }
 
 export async function clientSecurityView(project) {
   if (!hasSecurity(project)) return { available: false };
-  const [status, checks] = await Promise.all([
+  const [status, checks, restores] = await Promise.all([
     prisma.securitySiteStatus.findUnique({ where: { projectId: project.id }, select: { overallState: true, backups: true, scansLastFullAt: true, statusAt: true, lastPullAt: true, disabled: true } }),
     prisma.securityCheckState.findMany({
       where: { projectId: project.id, state: { in: ['fail', 'warn'] }, clientSummary: { not: null } },
       select: { checkId: true, clientSummary: true, state: true, severity: true, since: true, pmNote: true, pmNoteEta: true },
     }),
+    prisma.siteRestore.findMany({
+      where: { projectId: project.id, result: { in: ['ok', 'rolled_back'] } },
+      orderBy: { updatedAt: 'desc' },
+      take: 5,
+      select: { scope: true, result: true, pointInTime: true, completedAt: true, rolledBackAt: true },
+    }),
   ]);
-  return buildClientSecurityView({ status, checks });
+  return buildClientSecurityView({ status, checks, restores });
 }
 
 function keyAgeDays(cred, now = Date.now()) {
@@ -192,14 +201,16 @@ export async function fleetView(user, { now = Date.now() } = {}) {
 /** Per-site drill-down for staff (agency-only data: evidence, remediation, scores, notes, acknowledgements). */
 export async function siteSecurityView(project, { days = 90 } = {}) {
   const since = new Date(Date.now() - Math.min(Math.max(days, 1), 400) * 86400_000).toISOString().slice(0, 10);
-  const [status, checks, points, transitions, runs, incidents] = await Promise.all([
+  const [status, checks, points, transitions, runs, incidents, restoreRows] = await Promise.all([
     prisma.securitySiteStatus.findUnique({ where: { projectId: project.id } }),
     prisma.securityCheckState.findMany({ where: { projectId: project.id }, orderBy: [{ checkId: 'asc' }] }),
     prisma.securityDailyPoint.findMany({ where: { projectId: project.id, date: { gte: since } }, orderBy: { date: 'asc' }, select: { date: true, overallState: true, score: true, counts: true, checks: true } }),
     prisma.securityTransition.findMany({ where: { projectId: project.id }, orderBy: { at: 'desc' }, take: 200 }),
     prisma.securityBackupRun.findMany({ where: { projectId: project.id }, orderBy: { createdAt: 'desc' }, take: 60 }),
     prisma.securityIncident.findMany({ where: { projectId: project.id }, orderBy: { lastAt: 'desc' }, take: 50 }),
+    loadRestores(project.id, { take: 20 }),
   ]);
+  const destLabels = new Map(((status?.backups && typeof status.backups === 'object' ? status.backups.client : null) || []).map((d) => [d.destinationId, d.label || null]));
   const noteAuthors = [...new Set(checks.map((c) => c.pmNoteById).filter(Boolean))];
   const users = noteAuthors.length ? await prisma.user.findMany({ where: { id: { in: noteAuthors } }, select: { id: true, name: true } }) : [];
   const names = new Map(users.map((u) => [u.id, u.name]));
@@ -289,6 +300,10 @@ export async function siteSecurityView(project, { days = 90 } = {}) {
       restoreTest: r.restoreTest,
       at: iso(r.finishedAt || r.startedAt || r.createdAt),
     })),
+    // v1.9.1 §41 (agency detail): scope, source, by role, duration, rollback window, gap, orphans. The OS never starts,
+    // rolls back or verifies a restore: there is no action here, only the record.
+    restores: (restoreRows || []).map((r) => staffRestoreView(r, { labels: destLabels, now })),
+    restoreActive: status?.backups && typeof status.backups === 'object' ? status.backups.restore?.active ?? null : null,
     incidents: incidents.map((i) => ({ incidentId: i.incidentId, phase: i.phase, severity: i.severity, summary: i.summary, openedAt: iso(i.openedAt), lastAt: iso(i.lastAt), by: i.by })),
   };
 }

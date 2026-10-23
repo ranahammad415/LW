@@ -210,6 +210,8 @@ export async function probeWithRetry(url, { retries = PROBE_RETRIES, backoffMs =
 const BAD_MARKERS = new Set(['down', 'error', 'fail', 'failed', 'degraded', 'critical']);
 /** errorClass of an ok status row whose scheduler is stale: a staff warning, never an incident (O-R3-3). */
 export const SCHEDULER_STALE = 'sched_stale';
+/** errorClass of a probe taken during a site restore's maintenance window (v1.9.1 §41.5): never counts towards DOWN. */
+export const MAINTENANCE = 'maintenance';
 
 /**
  * EmDash `/_agency/status`. Returns null when the endpoint is missing (404 / non-JSON / redirect), else
@@ -241,6 +243,9 @@ export async function probeStatusEndpoint(origin, { request = httpsGetOnce, cloc
   }
   if (!json || typeof json !== 'object') return null;
   const lc = (v) => String(v ?? '').toLowerCase();
+  // v1.9.1 §41.5: a restore is swapping the database (public site 503 + Retry-After 120 for 1–3 minutes). Planned:
+  // recorded as `maintenance`, never an incident or a page.
+  if (lc(json.state) === 'maintenance') return { ok: false, httpStatus: r.status, ms, errorClass: MAINTENANCE, maintenance: true };
   const scheduler = lc(json.uptime?.scheduler);
   const marker = r.status !== 200 || lc(json.uptime?.db) !== 'ok' || json.uptime?.scheduler === false || BAD_MARKERS.has(scheduler);
   if (marker) return { ok: false, httpStatus: r.status, ms, errorClass: 'marker' };
@@ -258,6 +263,7 @@ const REASON_TEXT = {
   connect: 'connection failed',
   redirect: 'too many or unsafe redirects',
   marker: 'the site reports a problem',
+  maintenance: 'planned maintenance (site restore)',
 };
 
 /** Short OS-written text for staff (never a raw socket message, so no IPs or headers). */
@@ -364,9 +370,10 @@ export async function applyIncidentLogic(project, result, { now = new Date(), en
     where: { projectId: project.id, target: 'home', source: 'os' },
     orderBy: { at: 'desc' },
     take: DOWN_AFTER_FAILURES,
-    select: { ok: true, at: true },
+    select: { ok: true, at: true, errorClass: true },
   });
-  if (recent.length < DOWN_AFTER_FAILURES || recent.some((r) => r.ok)) return 'failing';
+  // A probe inside a restore maintenance window never counts towards DOWN (v1.9.1 §41.5).
+  if (recent.length < DOWN_AFTER_FAILURES || recent.some((r) => r.ok || r.errorClass === MAINTENANCE)) return 'failing';
   let incident;
   try {
     incident = await prisma.uptimeIncident.create({
@@ -391,14 +398,31 @@ export async function probeProject(project, { now = new Date(), request, sleep, 
   const wantCert = now.getTime() - (lastCertCheck.get(project.id) || 0) >= CERT_CHECK_EVERY_MS;
   const r = await probeWithRetry(url, { request, sleep, wantCert, clock });
   if (wantCert && (r.tlsExpiresAt || r.errorClass === 'tls' || r.ok)) lastCertCheck.set(project.id, now.getTime());
-  await prisma.uptimeCheck.create({
-    data: { projectId: project.id, at: now, target: 'home', source: 'os', ok: r.ok, httpStatus: r.httpStatus, ms: r.ms, errorClass: r.errorClass, tlsExpiresAt: r.tlsExpiresAt },
-  });
+  // EmDash: the status endpoint first, so a failed home probe during a restore swap is recorded as maintenance
+  // (v1.9.1 §41.5: `/_agency/status` says state "maintenance"; or the OS saw a backup.restore_started that has not
+  // finished, or one that finished minutes ago, while the process restarts). Never paged.
+  let s = null;
+  let maintenance = false;
   if (project.cmsType === 'EMDASH') {
-    const s = await probeStatusEndpoint(url, { request, clock });
-    if (s) {
-      await prisma.uptimeCheck.create({ data: { projectId: project.id, at: now, target: 'status', source: 'os', ok: s.ok, httpStatus: s.httpStatus, ms: s.ms, errorClass: s.errorClass } });
+    s = await probeStatusEndpoint(url, { request, clock });
+    if (!r.ok) {
+      maintenance = !!s?.maintenance;
+      if (!maintenance) {
+        const { restoreMaintenanceWindow } = await import('./security/restoreStore.js');
+        maintenance = !!(await restoreMaintenanceWindow(project.id, now).catch(() => null));
+      }
     }
+  }
+  const home = maintenance ? { ...r, errorClass: MAINTENANCE } : r;
+  await prisma.uptimeCheck.create({
+    data: { projectId: project.id, at: now, target: 'home', source: 'os', ok: home.ok, httpStatus: home.httpStatus, ms: home.ms, errorClass: home.errorClass, tlsExpiresAt: home.tlsExpiresAt },
+  });
+  if (s) {
+    await prisma.uptimeCheck.create({ data: { projectId: project.id, at: now, target: 'status', source: 'os', ok: s.ok, httpStatus: s.httpStatus, ms: s.ms, errorClass: s.errorClass } });
+  }
+  if (maintenance) {
+    log?.info?.({ projectId: project.id, httpStatus: r.httpStatus }, 'Uptime: site in a restore maintenance window; no incident');
+    return { ok: false, errorClass: MAINTENANCE, incident: 'maintenance' };
   }
   const incident = await applyIncidentLogic(project, r, { now, env, log });
   if (r.tlsExpiresAt) await maybeAlertTls(project, r.tlsExpiresAt, { now, env, log });
@@ -482,9 +506,11 @@ export function percentile(values, p) {
 /**
  * Pure daily rollup of one project's home checks + incidents for [dayStart, dayStart + 1 day).
  * availabilityPct = ok / checks × 100 (3 decimals); avg / p95 over ok probes; downtime = incident overlap with the day
- * (an open incident runs until `now`).
+ * (an open incident runs until `now`). Probes in a restore maintenance window (errorClass `maintenance`, v1.9.1 §41.5)
+ * are planned downtime: left out of the availability.
  */
-export function computeDailyRollup(checks, incidents, dayStart, now = new Date()) {
+export function computeDailyRollup(allChecks, incidents, dayStart, now = new Date()) {
+  const checks = allChecks.filter((c) => c.errorClass !== MAINTENANCE);
   const dayEnd = new Date(dayStart.getTime() + DAY_MS);
   const n = checks.length;
   const okChecks = checks.filter((c) => c.ok).length;
@@ -521,7 +547,7 @@ export async function rollupUptime({ now = new Date(), days } = {}) {
     const dayEnd = new Date(dayStart.getTime() + DAY_MS);
     const checks = await prisma.uptimeCheck.findMany({
       where: { target: 'home', at: { gte: dayStart, lt: dayEnd } },
-      select: { projectId: true, ok: true, ms: true },
+      select: { projectId: true, ok: true, ms: true, errorClass: true },
     });
     const incidents = await prisma.uptimeIncident.findMany({
       where: { openedAt: { lt: dayEnd }, OR: [{ closedAt: null }, { closedAt: { gte: dayStart } }] },

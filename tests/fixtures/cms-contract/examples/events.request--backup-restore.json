@@ -1,0 +1,178 @@
+{
+  "contract": 1,
+  "siteId": "site_9f3c2a7b41d0",
+  "sentAt": "2026-11-03T09:15:00Z",
+  "events": [
+    {
+      "eventId": "01JB2RS0000000000000000001",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "backup.completed",
+      "at": "2026-11-03T08:31:30Z",
+      "cursor": 410,
+      "actor": {
+        "kind": "plugin",
+        "id": null,
+        "name": "oasis-backup",
+        "role": null,
+        "source": "plugin",
+        "plugin": "oasis-backup"
+      },
+      "data": {
+        "runId": "run_mvl1z8q0a1b2c3d4e5f6a7b8c9",
+        "kind": "db",
+        "owner": "agency",
+        "destination": {
+          "id": "agency",
+          "type": "s3",
+          "label": null
+        },
+        "bytes": 17825792,
+        "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+        "encrypted": false,
+        "verified": true,
+        "durationMs": 41200
+      }
+    },
+    {
+      "eventId": "01JB2RS0000000000000000002",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "backup.verified",
+      "at": "2026-11-01T03:41:10Z",
+      "cursor": 408,
+      "actor": {
+        "kind": "plugin",
+        "id": null,
+        "name": "oasis-backup",
+        "role": null,
+        "source": "plugin",
+        "plugin": "oasis-backup"
+      },
+      "data": {
+        "runId": "run_mvl0a1b2c3d4e5f6a7b8c9d0e1",
+        "restoreTest": {
+          "at": "2026-11-01T03:41:10Z",
+          "counts": {
+            "pages": 16,
+            "posts": 4,
+            "leads": 31,
+            "media": 11,
+            "files": 612
+          },
+          "result": "ok"
+        }
+      }
+    },
+    {
+      "eventId": "01JB2RS0000000000000000003",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "backup.restore_started",
+      "at": "2026-11-03T09:12:02Z",
+      "cursor": 411,
+      "actor": {
+        "kind": "plugin",
+        "id": null,
+        "name": "oasis-backup",
+        "role": null,
+        "source": "plugin",
+        "plugin": "oasis-backup"
+      },
+      "data": {
+        "restoreId": "rst_mvl2k1a0f3e4d5c6b7a8091a2b",
+        "scope": "full",
+        "pointInTime": "2026-11-02T08:30:00Z",
+        "source": {
+          "owner": "agency",
+          "destinationId": null,
+          "type": "s3"
+        },
+        "byRole": "owner",
+        "rollbackPoint": true,
+        "preExport": true
+      }
+    },
+    {
+      "eventId": "01JB2RS0000000000000000004",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "backup.restore_completed",
+      "at": "2026-11-03T09:14:20Z",
+      "cursor": 412,
+      "actor": {
+        "kind": "plugin",
+        "id": null,
+        "name": "oasis-backup",
+        "role": null,
+        "source": "plugin",
+        "plugin": "oasis-backup"
+      },
+      "data": {
+        "restoreId": "rst_mvl2k1a0f3e4d5c6b7a8091a2b",
+        "scope": "full",
+        "pointInTime": "2026-11-02T08:30:00Z",
+        "source": {
+          "owner": "agency",
+          "destinationId": null,
+          "type": "s3"
+        },
+        "durationMs": 138000,
+        "counts": {
+          "pages": 16,
+          "posts": 4,
+          "leads": 30,
+          "media": 11,
+          "files": 610
+        },
+        "schema": {
+          "from": "091_redirect_artifacts",
+          "to": "091_redirect_artifacts"
+        },
+        "bridge": {
+          "countersRaised": true,
+          "eventsLostAfter": "2026-11-02T08:30:00Z"
+        }
+      }
+    },
+    {
+      "eventId": "01JB2RS0000000000000000005",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "backup.restore_failed",
+      "at": "2026-11-04T10:02:00Z",
+      "cursor": 413,
+      "actor": {
+        "kind": "plugin",
+        "id": null,
+        "name": "oasis-backup",
+        "role": null,
+        "source": "plugin",
+        "plugin": "oasis-backup"
+      },
+      "data": {
+        "restoreId": "rst_mvl3b2c1d0e9f8a7b6c5d4e3f2",
+        "scope": "db",
+        "phase": "check",
+        "errorCode": "INTEGRITY",
+        "retryable": false
+      }
+    },
+    {
+      "eventId": "01JB2RS0000000000000000006",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "backup.restore_rolled_back",
+      "at": "2026-11-05T07:40:00Z",
+      "cursor": 414,
+      "actor": {
+        "kind": "plugin",
+        "id": null,
+        "name": "oasis-backup",
+        "role": null,
+        "source": "plugin",
+        "plugin": "oasis-backup"
+      },
+      "data": {
+        "restoreId": "rst_mvl2k1a0f3e4d5c6b7a8091a2b",
+        "rollbackId": "rbk_mvl4c3d2e1f0a9b8c7d6e5f4a3",
+        "at": "2026-11-05T07:40:00Z",
+        "byRole": "owner"
+      }
+    }
+  ]
+}
