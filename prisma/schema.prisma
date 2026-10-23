@@ -104,6 +104,7 @@ model User {
   backlinkOrdersRequested     BacklinkOrder[]          @relation("BacklinkOrderRequester")
   backlinkOrderEvents         BacklinkOrderEvent[]     @relation("BacklinkOrderEventActor")
   apiTokens                   ApiToken[]               @relation("ApiTokenUser")
+  agencyBingConnections       AgencyBingConnection[]   @relation("AgencyBingConnector")
 
   @@map("user")
 }
@@ -123,6 +124,34 @@ model AgencyGoogleConnection {
   connectedBy User? @relation("AgencyGoogleConnector", fields: [connectedById], references: [id], onDelete: SetNull)
 
   @@map("agencygoogleconnection")
+}
+
+/// Agency Bing Webmaster Tools connection (features/bing-webmaster.md). Singleton-style like AgencyGoogleConnection:
+/// one ACTIVE row. Phase 1 is API-key mode only: apiKeyEnc = AES-256-GCM (lib/analytics/tokenCrypto.js, purpose bing).
+/// The OAuth columns are reserved for Phase 3 and stay null. No credential column ever leaves the API
+/// (lib/redactSecrets.js DROP_KEYS).
+model AgencyBingConnection {
+  id                   String    @id @default(uuid())
+  /// api_key | oauth (Phase 3)
+  authType             String    @default("api_key") @db.VarChar(10)
+  apiKeyEnc            String?   @db.Text
+  refreshTokenEnc      String?   @db.Text
+  accessTokenEnc       String?   @db.Text
+  accessTokenExpiresAt DateTime?
+  scopes               String?   @db.VarChar(255)
+  /// Owner-typed e-mail / label (the API has no "who am I").
+  accountLabel         String?   @db.VarChar(255)
+  /// ACTIVE | DISCONNECTED
+  status               String    @default("ACTIVE") @db.VarChar(20)
+  connectedById        String?
+  connectedAt          DateTime  @default(now())
+  updatedAt            DateTime  @default(now()) @updatedAt
+  lastOkAt             DateTime?
+  lastError            String?   @db.VarChar(500)
+
+  connectedBy User? @relation("AgencyBingConnector", fields: [connectedById], references: [id], onDelete: SetNull)
+
+  @@map("agencybingconnection")
 }
 
 model PasswordResetToken {
@@ -651,6 +680,15 @@ model Project {
   localGridSize         Int       @default(5)
   localGridSpacingKm    Float     @default(1.5)
   dataforseoDomain   String?       @db.VarChar(255)
+  /// Bing Webmaster site (features/bing-webmaster.md): the exact `Url` string from GetUserSites (Bing matches
+  /// exactly: https://www.x.com/ != https://x.com/). bingSyncError is OS-written text, staff only.
+  bingSiteUrl         String?   @db.VarChar(500)
+  bingLastSyncedAt    DateTime?
+  bingSyncError       String?   @db.VarChar(500)
+  /// Bing Places checklist (Local SEO tab; no API): staff-typed listing URL, claimed toggle, last manual check.
+  bingPlacesUrl       String?   @db.VarChar(500)
+  bingPlacesClaimed   Boolean   @default(false)
+  bingPlacesCheckedAt DateTime?
   /// Local market for AI Visibility query rewrites (e.g. "Milwaukee")
   targetMarket       String?       @db.VarChar(120)
   /// CMS bridge for this project's site (docs/ledger/emdash-bridge.md). WORDPRESS keeps using the wp* fields.
@@ -751,6 +789,13 @@ model Project {
   seoCitationRuns       SeoCitationCheckRun[]
   externalFormEndpoints ExternalFormEndpoint[]
   externalFormReceipts  ExternalFormReceipt[]
+  bingDailyMetrics      BingDailyMetric[]
+  bingCrawlDaily        BingCrawlDaily[]
+  bingQueryWeekly       BingQueryWeekly[]
+  bingPageWeekly        BingPageWeekly[]
+  bingCrawlIssues       BingCrawlIssue[]
+  bingSiteState         BingSiteState?
+  bingSerpRanks         BingSerpRankDaily[]
 
   @@map("project")
 }
@@ -895,6 +940,7 @@ model KeywordTrack {
   localRanks  LocalRankDaily[]
   localGrids  LocalRankGrid[]
   localTasks  LocalRankTask[]
+  bingRanks   BingSerpRankDaily[]
 
   @@map("keywordtrack")
 }
@@ -2172,7 +2218,7 @@ model LocalRankTask {
   id           String    @id @default(uuid())
   projectId    String
   keywordId    String
-  /// daily | grid
+  /// daily | grid | bing (DataForSEO Bing organic task → BingSerpRankDaily; features/bing-webmaster.md)
   kind         String    @db.VarChar(8)
   date         DateTime  @db.Date
   gridId       String?   @db.VarChar(191)
@@ -4361,4 +4407,160 @@ model ExternalFormReceipt {
   @@index([projectId, externalId, receivedAt])
   @@index([receivedAt])
   @@map("externalformreceipt")
+}
+
+// ── Bing Webmaster Tools (features/bing-webmaster.md) ──
+
+/// Daily site traffic from GetRankAndTrafficStats (all verticals incl. Copilot "Chat" since 2023-03-24; no position).
+/// Bing revises recent days and returns ~6 months on every call; the sync writes what changed. 400-day retention.
+model BingDailyMetric {
+  id          String   @id @default(uuid())
+  projectId   String
+  date        DateTime @db.Date
+  clicks      Int      @default(0)
+  impressions Int      @default(0)
+  ctr         Float    @default(0)
+  createdAt   DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, date])
+  @@map("bingdailymetric")
+}
+
+/// Daily crawl stats from GetCrawlStats (6 months per call). 400-day retention.
+model BingCrawlDaily {
+  id                 String   @id @default(uuid())
+  projectId          String
+  date               DateTime @db.Date
+  crawledPages       Int?
+  inIndex            Int?
+  inLinks            Int?
+  code2xx            Int?
+  code301            Int?
+  code302            Int?
+  code4xx            Int?
+  code5xx            Int?
+  allOtherCodes      Int?
+  blockedByRobotsTxt Int?
+  containsMalware    Int?
+  crawlErrors        Int?
+  fetchedAt          DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, date])
+  @@map("bingcrawldaily")
+}
+
+/// Weekly top queries from GetQueryStats. weekStart = Bing's own bucket date (not re-bucketed). The weeks a fetch
+/// returns are replaced (≤ BING_QUERY_ROWS_MAX rows by impressions per fetch); older weeks are kept. 400-day retention.
+model BingQueryWeekly {
+  id                    String   @id @default(uuid())
+  projectId             String
+  weekStart             DateTime @db.Date
+  query                 String   @db.VarChar(500)
+  clicks                Int      @default(0)
+  impressions           Int      @default(0)
+  avgClickPosition      Float?
+  avgImpressionPosition Float?
+  fetchedAt             DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, weekStart, query])
+  @@index([projectId, weekStart])
+  @@map("bingqueryweekly")
+}
+
+/// Weekly top pages from GetPageStats (same shape, Query = page URL). urlHash = sha256 of the normalised URL.
+model BingPageWeekly {
+  id                    String   @id @default(uuid())
+  projectId             String
+  weekStart             DateTime @db.Date
+  urlHash               String   @db.Char(64)
+  url                   String   @db.VarChar(1000)
+  clicks                Int      @default(0)
+  impressions           Int      @default(0)
+  avgClickPosition      Float?
+  avgImpressionPosition Float?
+  fetchedAt             DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, weekStart, urlHash])
+  @@index([projectId, weekStart])
+  @@map("bingpageweekly")
+}
+
+/// Current crawl issues from GetCrawlIssues, diffed per fetch: new → firstSeenAt; missing → resolvedAt; back → cleared.
+/// issuesRaw = Bing's bit-flag int (kept so labels can be corrected later); issues = best-effort labels. Staff see
+/// URLs; clients see counts only. Resolved rows older than 90 days are deleted.
+model BingCrawlIssue {
+  id          String    @id @default(uuid())
+  projectId   String
+  urlHash     String    @db.Char(64)
+  url         String    @db.VarChar(1000)
+  httpCode    Int?
+  issuesRaw   Int       @default(0)
+  issues      Json?
+  inLinks     Int?
+  firstSeenAt DateTime  @default(now())
+  lastSeenAt  DateTime  @default(now())
+  resolvedAt  DateTime?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, urlHash])
+  @@index([projectId, resolvedAt])
+  @@map("bingcrawlissue")
+}
+
+/// 1:1 Bing sync state per project (step timestamps, last Bing error code). Staff only.
+model BingSiteState {
+  id            String    @id @default(uuid())
+  projectId     String    @unique
+  isVerified    Boolean?
+  lastTrafficAt DateTime?
+  lastCrawlAt   DateTime?
+  lastQueriesAt DateTime?
+  lastIssuesAt  DateTime?
+  /// BING_<Message> or the error kind of the last failed step; null after a clean sync.
+  errorCode     String?   @db.VarChar(40)
+  errorAt       DateTime?
+  updatedAt     DateTime  @default(now()) @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("bingsitestate")
+}
+
+/// Paid DataForSEO Bing organic SERP check (BING_RANK_ENABLED, default off): one standard-queue task per approved
+/// trackLocal keyword per UTC day, claimed with a pending row before posting (like LocalRankDaily); the task is a
+/// LocalRankTask of kind `bing`. organicRank = rank_group of the client's domain among organic items; localPackRank =
+/// position inside Bing's local pack, matched by business name + website domain (no CID on Bing). costUsd: staff only.
+model BingSerpRankDaily {
+  id               String   @id @default(uuid())
+  projectId        String
+  keywordId        String
+  date             DateTime @db.Date
+  organicRank      Int?
+  organicUrl       String?  @db.VarChar(1000)
+  localPackRank    Int?
+  localPackPresent Boolean  @default(false)
+  /// name_domain | weak (local pack match); null when not in the pack
+  matchedBy        String?  @db.VarChar(16)
+  depth            Int?
+  costUsd          Decimal? @db.Decimal(10, 5)
+  /// ok | not_found | error | pending
+  status           String   @db.VarChar(12)
+  errorCode        String?  @db.VarChar(40)
+  fetchedAt        DateTime @default(now())
+
+  project Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  keyword KeywordTrack @relation(fields: [keywordId], references: [id], onDelete: Cascade)
+
+  @@unique([keywordId, date])
+  @@index([projectId, date])
+  @@map("bingserprankdaily")
 }
