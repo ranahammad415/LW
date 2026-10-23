@@ -408,15 +408,31 @@ export async function applyIncidentLogic(project, result, { now = new Date(), en
  * endpoint has not answered ok since (the site then serves a minimal 503 page everywhere, v1.9.1).
  */
 export async function lastStatusSaidRestoreFailed(projectId, now = new Date()) {
+  return (await lastMaintenanceStatus(projectId, now)) === RESTORE_FAILED;
+}
+
+/** A status probe that said `maintenance` this recently opens the window for the restart that follows (O-C191-1). */
+export const STATUS_MAINTENANCE_CARRY_MS = 5 * 60_000;
+
+/**
+ * The latest maintenance-type answer of /_agency/status (last 2 h) when nothing ok came after it:
+ *   RESTORE_FAILED: the site said reason "restore-failed" → a real incident;
+ *   MAINTENANCE: it said "maintenance" ≤ 5 min ago → the restart that follows a swap is maintenance too. This covers a
+ *     rollback, which (unlike a restore) sends no event before its swap (e2e O-C191-1), and any restore whose
+ *     restore_started the OS has not received;
+ *   null otherwise.
+ */
+export async function lastMaintenanceStatus(projectId, now = new Date()) {
   const since = new Date(now.getTime() - 2 * 60 * 60_000);
   const last = await prisma.uptimeCheck.findFirst({
     where: { projectId, target: 'status', at: { gte: since }, errorClass: { in: [MAINTENANCE, RESTORE_FAILED] } },
     orderBy: { at: 'desc' },
     select: { at: true, errorClass: true },
   });
-  if (last?.errorClass !== RESTORE_FAILED) return false;
+  if (!last) return null;
+  if (last.errorClass === MAINTENANCE && now.getTime() - new Date(last.at).getTime() > STATUS_MAINTENANCE_CARRY_MS) return null;
   const okAfter = await prisma.uptimeCheck.findFirst({ where: { projectId, target: 'status', ok: true, at: { gt: last.at } }, select: { id: true } });
-  return !okAfter;
+  return okAfter ? null : last.errorClass;
 }
 
 // ── Prober job ──────────────────────────────────────────────────────────────
@@ -445,8 +461,12 @@ export async function probeProject(project, { now = new Date(), request, sleep, 
     if (!r.ok) {
       if (s?.errorClass === RESTORE_FAILED) restoreFailed = true;
       else if (s?.maintenance) maintenance = true;
-      else if (await lastStatusSaidRestoreFailed(project.id, now)) restoreFailed = true;
       else {
+        const last = await lastMaintenanceStatus(project.id, now);
+        if (last === RESTORE_FAILED) restoreFailed = true;
+        else if (last === MAINTENANCE) maintenance = true;
+      }
+      if (!restoreFailed && !maintenance) {
         const { restoreMaintenanceWindow } = await import('./security/restoreStore.js');
         maintenance = !!(await restoreMaintenanceWindow(project.id, now).catch(() => null));
       }

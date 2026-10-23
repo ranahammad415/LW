@@ -162,7 +162,7 @@ export async function logCounterRegression({ store, projectId, regression, log, 
   if (restore) {
     log?.error?.(
       { projectId, regression, restoreId: restore.restoreId, scope: restore.scope, result: restore.result, countersRaised: restore.countersRaised ?? null },
-      'EmDash counter regression AFTER A SITE RESTORE (contract §41.4 says the site raises its counters; report this to the site team)'
+      'EmDash counter regression after a site restore or a rollback (latest restore known to the OS attached; a rollback sends no event before its swap, so it may be the cause). Contract §41.4: the site raises its counters after both; report this to the site team'
     );
     return 'after_restore';
   }

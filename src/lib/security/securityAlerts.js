@@ -256,7 +256,13 @@ export function restoreAlertText(phase, row) {
     case 'started':
       return {
         title: `Site restore started (${scope}, backup of ${point})`,
-        details: `Started by ${by}. The public site may answer 503 for 1 to 3 minutes while it restarts; uptime alerts are held for this window. Agency OS never starts or stops a restore: it is done in the site admin, Backups, Restore.`,
+        details: `Started by ${by} at ${utcStamp(row.startedAt)}. ${
+          row.noOutcomeYet ? 'No completion or failure has been reported yet; check the site admin. ' : ''
+        }${
+          row.scope === 'db' || row.scope === 'full'
+            ? 'The public site may answer 503 for 1 to 3 minutes while it restarts; uptime alerts are held for this window. '
+            : ''
+        }Agency OS never starts or stops a restore: it is done in the site admin, Backups, Restore.`,
       };
     case 'completed': {
       const took = minutesText(row.durationMs);

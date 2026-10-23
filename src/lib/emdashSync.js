@@ -479,6 +479,15 @@ export async function healReviews(projectId, reviewIds, log) {
 export async function replayEmdashEvents(projectId, { log, maxPages = 1 } = {}) {
   const { processEventBatch } = await import('../routes/webhooks/emdash.js');
   const { project, conn } = await loadEmdashConnection(projectId);
+  // e2e O-C191-2 (the safer option): no replay at all while a database restore is open on the site. Replayed events can
+  // die with the swapped-out database and their cursors are reused afterwards (S-C191-4); not claiming them is safer
+  // than claiming them without alerts. Nothing is lost: the stored cursor does not move, the next replay continues.
+  const { openDatabaseRestore } = await import('./security/restoreStore.js');
+  const open = await openDatabaseRestore(project.id).catch(() => null);
+  if (open) {
+    log?.info?.({ projectId: project.id, restoreId: open.restoreId }, 'EmDash events-replay skipped: a database restore is open on the site');
+    return { applied: 0, skipped: 'restore_open' };
+  }
   let since = project.cmsLastCursor || 0;
   let applied = 0;
   for (let i = 0; i < maxPages; i += 1) {
@@ -635,6 +644,9 @@ export function startEmdashSyncInterval(logger) {
       // Security platform retention (plan §5.4, admin setting, default 400 days): batched deletes, leader only.
       const { purgeSecurityHistory } = await import('./security/securityStore.js');
       await purgeSecurityHistory();
+      // v1.9.1 (e2e O-C191-5): "started" alerts held for files restores / late deliveries with no outcome after 15 min.
+      const { sweepHeldRestoreStarts } = await import('./security/restoreStore.js');
+      await sweepHeldRestoreStarts({ log: logger });
     } catch (err) {
       logger.error({ err }, 'EmDash hourly maintenance failed');
     }

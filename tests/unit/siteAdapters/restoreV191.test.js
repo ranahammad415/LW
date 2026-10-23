@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { validateAgainst, schemaErrors } from '../../helpers/miniSchema.js';
 import { takeShapeViolations } from '../../helpers/prismaShape.js';
 
-const spies = vi.hoisted(() => ({ notify: [], slack: [], inventory: null }));
+const spies = vi.hoisted(() => ({ notify: [], slack: [], inventory: null, replay: null }));
 
 vi.mock('../../../src/lib/prisma.js', async () => {
   const { createFakePrisma } = await import('../signals/fakePrisma.js');
@@ -34,6 +34,7 @@ vi.mock('../../../src/lib/siteAdapters/emdash.js', async (orig) => {
         throw new Error('not in this test');
       },
       inventory: async () => spies.inventory(),
+      eventsReplay: async (...a) => spies.replay(...a),
     },
   };
 });
@@ -73,6 +74,8 @@ import { syncEmdashInventory } from '../../../src/lib/emdashSync.js';
 import { REMIRROR_MAX } from '../../../src/lib/security/restoreStore.js';
 import { leadImportIdempotencyKey } from '../../../src/lib/ghlForms/leadImport.js';
 import { RESTORE_FAILED, lastStatusSaidRestoreFailed } from '../../../src/lib/uptime.js';
+import { sweepHeldRestoreStarts, openDatabaseRestore } from '../../../src/lib/security/restoreStore.js';
+import { replayEmdashEvents } from '../../../src/lib/emdashSync.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const FIX = path.join(here, '../../fixtures/cms-contract');
@@ -385,7 +388,7 @@ describe('COUNTER_REGRESSION after a restore is logged loudly (never hidden)', (
     const now = new Date('2026-11-03T12:00:00Z');
     expect(await findRecentRestore('p1', now)).toMatchObject({ restoreId: RID, countersRaised: true });
     expect(await logCounterRegression({ store: prismaCmsStore, projectId: 'p1', regression: 'x', log: l, now })).toBe('after_restore');
-    expect(l.error.mock.calls[0][1]).toMatch(/AFTER A SITE RESTORE/);
+    expect(l.error.mock.calls[0][1]).toMatch(/after a site restore or a rollback/);
   });
 });
 
@@ -546,5 +549,126 @@ describe('follow-up: uptime around the swap (answer 6)', () => {
     const s = await probeStatusEndpoint('https://s.example', { request: async () => json({ state: 'maintenance', maintenance: { reason: 'restore', since: '2026-11-03T09:00:00Z' } }), clock: () => Date.parse('2026-11-03T09:45:00Z') });
     expect(s).toMatchObject({ ok: false, errorClass: 'marker' });
     expect(s.maintenance).toBeUndefined();
+  });
+});
+
+// ── e2e contract-191 OS notes (oasis-astro 0f36d5e) ──
+describe('O-C191-1: the rollback restart is a maintenance window', () => {
+  const project = { id: 'p1', name: 'Oasis', wpUrl: 'https://s.example', cmsType: 'EMDASH' };
+  const refused = async () => {
+    throw Object.assign(new Error('refused'), { code: 'ECONNREFUSED' });
+  };
+  const statusRow = (at, errorClass, ok = false) => prisma.uptimeCheck.create({ data: { projectId: 'p1', at: new Date(at), target: 'status', source: 'os', ok, httpStatus: ok ? 200 : 200, errorClass } });
+  beforeEach(() => _resetUptimeState());
+
+  it('restore finished long ago, rollback swap in progress (no event yet): the restart after a status "maintenance" ≤ 5 min ago is maintenance', async () => {
+    await apply(evOf('backup.restore_completed')); // completed 2026-11-03T09:14:20Z
+    await statusRow('2026-11-05T07:38:30Z', MAINTENANCE); // the rollback's own maintenance answer
+    const out = await probeProject(project, { now: new Date('2026-11-05T07:39:30Z'), request: refused, sleep: async () => {} });
+    expect(out.incident).toBe('maintenance');
+    const again = await probeProject(project, { now: new Date('2026-11-05T07:40:30Z'), request: refused, sleep: async () => {} });
+    expect(again.incident).toBe('maintenance');
+    expect(prisma._rows('uptimeIncident')).toEqual([]);
+  });
+  it('after restore_rolled_back arrives, failures within 10 min of rolledBackAt are maintenance too', async () => {
+    await apply(evOf('backup.restore_completed'));
+    await apply(evOf('backup.restore_rolled_back')); // rolledBackAt 2026-11-05T07:40:00Z
+    const out = await probeProject(project, { now: new Date('2026-11-05T07:45:00Z'), request: refused, sleep: async () => {} });
+    expect(out.incident).toBe('maintenance');
+  });
+  it('a "maintenance" answer older than 5 min, or followed by an ok status, no longer covers a failure', async () => {
+    await statusRow('2026-11-05T07:30:00Z', MAINTENANCE);
+    expect((await probeProject(project, { now: new Date('2026-11-05T07:36:00Z'), request: refused, sleep: async () => {} })).incident).toBe('failing');
+    prisma._reset();
+    await seedPeople();
+    _resetUptimeState();
+    await statusRow('2026-11-05T07:30:00Z', MAINTENANCE);
+    await statusRow('2026-11-05T07:31:00Z', null, true);
+    expect((await probeProject(project, { now: new Date('2026-11-05T07:32:00Z'), request: refused, sleep: async () => {} })).incident).toBe('failing');
+  });
+});
+
+describe('O-C191-2: no events-replay while a database restore is open', () => {
+  it('skips the replay (no site call, no cursor move) during an open db restore; files restores and finished ones do not block', async () => {
+    let calls = 0;
+    spies.replay = async () => ((calls += 1), { events: [], lastCursor: 0, more: false });
+    const started = structuredClone(evOf('backup.restore_started'));
+    started.at = new Date(Date.now() - 60_000).toISOString();
+    await apply(started);
+    expect(await openDatabaseRestore('p1')).toMatchObject({ restoreId: RID });
+    expect(await replayEmdashEvents('p1')).toEqual({ applied: 0, skipped: 'restore_open' });
+    expect(calls).toBe(0);
+    await apply({ ...evOf('backup.restore_completed'), at: new Date().toISOString() });
+    expect(await openDatabaseRestore('p1')).toBeNull();
+    await replayEmdashEvents('p1');
+    expect(calls).toBe(1);
+    const files = structuredClone(started);
+    files.data.restoreId = 'rst_files';
+    files.data.scope = 'files';
+    await apply(files);
+    expect(await openDatabaseRestore('p1')).toBeNull();
+  });
+});
+
+describe('O-C191-3: restore alert routing with and without on-call', () => {
+  it('with someone on call: started / completed / rolled_back → on-call only; failed → on-call + OWNERs', async () => {
+    for (const t of ['backup.restore_started', 'backup.restore_completed', 'backup.restore_rolled_back', 'backup.restore_failed']) await apply(evOf(t), { alert: true });
+    await flush();
+    const to = Object.fromEntries(spies.notify.map((n) => [n.metadata.phase, [...n.recipientIds].sort()]));
+    expect(to).toEqual({ started: ['oncall-1'], completed: ['oncall-1'], rolled_back: ['oncall-1'], failed: ['oncall-1', 'owner-1'] });
+  });
+  it('nobody on call (the e2e dev DB): every restore alert falls back to the OWNERs (what the e2e saw)', async () => {
+    await prisma.agencySetting.updateMany({ where: {}, data: { securityOnCallUserIds: [] } });
+    for (const t of ['backup.restore_started', 'backup.restore_completed', 'backup.restore_failed']) await apply(evOf(t), { alert: true });
+    await flush();
+    expect(spies.notify.map((n) => n.recipientIds)).toEqual([['owner-1'], ['owner-1'], ['owner-1']]);
+  });
+});
+
+describe('O-C191-5 / S-C191-1: one alert for a files restore; held starts are never lost', () => {
+  beforeEach(async () => {
+    await prisma.project.create({ data: { id: 'p1', name: 'Oasis', clientId: 'c1', projectType: 'SEO_CAMPAIGN' } });
+  });
+  const filesStart = () => {
+    const e = structuredClone(evOf('backup.restore_started'));
+    e.data.scope = 'files';
+    e.at = new Date(Date.now() - 60_000).toISOString();
+    return e;
+  };
+  it('files restore: started is held, completed is the one info alert', async () => {
+    await apply(filesStart(), { alert: true });
+    const done = structuredClone(evOf('backup.restore_completed'));
+    done.data.scope = 'files';
+    done.data.bridge = { countersRaised: false, eventsLostAfter: null };
+    done.at = new Date().toISOString();
+    await apply(done, { alert: true });
+    await flush();
+    expect(spies.notify.map((n) => n.metadata.phase)).toEqual(['completed']);
+    expect(await sweepHeldRestoreStarts({ now: new Date(Date.now() + 3600_000) })).toBe(0);
+  });
+  it('files restore with no outcome: the hourly sweep sends the held "started" once (no outcome yet)', async () => {
+    await apply(filesStart(), { alert: true });
+    await flush();
+    expect(spies.notify).toEqual([]);
+    expect(await sweepHeldRestoreStarts({ now: new Date(Date.now() + 5 * 60_000) })).toBe(0); // < 15 min
+    expect(await sweepHeldRestoreStarts({ now: new Date(Date.now() + 20 * 60_000) })).toBe(1);
+    expect(await sweepHeldRestoreStarts({ now: new Date(Date.now() + 80 * 60_000) })).toBe(0);
+    expect(spies.notify).toHaveLength(1);
+    expect(spies.notify[0].variables.details).toMatch(/No completion or failure has been reported yet/);
+  });
+  it('a database restore_started delivered more than an hour late (held feed event) is not announced on arrival; a db start in time is', async () => {
+    const late = structuredClone(evOf('backup.restore_started'));
+    late.at = new Date(Date.now() - 3 * 3600_000).toISOString();
+    await apply(late, { alert: true });
+    await flush();
+    expect(spies.notify).toEqual([]);
+    expect(await sweepHeldRestoreStarts()).toBe(1);
+    const inTime = structuredClone(evOf('backup.restore_started'));
+    inTime.data.restoreId = 'rst_intime';
+    inTime.at = new Date(Date.now() - 60_000).toISOString();
+    await apply(inTime, { alert: true });
+    await flush();
+    expect(spies.notify.map((n) => n.metadata.phase)).toEqual(['started', 'started']);
+    expect(await sweepHeldRestoreStarts({ now: new Date(Date.now() + 20 * 60_000) })).toBe(0); // already announced
   });
 });

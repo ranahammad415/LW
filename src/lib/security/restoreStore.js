@@ -316,7 +316,15 @@ export async function applyRestoreEvent(project, type, data, ev, { log, now = ne
   // A restore_started delivered after its own completion / failure (re-sent from the restored database) is stored but
   // never announced as "started".
   const lateStart = phase === 'started' && row.result !== 'running';
-  if (alert && !lateStart) {
+  // e2e O-C191-5: a files / files-subset restore sends started and completed back to back (no restart, no pause): the
+  // started alert is held and the completion (or failure) is the one alert. If neither ever comes, the leader-only hourly
+  // sweep (sweepHeldRestoreStarts) sends the held "started" alert, so nothing is lost.
+  // S-C191-1: a held feed event keeps its own time; a restore_started older than an hour when it arrives is history,
+  // not news (its completion / failure, delivered with it, alerts instead; the sweep covers the rest).
+  const heldStart =
+    phase === 'started' &&
+    (!isDbScope(row.scope) || now.getTime() - Date.parse(evAt) > RESTORE_START_ALERT_MAX_AGE_MS);
+  if (alert && !lateStart && !heldStart) {
     const { alertRestore } = await import('./securityAlerts.js');
     alertRestore(project, phase, row, { now, log }).catch((err) => log?.warn?.({ err: { message: err?.message }, restoreId: data.restoreId }, 'Site restore alert failed'));
   }
@@ -411,6 +419,50 @@ export async function restoreMaintenanceWindow(projectId, now = new Date()) {
     },
     orderBy: { updatedAt: 'desc' },
     select: { restoreId: true, phase: true, result: true, startedAt: true },
+  });
+}
+
+/** A restore_started older than this when it arrives is not announced on arrival (S-C191-1, held events). */
+export const RESTORE_START_ALERT_MAX_AGE_MS = 60 * 60_000;
+/** The hourly sweep announces a held "started" once the restore has been running this long without an outcome. */
+export const RESTORE_HELD_START_GRACE_MS = 15 * 60_000;
+/** A database restore still "running" this long after its start no longer holds back events-replay (lost completion). */
+export const RESTORE_OPEN_MAX_MS = 2 * 60 * 60_000;
+
+/**
+ * Leader-only (hourly EmDash maintenance): restores still running ≥ 15 min after a start whose alert was held (files
+ * scopes, or a start delivered late) get their "started" info alert now, worded as "no outcome yet". The alert key
+ * restore:<restoreId>:started is claimed once, so a start that was announced on arrival is never sent twice.
+ */
+export async function sweepHeldRestoreStarts({ now = new Date(), log } = {}) {
+  const rows = await prisma.siteRestore.findMany({
+    where: { result: 'running', rollbackPoint: { not: null }, startedAt: { lte: new Date(now.getTime() - RESTORE_HELD_START_GRACE_MS), gte: new Date(now.getTime() - 7 * 86400_000) } },
+    take: 50,
+  });
+  if (!rows.length) return 0;
+  const { alertRestore } = await import('./securityAlerts.js');
+  let sent = 0;
+  for (const row of rows) {
+    const project = await prisma.project.findUnique({ where: { id: row.projectId }, select: { id: true, name: true, leadPmId: true, clientId: true } });
+    if (!project) continue;
+    const out = await alertRestore(project, 'started', { ...row, noOutcomeYet: true }, { now, log }).catch(() => null);
+    if (out?.routed && out.routed !== 'deduped') sent += 1;
+  }
+  if (sent) log?.info?.({ sent }, 'Held site restore "started" alerts sent (no outcome yet)');
+  return sent;
+}
+
+/**
+ * e2e O-C191-2: a database restore is open on the site (restore_started stored, no completion / failure / rollback yet,
+ * started ≤ 2 h ago). events-replay is skipped meanwhile: events pulled from a site paused for a restore can die with
+ * the swapped-out database and their cursors are reused afterwards (root cause of S-C191-4). Pushed events are not
+ * affected; the next replay after the restore picks up from the stored cursor.
+ */
+export async function openDatabaseRestore(projectId, now = new Date()) {
+  return prisma.siteRestore.findFirst({
+    where: { projectId, result: 'running', scope: { in: [...RESTORE_DB_SCOPES] }, startedAt: { gte: new Date(now.getTime() - RESTORE_OPEN_MAX_MS) } },
+    orderBy: { startedAt: 'desc' },
+    select: { restoreId: true, startedAt: true },
   });
 }
 
