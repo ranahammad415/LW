@@ -333,6 +333,8 @@ describe('POST /handshake — pairing', () => {
     // v1.2.1 §23(2): the team roster for byline mapping; the OS announces client review from the OS.
     expect(json.team).toEqual([{ memberId: '8f14e45f-ceea-467a-9575-5f3c1b2a7d90', name: 'Jane PM' }, { memberId: '2c624232-cdd2-4f4a-9e8b-1d2c3b4a5f60', name: 'Sam Worker' }]);
     expect(json.os.capabilities.clientReviewFromOs).toBe(true);
+    // v1.9.1 §41.3: the site drains its backup feed only when the OS advertises this (pairing and heartbeat).
+    expect(json.os.capabilities.backupRestoreEvents).toBe(true);
     const sig = verifyResponse({
       status: 200,
       path: HS,
@@ -450,6 +452,8 @@ describe('POST /handshake — heartbeat and rotation', () => {
     const r = await post(HS, handshakeBody('heartbeat'), { secret: outbound, keyId: 1, nonce: '44444444-5555-4666-8777-888888888888' });
     expect(r.statusCode).toBe(200);
     expect(r.json().rotate).toBeUndefined();
+    expect(r.json().os.capabilities).toEqual({ clientReviewFromOs: true, seoProfiles: true, backupRestoreEvents: true });
+    expect(r.json().contractRevision).toBe('1.9.1');
     expect(store.heartbeats).toBe(1);
     const sig = verifyResponse({
       status: 200,

@@ -36,13 +36,20 @@ import { CmsKeyConfigError } from '../../lib/cmsKeyCrypto.js';
 import { credentialToRings, normalizeReviewEvent } from '../../lib/siteAdapters/emdash.js';
 import { suggestionEventMessage, clientActorFromEvent } from '../../lib/siteAdapters/clientReview.js';
 import { validateLeadEvent } from '../../lib/siteAdapters/leads.js';
-import { validateSecurityEvent, isSecurityEventType } from '../../lib/siteAdapters/security.js';
+import { validateSecurityEvent, isSecurityEventType, OS_CAPABILITY_BACKUP_RESTORE_EVENTS } from '../../lib/siteAdapters/security.js';
 import { REOPEN_EVENT, reopenEventMessage, reopenNotice } from '../../lib/siteAdapters/reopen.js';
 import { validateSignalsEvent, isSignalsEventType } from '../../lib/signals/validate.js';
 import { validateCitationEvent } from '../../lib/citations/validate.js';
 import { isMigrationActive } from '../../lib/cmsMigration.js';
 
 export const OS_VERSION = '2026.10.16';
+
+/**
+ * What this OS implements, sent in BOTH handshake responses (pairing and heartbeat). v1.9.1 §41.3:
+ * `backupRestoreEvents` lets the site drain its backup feed (backup.restore_* and backup.completed / failed / verified);
+ * it is advertised only because ingestion, the restore tiles and the alerts are in place (lib/security/restoreStore.js).
+ */
+export const OS_CAPABILITIES = Object.freeze({ clientReviewFromOs: true, seoProfiles: true, [OS_CAPABILITY_BACKUP_RESTORE_EVENTS]: true });
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const MIGRATION_PENDING_MESSAGE = 'Site migration in progress; retry later';
@@ -370,7 +377,7 @@ export async function emdashWebhookRoutes(app, opts = {}) {
       serverTime: Math.floor(now / 1000),
       // The OS implements client review from the OS (v1.1.0); profiles come in stage 3.
       // What the OS does: client review from the OS (v1.1.0), SEO profile views + proposals (v1.4.0).
-      os: { version: OS_VERSION, capabilities: { clientReviewFromOs: true, seoProfiles: true } },
+      os: { version: OS_VERSION, capabilities: { ...OS_CAPABILITIES } },
       pms: await store.listPms(project),
       // v1.2.1 §23(2): roster for byline mapping on the site (the OS mirrors site-info.bylines read-only).
       ...(store.listTeam ? { team: await store.listTeam(project) } : {}),
@@ -446,7 +453,7 @@ export async function emdashWebhookRoutes(app, opts = {}) {
       projectName: String(project.name || '').slice(0, 200),
       serverTime: Math.floor(now / 1000),
       // The OS implements client review from the OS (v1.1.0); profiles come in stage 3.
-      os: { version: OS_VERSION, capabilities: { clientReviewFromOs: true, seoProfiles: true } },
+      os: { version: OS_VERSION, capabilities: { ...OS_CAPABILITIES } },
       pms: await store.listPms(project),
       // v1.2.1 §23(2): roster for byline mapping on the site (the OS mirrors site-info.bylines read-only).
       ...(store.listTeam ? { team: await store.listTeam(project) } : {}),
