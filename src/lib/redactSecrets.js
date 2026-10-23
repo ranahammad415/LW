@@ -20,6 +20,9 @@ const DROP_KEYS = new Set([
   'tokenHash',
   // Agency Google refresh token (encrypted) never leaves the API either (SEO Engine OS-16 hardening).
   'refreshTokenEnc',
+  // Remote MCP server: authorization-code and client-secret hashes (src/mcp/oauth/*).
+  'codeHash',
+  'clientSecretHash',
 ]);
 export const REDACTED = '[REDACTED]';
 const MAX_DEPTH = 12;

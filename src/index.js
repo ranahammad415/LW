@@ -127,6 +127,8 @@ import { purgeGoogleTokenIssuances } from './lib/googleBroker.js';
 import { runWeeklyClientDigest } from './lib/weeklyDigest.js';
 import { runScheduledTaskSync } from './lib/dataImport/scheduledSync.js';
 import { runInterviewSchedulerTick, isSchedulerEnabled, isLeader } from './lib/interviewScheduler.js';
+import { loadMcpConfig, installMcpRouteCollector, registerMcp, purgeMcpRecords } from './mcp/index.js';
+import { adminMcpRoutes } from './routes/admin/mcp.js';
 
 // ── Startup secret validation (fail-fast) ─────────────────────────────────
 const REQUIRED_SECRETS = ['JWT_ACCESS_SECRET', 'JWT_REFRESH_SECRET', 'COOKIE_SECRET'];
@@ -151,6 +153,17 @@ if (
 const TRUST_PROXY = String(process.env.TRUST_PROXY || '').toLowerCase() === 'true';
 // Request URLs are redacted in logs: interview links carry their token in the path.
 const app = Fastify({ logger: { serializers: { req: redactedRequestSerializer } }, trustProxy: TRUST_PROXY });
+
+// Remote MCP server (docs/ledger/features/mcp-server.md): off unless MCP_ENABLED=true; an enabled but unusable config
+// (MCP_PUBLIC_URL missing/invalid, no valid MCP_ALLOWED_ROLES) refuses to start. The route collector must be installed
+// before any route plugin so the MCP catalog sees the whole live route table.
+const mcpConfig = loadMcpConfig();
+if (mcpConfig.enabled && mcpConfig.errors.length) {
+  // eslint-disable-next-line no-console
+  console.error(`[startup] MCP_ENABLED=true but the MCP config is invalid: ${mcpConfig.errors.join('; ')} — refusing to start.`);
+  process.exit(1);
+}
+const mcpRouteCollector = mcpConfig.enabled ? installMcpRouteCollector(app) : null;
 
 // Ensure uploads directory exists
 const __filename = fileURLToPath(import.meta.url);
@@ -328,6 +341,13 @@ const OMNISEARCH_ENABLED = String(process.env.OMNISEARCH_ENABLED || '').toLowerC
 if (OMNISEARCH_ENABLED) {
   app.register(omniSearchRoutes, { prefix: '/api/omni-search' });
   app.log.info('OmniSearch routes enabled');
+}
+// Remote MCP server: POST /api/mcp, OAuth (/api/mcp/oauth/*), discovery (/.well-known/oauth-*) and the OWNER admin
+// routes (/api/admin/mcp/*). Nothing is registered (404 everywhere) unless MCP_ENABLED=true.
+if (mcpConfig.enabled) {
+  registerMcp(app, { cfg: mcpConfig, collector: mcpRouteCollector });
+  app.register(adminMcpRoutes, { prefix: '/api/admin', cfg: mcpConfig });
+  app.log.info({ resource: mcpConfig.resource, allowedRoles: mcpConfig.allowedRoles }, 'MCP server enabled');
 }
 
 app.get('/health', async (req, reply) => {
@@ -625,6 +645,11 @@ try {
       const googleTokenAudit = await purgeGoogleTokenIssuances();
       if (idempotencyKeys || engineReview || googleTokenAudit) {
         app.log.info({ idempotencyKeys, engineReview, googleTokenAudit }, 'Engine retention purge complete');
+      }
+      // Remote MCP server retention (expired auth requests / tokens / confirmations, audit > MCP_AUDIT_RETENTION_DAYS).
+      if (mcpConfig.enabled) {
+        const mcp = await purgeMcpRecords(mcpConfig);
+        if (Object.values(mcp).some(Boolean)) app.log.info({ mcp }, 'MCP retention purge complete');
       }
     } catch (err) {
       app.log.error({ err }, 'Engine retention purge failed');
