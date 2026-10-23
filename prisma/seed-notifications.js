@@ -326,6 +326,14 @@ const templates = [
     bodyText: 'The health score of {{clientName}} is now {{score}} ({{band}}, {{delta}} points). {{reasons}} Open the client\'s Health section for the full breakdown.',
     inAppMessage: '{{clientName}} health: {{band}} ({{score}}, {{delta}})',
     variables: ['clientName', 'score', 'band', 'delta', 'reasons', 'actionUrl'] },
+  // New lead (site form `lead.created` or the embedded GoHighLevel form webhook; migration 20261110_ghl_forms seeds the
+  // same row with INSERT IGNORE). Staff only (project / client PMs); never personal data in the text.
+  { slug: 'lead_received', name: 'New Lead', description: 'A new quote request reached Agency OS from the website form or the embedded GoHighLevel form (project PMs; staff only; no personal data in the message)', category: 'client',
+    subject: 'New lead: {{projectName}}',
+    bodyHtml: '<p>A new request for <strong>{{projectName}}</strong> arrived from the {{formLabel}}.</p><p>Open the project in Agency OS to see it.</p>',
+    bodyText: 'A new request for {{projectName}} arrived from the {{formLabel}}. Open the project in Agency OS to see it.',
+    inAppMessage: 'New lead for {{projectName}} ({{formLabel}})',
+    variables: ['projectName', 'formLabel', 'actionUrl'] },
 
   { slug: 'welcome_email', name: 'Welcome Email', description: 'Sent when a new client account is created', category: 'client',
     subject: 'Welcome to Localwaves, {{contactName}}!',

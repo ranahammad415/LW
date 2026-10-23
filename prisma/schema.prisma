@@ -749,6 +749,8 @@ model Project {
   seoCitations          SeoCitationMirror[]
   seoCitationState      SeoCitationState?
   seoCitationRuns       SeoCitationCheckRun[]
+  externalFormEndpoints ExternalFormEndpoint[]
+  externalFormReceipts  ExternalFormReceipt[]
 
   @@map("project")
 }
@@ -1711,6 +1713,24 @@ model CmsLead {
   /// subject_request | retention | spam | other | site
   erasedReason      String?   @db.VarChar(32)
   receivedAt        DateTime  @default(now())
+  /// v1.9.0 (GoHighLevel forms): emdash = the site's own form (lead.created; leadId = the site's id); ghl = an embedded
+  /// GoHighLevel form received by the OS webhook (leadId = "xg_<ULID>", minted by the OS).
+  provider          String    @default("emdash") @db.VarChar(16)
+  /// The provider's contact id (GHL contact.id). Not unique: one contact can send several requests.
+  externalId        String?   @db.VarChar(64)
+  /// Staff-only deep link to the contact in the provider's app (never in a client response).
+  externalUrl       String?   @db.VarChar(500)
+  /// The site's id of the read-only mirror created by lead-import (contract 1.9.0); cleared when the site deletes it.
+  cmsMirrorLeadId   String?   @db.VarChar(64)
+  /// lead-import job: pending | sending | done | failed | skipped | cancelled (null = no mirror wanted, emdash leads).
+  mirrorState       String?   @db.VarChar(16)
+  mirrorAttempts    Int       @default(0)
+  /// Next attempt (pending) or the claim time (sending).
+  mirrorNextAt      DateTime?
+  /// Last error code of the mirror job (no PII).
+  mirrorError       String?   @db.VarChar(40)
+  /// Erased in the OS while the provider still holds the contact: the "delete it in GoHighLevel too" checklist item.
+  externalErasePending Boolean @default(false)
 
   project Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
   photos  CmsLeadPhoto[]
@@ -1719,6 +1739,9 @@ model CmsLead {
 
   @@unique([projectId, leadId])
   @@index([projectId, receivedAt])
+  @@index([projectId, provider, externalId])
+  @@index([projectId, cmsMirrorLeadId])
+  @@index([mirrorState, mirrorNextAt])
   @@map("cmslead")
 }
 
@@ -4059,6 +4082,8 @@ model SignalSession {
   engaged         Boolean  @default(false)
   ctaClicks       Int      @default(0)
   formStarts      Int      @default(0)
+  /// v1.9.0: form_submit signals (an embedded third-party form reached the thank-you page / was inferred inline).
+  formSubmits     Int      @default(0)
   refClass        String   @db.VarChar(10)
   refSource       String?  @db.VarChar(64)
   utmCampaign     String?  @db.VarChar(200)
@@ -4274,4 +4299,65 @@ model SignalConfigMirror {
   updatedAt DateTime  @default(now()) @updatedAt
 
   @@map("signalconfigmirror")
+}
+
+/// Per-project webhook credential for leads from an embedded third-party form (GoHighLevel workflow webhook,
+/// POST /api/webhooks/ghl/forms/:projectToken). Only sha256 hashes are stored; the token and the optional header
+/// secret are shown once. Rotation keeps the previous token valid for 24 h (prevTokenHash / prevValidUntil).
+model ExternalFormEndpoint {
+  id               String    @id @default(uuid())
+  projectId        String
+  /// ghl
+  provider         String    @default("ghl") @db.VarChar(16)
+  tokenHash        String    @unique @db.Char(64)
+  /// First characters of the token, to recognise it in GHL (not enough to use it).
+  tokenPrefix      String    @db.VarChar(12)
+  headerSecretHash String?   @db.Char(64)
+  createdAt        DateTime  @default(now())
+  createdById      String?   @db.VarChar(191)
+  rotatedAt        DateTime?
+  prevTokenHash    String?   @db.Char(64)
+  prevValidUntil   DateTime?
+  revokedAt        DateTime?
+  lastReceivedAt   DateTime?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, provider])
+  @@index([prevTokenHash])
+  @@map("externalformendpoint")
+}
+
+/// One delivery to the provider webhook (accepted | duplicate | rejected), counts and hashes only (never PII).
+/// dedupeKey (unique, accepted rows only) = sha256(project | form | contact | payloadHash | 10-minute bucket): a GHL
+/// retry of the same submission is answered { duplicate: true } and creates no second lead. Kept 90 days.
+model ExternalFormReceipt {
+  id          String   @id @default(uuid())
+  projectId   String
+  provider    String   @default("ghl") @db.VarChar(16)
+  receivedAt  DateTime @default(now())
+  /// accepted | duplicate | rejected
+  status      String   @db.VarChar(16)
+  /// ok | resubmit | duplicate | invalid_body | empty | unsupported_type | header_secret | too_large
+  reason      String?  @db.VarChar(40)
+  /// pinned | default (which payload shape the normaliser read)
+  shape       String?  @db.VarChar(16)
+  payloadHash String?  @db.Char(64)
+  dedupeKey   String?  @unique @db.Char(64)
+  externalId  String?  @db.VarChar(64)
+  formId      String?  @db.VarChar(64)
+  /// CmsLead.leadId created by this delivery (accepted) or answered for it (duplicate).
+  leadId      String?  @db.VarChar(64)
+  /// The earlier lead of the same contact and form within 10 minutes when this one is an edited re-submit.
+  duplicateOf String?  @db.VarChar(64)
+  /// HMAC of the sender IP (16 hex); never the IP.
+  ipHash      String?  @db.Char(16)
+  bytes       Int      @default(0)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, receivedAt])
+  @@index([projectId, externalId, receivedAt])
+  @@index([receivedAt])
+  @@map("externalformreceipt")
 }

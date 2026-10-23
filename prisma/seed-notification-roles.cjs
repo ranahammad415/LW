@@ -29,6 +29,7 @@ const MATRIX = {
   // Client / Account
   client_health_critical:        { active: false, owner: 0, pm: 0, mgr: 0, viewer: 0 }, // retired by health score v2
   health_score_drop:             { active: true,  owner: 1, pm: 1, mgr: 0, viewer: 0 },
+  lead_received:                 { active: true,  owner: 0, pm: 1, mgr: 0, viewer: 0 }, // staff only (GHL forms, 20261110)
   client_intake_updated:         { active: true,  owner: 1, pm: 1, mgr: 1, viewer: 0 },
   client_onboarding_complete:    { active: true,  owner: 1, pm: 1, mgr: 1, viewer: 0 },
   password_reset:                { active: true,  owner: 1, pm: 1, mgr: 1, viewer: 0 }, // informational - sent via direct sendEmail()
