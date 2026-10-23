@@ -263,6 +263,18 @@ describe('lead attribution', () => {
     expect(deriveAttribution(lead, now, [recent, now], []).lastTouch).toMatchObject({ class: 'social', source: 'facebook' });
   });
 
+  it('O-C190-1: a ghost session (unknown touch) keeps the form snapshot touch, no mismatch', () => {
+    const snapTouch = { at: '2026-10-22T13:58:00.000Z', class: 'ai', source: 'chatgpt', landing: '/spa/' };
+    const lead = { leadAt: new Date('2026-10-22T14:00:00Z'), siteSnapshot: { origin: 'ghl-fields', match: 'fields', lastTouch: snapTouch } };
+    const ghost = { sessionId: sid(3), startedAt: new Date('2026-10-22T14:00:01Z'), touch: { at: '2026-10-22T14:00:01.000Z', class: 'unknown', source: '' }, landingPath: null };
+    const d = deriveAttribution(lead, ghost, [ghost], []);
+    expect(d).toMatchObject({ lastClass: 'ai', lastSource: 'chatgpt', mismatch: false, landingPath: '/spa/' });
+    expect(d.firstTouch).toMatchObject({ class: 'ai', source: 'chatgpt' });
+    // a real session touch still wins over the snapshot
+    const real = { ...ghost, touch: { at: '2026-10-22T13:50:00.000Z', class: 'search', source: 'google', landing: '/' }, landingPath: '/' };
+    expect(deriveAttribution(lead, real, [real], [])).toMatchObject({ lastClass: 'search', mismatch: true });
+  });
+
   it('cookie-only: "Source recorded on the website: ChatGPT"', () => {
     expect(attributionSentence({ model: 'cookie-only', siteSnapshot: { lastTouch: { class: 'ai', source: 'chatgpt' } } })[0]).toBe('Source recorded on the website: ChatGPT');
   });

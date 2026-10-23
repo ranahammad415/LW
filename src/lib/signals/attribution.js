@@ -125,7 +125,13 @@ export function deriveAttribution(row, leadSession, visitorSessions, leadPagevie
   const leadAt = new Date(row.leadAt).getTime();
   const before = visitorSessions.filter((s) => new Date(s.startedAt).getTime() <= new Date(leadSession.startedAt).getTime());
   const earliest = before.filter((s) => new Date(s.startedAt).getTime() >= addMonths(row.leadAt, -13).getTime());
-  const firstTouch = sessionTouch(earliest[0]) || sessionTouch(leadSession);
+  // O-C190-1: the snapshot's touches (e.g. a GoHighLevel form's own oa_ref_class / oa_source fields) win over a
+  // derived touch that knows nothing (a ghost session with no visit events derives unknown / missing).
+  const known = (t) => (t && t.class && t.class !== 'unknown' ? t : null);
+  const snapFirst = known(row.siteSnapshot?.firstTouch) || known(row.siteSnapshot?.lastTouch);
+  const snapLast = known(row.siteSnapshot?.lastTouch);
+  const derivedFirst = sessionTouch(earliest[0]) || sessionTouch(leadSession);
+  const firstTouch = known(derivedFirst) || snapFirst || derivedFirst;
   let lastTouch = sessionTouch(leadSession);
   if (!isNonDirect(lastTouch)) {
     // last non-direct click within 30 days
@@ -140,6 +146,7 @@ export function deriveAttribution(row, leadSession, visitorSessions, leadPagevie
       }
     }
   }
+  if (!known(lastTouch) && snapLast) lastTouch = snapLast;
   const pages = leadPageviews.filter((e) => new Date(e.at).getTime() <= leadAt).slice(0, 20).map((e) => ({ path: e.pagePath, at: new Date(e.at).toISOString() }));
   const snapSource = row.siteSnapshot?.lastTouch?.source || null;
   return {

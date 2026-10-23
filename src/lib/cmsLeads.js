@@ -286,6 +286,9 @@ export async function eraseLocalLead(projectId, leadId, reason, { sitePending = 
     prisma.cmsLeadPhoto.deleteMany({ where: { leadRowId: lead.id } }),
     ...leadErasureOps(prisma, projectId, lead.leadId, prep.relinks.filter((r) => r.leadId !== mirrorId)),
     ...(mirrorId ? leadErasureOps(prisma, projectId, mirrorId, mirrorPrep.relinks.filter((r) => r.leadId !== lead.leadId)) : []),
+    // O-C190-2: the embedded form's thank-you signal (form_submit, leadId null) of the erased lead's visit goes too,
+    // or the data-quality counter would report it as a submit whose lead never arrived.
+    ...(ghl && prep.sessionId ? [prisma.signalEvent.deleteMany({ where: { projectId, sessionId: prep.sessionId, type: 'form_submit' } })] : []),
     prisma.cmsLead.update({
       where: { id: lead.id },
       data: {

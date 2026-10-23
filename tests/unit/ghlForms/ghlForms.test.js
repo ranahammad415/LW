@@ -747,6 +747,19 @@ describe('erasure of a GHL lead', () => {
     expect(await confirmExternalErase('p1', body.leadId)).toBe(false);
   });
 
+  it('O-C190-2: the erased lead visit form_submit goes too (not counted as unmatched); other sessions keep theirs', async () => {
+    const { body } = await receiveGhlForm({ project: PROJECT, endpoint: { id: 'ep' }, body: pinned() });
+    const sessionId = rows('leadAttribution')[0].sessionId;
+    expect(sessionId).toBeTruthy();
+    rows('signalEvent').push(
+      { projectId: 'p1', eventId: 'fs1', sessionId, type: 'form_submit', leadId: null, at: new Date() },
+      { projectId: 'p1', eventId: 'pv1', sessionId, type: 'pageview', leadId: null, at: new Date() },
+      { projectId: 'p1', eventId: 'fs2', sessionId: 'other', type: 'form_submit', leadId: null, at: new Date() }
+    );
+    expect((await eraseLead({ projectId: 'p1', leadId: body.leadId, reason: 'spam', user: OWNER })).erased).toBe(true);
+    expect(rows('signalEvent').map((e) => e.eventId).sort()).toEqual(['fs2', 'pv1']);
+  });
+
   it('without a mirror (not imported yet): no site call; the queued import is cancelled', async () => {
     const { body } = await receiveGhlForm({ project: PROJECT, endpoint: { id: 'ep' }, body: pinned() });
     const out = await eraseLead({ projectId: 'p1', leadId: body.leadId, reason: 'spam', user: OWNER });

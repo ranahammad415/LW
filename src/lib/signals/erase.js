@@ -81,9 +81,9 @@ export function leadErasureOps(db, projectId, siteLeadId, relinks = []) {
 export async function prepareLeadErasure(projectId, siteLeadId, db = prisma) {
   const [relinks, attr] = await Promise.all([
     leadSessionRelinks(projectId, siteLeadId, db),
-    db.leadAttribution.findFirst({ where: { projectId, siteLeadId }, select: { leadAt: true } }),
+    db.leadAttribution.findFirst({ where: { projectId, siteLeadId }, select: { leadAt: true, sessionId: true } }),
   ]);
-  return { relinks, dates: attr?.leadAt ? [attr.leadAt] : [] };
+  return { relinks, dates: attr?.leadAt ? [attr.leadAt] : [], sessionId: attr?.sessionId || null };
 }
 
 /** After the lead-erasure transaction: mark the lead's day dirty (the nightly rollup drops its count). */
