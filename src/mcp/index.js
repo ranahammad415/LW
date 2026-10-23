@@ -17,6 +17,7 @@ import { tokenRoutes } from './oauth/token.js';
 import { mcpEndpointRoutes } from './transport.js';
 
 export { loadMcpConfig } from './config.js';
+export { installMcpRouteGuard } from './routeGuard.js';
 
 export function installMcpRouteCollector(app) {
   const collector = createRouteCollector();
@@ -70,7 +71,8 @@ export async function purgeMcpRecords(cfg, { db = prisma, now = new Date() } = {
   const [authRequests, tokens, confirmations, audit, clients] = await Promise.all([
     db.mcpAuthRequest.deleteMany({ where: { expiresAt: { lt: weekAgo } } }),
     db.mcpToken.deleteMany({ where: { OR: [{ expiresAt: { lt: weekAgo } }, { revokedAt: { lt: weekAgo } }, { usedAt: { lt: weekAgo } }] } }),
-    db.mcpConfirmation.deleteMany({ where: { expiresAt: { lt: new Date(now.getTime() - DAY) } } }),
+    // Confirmations hold the exact request (args cleared on consume, review L3): gone 1 h after expiry / consumption.
+    db.mcpConfirmation.deleteMany({ where: { OR: [{ expiresAt: { lt: new Date(now.getTime() - 3_600_000) } }, { consumedAt: { lt: new Date(now.getTime() - 3_600_000) } }] } }),
     db.mcpAuditLog.deleteMany({ where: { createdAt: { lt: new Date(now.getTime() - cfg.auditRetentionDays * DAY) } } }),
     db.mcpClient.deleteMany({ where: { lastUsedAt: null, createdAt: { lt: new Date(now.getTime() - 180 * DAY) }, grants: { none: {} } } }),
   ]);

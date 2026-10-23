@@ -8,7 +8,7 @@
 import { readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { classifyRequest } from './danger.js';
+import { classifyRequest, normalizePattern } from './danger.js';
 
 const METHODS = new Set(['GET', 'POST', 'PATCH', 'PUT', 'DELETE']);
 
@@ -36,12 +36,12 @@ export function createRouteCollector() {
       for (const raw of methods) {
         const method = String(raw).toUpperCase();
         if (!METHODS.has(method)) continue;
-        const url = String(opts.url || opts.path || '');
+        const url = normalizePattern(String(opts.url || opts.path || ''));
         if (!url.startsWith('/api/')) continue;
         const key = `${method} ${url}`;
         if (seen.has(key)) continue;
         seen.add(key);
-        routes.push({ method, url });
+        routes.push({ method, url, mcp: typeof opts.config?.mcp === 'string' ? opts.config.mcp : null });
       }
     },
   };
@@ -71,10 +71,10 @@ function compilePattern(url) {
 export class RouteCatalog {
   constructor(liveRoutes = [], jsonRoutes = loadCatalogJson()) {
     const meta = new Map(jsonRoutes.map((r) => [`${r.m} ${r.p}`, r]));
-    this.entries = liveRoutes.map(({ method, url }) => {
+    this.entries = liveRoutes.map(({ method, url, mcp = null }) => {
       const j = meta.get(`${method} ${url}`);
       const c = compilePattern(url);
-      return { method, path: url, guard: j?.g || '', purpose: j?.pu || '', ...c };
+      return { method, path: url, mcp, guard: j?.g || '', purpose: j?.pu || '', ...c };
     });
   }
 
@@ -105,11 +105,12 @@ export class RouteCatalog {
 
   /** Exact pattern lookup ("GET /api/tasks/:id/comments"). */
   byPattern(method, pattern) {
-    return this.entries.find((e) => e.method === method && e.path === pattern) || null;
+    const p = normalizePattern(pattern);
+    return this.entries.find((e) => e.method === method && e.path === p) || null;
   }
 
   describe(entry) {
-    const c = classifyRequest({ method: entry.method, routePattern: entry.path, path: entry.path });
+    const c = classifyRequest({ method: entry.method, routePattern: entry.path, path: entry.path, routeConfig: entry.mcp ? { mcp: entry.mcp } : null });
     return {
       method: entry.method,
       path: entry.path,
@@ -118,7 +119,8 @@ export class RouteCatalog {
       danger: c.level,
       reasons: c.reasons,
       blocked: c.level === 'blocked',
-      confirmRequired: c.level === 'dangerous',
+      confirmRequired: c.level === 'dangerous' || c.level === 'critical',
+      ownerApprovalRequired: c.level === 'critical',
       scopeRequired: c.scopeRequired,
     };
   }

@@ -2,23 +2,27 @@
  * Executes OS requests for MCP tools by replaying an ordinary HTTP request through app.inject() with a 60-second
  * internal JWT for the signed-in user (features/mcp-server.md §Audit, limits, redaction). Every existing guard,
  * validation, Idempotency-Key, rate limit and the global redaction hook run unchanged. The MCP layer adds a second
- * mask (maskSecretsDeep), the danger gate (danger.js) and the confirm step for dangerous requests.
+ * mask (maskSecretsDeep), the danger gate (danger.js), the confirm step for dangerous / critical requests, and binds
+ * each internal JWT to the classified route (`rk`, `cf`; enforced again by routeGuard.js on the matched route).
  * The MCP layer makes no Prisma write outside its own tables and no outbound HTTP.
  */
 import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
 import { canonicalJson } from '../lib/idempotency.js';
-import { classifyRequest } from './danger.js';
-import { maskSecretsDeep, summarizeArgs } from './redact.js';
+import { classifyRequest, needsConfirm, normalizePattern } from './danger.js';
+import { maskSecretsDeep, previewBody } from './redact.js';
 import { generateSecret, hasWriteScope, PREFIX, sha256Hex } from './oauth/tokens.js';
 
 const METHODS = new Set(['GET', 'POST', 'PATCH', 'PUT', 'DELETE']);
 export const MAX_BODY_BYTES = 65_536;
 export const MAX_QUERY_BYTES = 2_048;
 export const MAX_PATH = 500;
+/** Concrete route paths only: no percent-encoding, no query, no exotic characters (security review H1). */
+const PATH_CHARS_RE = /^[A-Za-z0-9/_\-.:~]+$/;
 
-export function mintInternalJwt(user, grantId, secret = process.env.JWT_ACCESS_SECRET) {
-  return jwt.sign({ sub: user.id, role: user.role, tv: user.tokenVersion ?? 0, via: 'mcp', mg: grantId }, secret, { expiresIn: '60s' });
+/** `rk` = the classified "METHOD /pattern"; `cf` = confirmed through confirm_action (dangerous / critical). */
+export function mintInternalJwt(user, grantId, { rk = null, cf = false } = {}, secret = process.env.JWT_ACCESS_SECRET) {
+  return jwt.sign({ sub: user.id, role: user.role, tv: user.tokenVersion ?? 0, via: 'mcp', mg: grantId, rk, cf: cf === true }, secret, { expiresIn: '60s' });
 }
 
 function isPlainObject(v) {
@@ -42,7 +46,8 @@ export function validateOsRequest({ method, path, query, body }) {
   if (!METHODS.has(method)) return 'method must be GET, POST, PATCH, PUT or DELETE';
   if (typeof path !== 'string' || !path.startsWith('/api/')) return 'path must start with /api/';
   if (path.length > MAX_PATH) return `path is longer than ${MAX_PATH} characters`;
-  if (/[?#\s\\]/.test(path) || path.includes('..') || path.includes('//')) return 'path must be a plain route path (put the query in `query`)';
+  if (path.includes('%')) return 'path must not be percent-encoded (use the plain route path)';
+  if (!PATH_CHARS_RE.test(path) || path.includes('..') || path.includes('//')) return 'path may only contain letters, digits and / _ - . : ~ (put the query in `query`)';
   if (query !== undefined && query !== null) {
     if (!isPlainObject(query)) return 'query must be an object';
     for (const v of Object.values(query)) {
@@ -58,7 +63,10 @@ export function validateOsRequest({ method, path, query, body }) {
   return null;
 }
 
-/** Route pattern for a concrete path: Fastify findRoute (existence + params) narrowed by the catalog. */
+/**
+ * Route pattern for a concrete path: Fastify findRoute (existence + params) narrowed by the live catalog. A route the
+ * catalog cannot name is refused (never classified on the raw path).
+ */
 export function resolveRoute(app, catalog, method, path) {
   let params = null;
   if (typeof app.findRoute === 'function') {
@@ -67,14 +75,14 @@ export function resolveRoute(app, catalog, method, path) {
     params = Object.keys(found.params || {});
   }
   const m = catalog.match(method, path, params);
-  if (!m) return params ? { pattern: path, params: {} } : null;
-  return { pattern: m.entry.path, params: m.params };
+  if (!m) return null;
+  return { pattern: normalizePattern(m.entry.path), params: m.params, routeConfig: m.entry.mcp ? { mcp: m.entry.mcp } : null };
 }
 
 /** One injected OS request. Never throws: timeouts and inject errors come back as { error }. */
-export async function injectOsRoute(ctx, { method, path, query, body, idempotencyKey, toolName }) {
+export async function injectOsRoute(ctx, { method, path, query, body, idempotencyKey, toolName, rk = null, cf = false }) {
   const headers = {
-    authorization: `Bearer ${mintInternalJwt(ctx.user, ctx.grant.id)}`,
+    authorization: `Bearer ${mintInternalJwt(ctx.user, ctx.grant.id, { rk, cf })}`,
     accept: 'application/json',
     'x-mcp-tool': String(toolName || 'mcp').slice(0, 64),
   };
@@ -130,12 +138,13 @@ export function osErrorMessage(statusCode, body) {
 }
 
 /**
- * Validates, resolves, classifies and runs one OS request (or parks it as a confirmation when dangerous).
+ * Validates, resolves, classifies and runs one OS request (or parks it as a confirmation when dangerous / critical).
  * Returns an outcome:
  *   { kind:'result', statusCode, body, idempotentReplayed, route, danger }
  *   { kind:'confirm', payload, route, danger, confirmationId }
  *   { kind:'error', message, code, statusCode?, route?, danger }
- * `confirmed: true` (confirm_action) skips the confirm step only; blocked and scope checks always run.
+ * `confirmed: true` (confirm_action, after any owner approval) skips the confirm step only; blocked and scope checks
+ * always run, and the internal JWT then carries cf=true for this one route.
  */
 export async function executeOsRequest(ctx, req, { confirmed = false, toolArgs = undefined } = {}) {
   const method = String(req.method || 'GET').toUpperCase();
@@ -145,18 +154,18 @@ export async function executeOsRequest(ctx, req, { confirmed = false, toolArgs =
   const resolved = resolveRoute(ctx.app, ctx.catalog, method, path);
   if (!resolved) return { kind: 'error', code: 'NOT_FOUND', statusCode: 404, message: `No route ${method} ${path}. Use os_route_search.`, danger: 'read', route: { method, path } };
   const route = { method, path, pattern: resolved.pattern };
-  const c = classifyRequest({ method, routePattern: resolved.pattern, path, query, body });
+  const c = classifyRequest({ method, routePattern: resolved.pattern, path, query, body, routeConfig: resolved.routeConfig });
   if (c.level === 'blocked') {
     return { kind: 'error', code: 'BLOCKED', statusCode: 403, message: 'This route is not available through MCP', reasons: c.reasons, danger: 'blocked', route };
   }
   if (c.level !== 'read' && !hasWriteScope(ctx.scope)) {
     return { kind: 'error', code: 'READ_ONLY_GRANT', statusCode: 403, message: 'This connection is read-only (os:read); reconnect with full access to make changes', danger: c.level, route };
   }
-  if (c.level === 'dangerous' && !confirmed) {
-    const conf = await createConfirmation(ctx, { tool: req.toolName, request: { method, path, query: query ?? null, body: body ?? null, idempotencyKey: idempotencyKey ?? null }, toolArgs }, { route, reasons: c.reasons, body });
-    return { kind: 'confirm', payload: conf.payload, confirmationId: conf.id, danger: 'dangerous', route };
+  if (needsConfirm(c.level) && !confirmed) {
+    const conf = await createConfirmation(ctx, { tool: req.toolName, request: { method, path, query: query ?? null, body: body ?? null, idempotencyKey: idempotencyKey ?? null }, toolArgs }, { route, reasons: c.reasons, body, level: c.level });
+    return { kind: 'confirm', payload: conf.payload, confirmationId: conf.id, danger: c.level, route };
   }
-  const res = await injectOsRoute(ctx, { method, path, query, body, idempotencyKey, toolName: req.toolName });
+  const res = await injectOsRoute(ctx, { method, path, query, body, idempotencyKey, toolName: req.toolName, rk: `${method} ${resolved.pattern}`, cf: confirmed && needsConfirm(c.level) });
   if (res.error) {
     return { kind: 'error', code: res.error, statusCode: res.statusCode, message: res.error === 'TIMEOUT' ? `The OS did not answer within ${Math.round(ctx.cfg.toolTimeoutMs / 1000)} s` : 'OS error', danger: c.level, route };
   }
@@ -166,19 +175,27 @@ export async function executeOsRequest(ctx, req, { confirmed = false, toolArgs =
   return { kind: 'result', statusCode: res.statusCode, body: res.body, idempotentReplayed: res.idempotentReplayed, danger: c.level, route };
 }
 
-/** Stores a single-use confirmation and returns the preview payload with the plaintext confirm token (shown once). */
-export async function createConfirmation(ctx, args, { route, reasons, body }) {
+/**
+ * Stores a single-use confirmation and returns the preview payload with the plaintext confirm token (shown once).
+ * The preview shows every non-secret field (strings ≤ 500 chars, first array items) so the human can judge it.
+ * `critical` confirmations also need the owner's approval in the OS UI (MCP_CRITICAL_APPROVAL) and live 30 minutes.
+ */
+export async function createConfirmation(ctx, args, { route, reasons, body, level = 'dangerous' }) {
   const token = generateSecret(PREFIX.confirm);
   const stored = JSON.parse(JSON.stringify(args ?? {}));
+  const approval = level === 'critical' && ctx.cfg.criticalApproval !== false;
   const preview = {
     method: route.method,
     path: route.path,
     routePattern: route.pattern,
+    level,
     reasons,
-    bodySummary: summarizeArgs(body ?? null),
+    query: previewBody(args?.request?.query ?? null),
+    body: previewBody(body ?? null),
   };
   const id = randomUUID();
-  const expiresAt = new Date(Date.now() + ctx.cfg.confirmTtlSec * 1000);
+  const ttl = approval ? ctx.cfg.criticalTtlSec || 1800 : ctx.cfg.confirmTtlSec;
+  const expiresAt = new Date(Date.now() + ttl * 1000);
   await ctx.db.mcpConfirmation.create({
     data: {
       id,
@@ -186,6 +203,7 @@ export async function createConfirmation(ctx, args, { route, reasons, body }) {
       userId: ctx.user.id,
       tool: String(args?.tool || 'os_api_request').slice(0, 64),
       routeKey: `${route.method} ${route.pattern}`.slice(0, 200),
+      level: approval ? 'critical' : 'dangerous',
       argsHash: sha256Hex(canonicalJson(stored)),
       args: stored,
       preview,
@@ -198,9 +216,19 @@ export async function createConfirmation(ctx, args, { route, reasons, body }) {
     payload: {
       status: 'confirmation_required',
       confirm_token: token,
-      expires_in: ctx.cfg.confirmTtlSec,
+      expires_in: ttl,
       preview,
-      next: 'Show the user this preview and ask. Only if they agree, call confirm_action with confirm_token.',
+      ...(approval
+        ? {
+            owner_approval_required: true,
+            approve_url: approvalUrl(ctx.cfg, id),
+            next: 'Show the user this preview. This action is critical: after the user agrees, call confirm_action; it will answer approval_pending with a link where the owner must approve it in the OS, then call confirm_action again.',
+          }
+        : { next: 'Show the user this preview and ask. Only if they agree, call confirm_action with confirm_token.' }),
     },
   };
+}
+
+export function approvalUrl(cfg, id) {
+  return `${cfg.spaUrl}/portal/admin/mcp?approve=${encodeURIComponent(id)}`;
 }

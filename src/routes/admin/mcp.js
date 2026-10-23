@@ -32,7 +32,7 @@ const auditQuery = z.object({
   limit: z.coerce.number().int().min(1).max(200).optional(),
   offset: z.coerce.number().int().min(0).max(100_000).optional(),
   tool: z.string().max(64).optional(),
-  danger: z.enum(['read', 'write', 'dangerous', 'blocked', 'auth']).optional(),
+  danger: z.enum(['read', 'write', 'dangerous', 'critical', 'blocked', 'auth']).optional(),
   ok: z.enum(['true', 'false']).optional(),
   from: z.string().max(40).optional(),
   to: z.string().max(40).optional(),
@@ -59,7 +59,11 @@ async function revokeGrants(where, ownerId) {
 
 export async function adminMcpRoutes(app, opts = {}) {
   const cfg = opts.cfg || {};
-  const owner = { onRequest: [app.verifyJwt, app.requireOwner] };
+  // MCP itself can never call these (danger.js blocks /api/admin/mcp; this is defense in depth, review H1).
+  const notViaMcp = async (request, reply) => {
+    if (request.viaMcp) return reply.code(403).send({ message: 'Not available through MCP', code: 'MCP_ROUTE_REFUSED' });
+  };
+  const owner = { onRequest: [app.verifyJwt, app.requireOwner, notViaMcp] };
   const noStore = (reply) => reply.header('Cache-Control', 'no-store');
 
   app.get('/mcp/status', owner, async (_request, reply) => {
@@ -80,6 +84,7 @@ export async function adminMcpRoutes(app, opts = {}) {
       pausedAt: setting?.mcpPausedAt || null,
       pausedBy: by,
       allowedRoles: cfg.allowedRoles || ['OWNER'],
+      criticalApproval: cfg.criticalApproval !== false,
       limits: { perMinute: cfg.ratePerMin, perHour: cfg.ratePerHour, toolTimeoutMs: cfg.toolTimeoutMs, maxResultBytes: cfg.maxResultBytes, auditRetentionDays: cfg.auditRetentionDays },
       counts: { activeGrants, clients, calls24h, errors24h },
     });
@@ -162,4 +167,58 @@ export async function adminMcpRoutes(app, opts = {}) {
     if (!row) return reply.code(404).send({ message: 'Audit row not found' });
     return noStore(reply).send(row);
   });
+
+  // ── Critical-action approvals (security review M3) ──
+  // A critical MCP action (people, rotation, publish, client sends, migration, site URL, deletes, erasure) runs only
+  // after the owner approves it here through a normal human session in the OS web app (browser Origin required).
+  const human = {
+    onRequest: [
+      app.verifyJwt,
+      app.requireOwner,
+      async (request, reply) => {
+        if (request.authMethod !== 'jwt' || request.viaMcp || request.user?.isAgent) return reply.code(403).send({ message: 'Approvals need a person signed in to the OS', code: 'MCP_HUMAN_ONLY' });
+      },
+    ],
+  };
+  const browserOrigin = (request, reply) => {
+    const origins = cfg.consentOrigins || [];
+    if (!origins.includes(request.headers.origin)) {
+      reply.code(403).send({ message: 'Approvals must come from the OS web app', code: 'MCP_BAD_ORIGIN' });
+      return false;
+    }
+    return true;
+  };
+
+  app.get('/mcp/approvals', human, async (_request, reply) => {
+    const rows = await prisma.mcpConfirmation.findMany({
+      where: { level: 'critical', approvedAt: null, consumedAt: null, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+      select: { id: true, grantId: true, userId: true, tool: true, routeKey: true, preview: true, createdAt: true, expiresAt: true },
+    });
+    return noStore(reply).send(rows);
+  });
+
+  async function decide(request, reply, approve) {
+    if (!browserOrigin(request, reply)) return reply;
+    const id = String(request.params.id || '').slice(0, 191);
+    const now = new Date();
+    const where = { id, level: 'critical', approvedAt: null, consumedAt: null, expiresAt: { gt: now } };
+    const done = await prisma.mcpConfirmation.updateMany({
+      where,
+      data: approve ? { approvedAt: now, approvedById: request.user.id } : { consumedAt: now, args: {} },
+    });
+    if (done.count !== 1) return reply.code(404).send({ message: 'This request is no longer pending (expired, used or already decided)' });
+    request.log.info({ by: request.user.id, confirmationId: id, approve }, 'MCP critical action decided');
+    try {
+      await prisma.mcpAuditLog.create({
+        data: { userId: request.user.id, tool: approve ? 'approval.approve' : 'approval.deny', danger: 'auth', ok: true, confirmationId: id, ip: request.headers['cf-connecting-ip'] || request.ip || null },
+      });
+    } catch (err) {
+      request.log.warn({ err: err?.message }, 'mcp approval audit write failed');
+    }
+    return noStore(reply).send({ id, approved: approve });
+  }
+  app.post('/mcp/approvals/:id/approve', human, (request, reply) => decide(request, reply, true));
+  app.post('/mcp/approvals/:id/deny', human, (request, reply) => decide(request, reply, false));
 }

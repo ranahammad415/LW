@@ -93,14 +93,17 @@ describe('DCR redirect allow-list', () => {
   it.each([
     ['https://claude.ai/api/mcp/auth_callback', null],
     ['https://claude.com/api/mcp/auth_callback', null],
-    ['https://app.claude.ai/cb', null],
-    ['https://console.anthropic.com/oauth/cb', null],
+    // review M4: exact pinned callbacks only; no subdomains, no other paths, no anthropic.com
+    ['https://app.claude.ai/cb', 'redirect_uri https://app.claude.ai/cb is not on the allow-list'],
+    ['https://claude.ai/other/callback', 'redirect_uri https://claude.ai/other/callback is not on the allow-list'],
+    ['https://console.anthropic.com/oauth/cb', 'redirect_uri https://console.anthropic.com/oauth/cb is not on the allow-list'],
     ['http://localhost:33418/callback', null],
     ['http://127.0.0.1:9000/cb', null],
+    ['https://localhost:9000/cb', null],
+    ['http://localhost.evil.example/cb', 'http redirect_uri is only allowed for localhost'],
     ['http://claude.ai/cb', 'http redirect_uri is only allowed for localhost'],
-    ['https://evil.example/cb', 'redirect host evil.example is not allowed'],
-    ['https://claude.ai.evil.example/cb', 'redirect host claude.ai.evil.example is not allowed'],
-    ['https://notclaude.ai/cb', 'redirect host notclaude.ai is not allowed'],
+    ['https://evil.example/cb', 'redirect_uri https://evil.example/cb is not on the allow-list'],
+    ['https://claude.ai.evil.example/api/mcp/auth_callback', 'redirect_uri https://claude.ai.evil.example/api/mcp/auth_callback is not on the allow-list'],
     ['https://claude.ai/cb#frag', 'redirect_uri must not have a fragment'],
     ['https://*.claude.ai/cb', 'wildcards are not allowed in redirect_uri'],
     ['/relative/cb', 'redirect_uri must be an absolute URL'],
@@ -108,6 +111,16 @@ describe('DCR redirect allow-list', () => {
     ['https://user:pw@claude.ai/cb', 'redirect_uri must not carry credentials'],
   ])('%s', (uri, reason) => {
     expect(checkRedirectUri(uri, cfg)).toBe(reason);
+  });
+
+  it('MCP_REDIRECT_URI_ALLOWLIST overrides the exact list; pinned URIs are the "verified" ones', async () => {
+    const { isPinnedRedirect } = await import('../../../src/mcp/oauth/clients.js');
+    const custom = loadMcpConfig({ ...ENV, MCP_REDIRECT_URI_ALLOWLIST: 'https://claude.ai/api/mcp/auth_callback,https://example.test/cb' });
+    expect(checkRedirectUri('https://example.test/cb', custom)).toBeNull();
+    expect(checkRedirectUri('https://claude.com/api/mcp/auth_callback', custom)).toMatch(/not on the allow-list/);
+    expect(isPinnedRedirect('https://claude.ai/api/mcp/auth_callback', custom)).toBe(true);
+    expect(isPinnedRedirect('https://example.test/cb', custom)).toBe(false);
+    expect(isPinnedRedirect('http://localhost:1234/cb', cfg)).toBe(false);
   });
 
   it('registration policy: > 10 URIs, grant/response types, auth method, scope', () => {

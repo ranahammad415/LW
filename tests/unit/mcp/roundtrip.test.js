@@ -26,7 +26,7 @@ const { redactResponseSecrets, responseDropKeys } = await import('../../../src/l
 const { registerApiTokenHooks } = await import('../../../src/lib/apiTokens.js');
 const { userRoutes } = await import('../../../src/routes/users.js');
 const { adminMcpRoutes } = await import('../../../src/routes/admin/mcp.js');
-const { loadMcpConfig, installMcpRouteCollector, registerMcp, purgeMcpRecords } = await import('../../../src/mcp/index.js');
+const { loadMcpConfig, installMcpRouteCollector, installMcpRouteGuard, registerMcp, purgeMcpRecords } = await import('../../../src/mcp/index.js');
 const { executeOsRequest } = await import('../../../src/mcp/invoke.js');
 const { s256Challenge } = await import('../../../src/mcp/oauth/pkce.js');
 const { resetMinuteWindows } = await import('../../../src/mcp/limits.js');
@@ -92,6 +92,7 @@ beforeAll(async () => {
   app.setValidatorCompiler(() => (data) => ({ value: data }));
   app.setSerializerCompiler(() => (data) => JSON.stringify(data));
   const collector = installMcpRouteCollector(app);
+  installMcpRouteGuard(app);
   app.addHook('preSerialization', async (request, _reply, payload) => redactResponseSecrets(payload, 0, responseDropKeys(request)));
   registerApiTokenHooks(app);
   // Same CORS plugin + settings shape as index.js (FRONTEND_URL origins, credentials).
@@ -110,6 +111,15 @@ beforeAll(async () => {
     db._tables.task = db._tables.task.filter((t) => t.id !== request.params.id);
     return before === db._tables.task.length ? reply.code(404).send({ message: 'Task not found' }) : reply.send({});
   });
+  app.post('/api/admin/impersonate', { onRequest: [app.verifyJwt, app.requireOwner] }, async () => {
+    globalThis.__impersonateRan = true;
+    return { token: 'minted' };
+  });
+  app.delete('/api/admin/clients/:id', { onRequest: [app.verifyJwt, app.requireOwner] }, async (request) => {
+    globalThis.__clientDeleted = request.params.id;
+    return { deleted: true };
+  });
+  app.post('/api/admin/notifications/send-test-email', { onRequest: [app.verifyJwt, app.requireOwner] }, async () => ({ sent: true }));
   app.get('/api/test/echo-auth', { onRequest: [app.verifyJwt] }, async (request) => ({ viaMcp: request.viaMcp, mcpGrantId: request.mcpGrantId, authMethod: request.authMethod, tool: request.headers['x-mcp-tool'] }));
   registerMcp(app, { cfg, collector, db });
   app.register(adminMcpRoutes, { prefix: '/api/admin', cfg });
@@ -185,8 +195,8 @@ describe('OAuth flow', () => {
     expect(ctxPm.json().code).toBe('MCP_ROLE_NOT_ALLOWED');
     const ctxOwner = await app.inject({ method: 'GET', url: `/api/mcp/oauth/authorize/${rid}`, headers: { authorization: `Bearer ${sessionJwt(OWNER)}` } });
     expect(ctxOwner.statusCode).toBe(200);
-    expect(ctxOwner.json()).toMatchObject({ client: { name: 'Claude', redirectHost: 'claude.ai' }, requestedScope: 'os:read os:write', user: { role: 'OWNER' }, paused: false });
-    expect(JSON.stringify(ctxOwner.json())).not.toMatch(/codeChallenge|state|auth_callback/);
+    expect(ctxOwner.json()).toMatchObject({ client: { name: 'Claude', redirectHost: 'claude.ai', redirectUri: REDIRECT, verified: true }, requestedScope: 'os:read os:write', user: { role: 'OWNER' }, paused: false });
+    expect(JSON.stringify(ctxOwner.json())).not.toMatch(/codeChallenge|"state"|s2/);
     const pmAllow = await app.inject({ method: 'POST', url: `/api/mcp/oauth/authorize/${rid}/decision`, headers: { authorization: `Bearer ${sessionJwt(PM)}`, origin: SPA }, payload: { decision: 'allow' } });
     expect(pmAllow.statusCode).toBe(403);
     const noOrigin = await app.inject({ method: 'POST', url: `/api/mcp/oauth/authorize/${rid}/decision`, headers: { authorization: `Bearer ${sessionJwt(OWNER)}` }, payload: { decision: 'allow' } });
@@ -314,6 +324,126 @@ describe('MCP over Streamable HTTP (stateless JSON, app.inject, no hijack)', () 
     const res = await client.callTool({ name: 'os_whoami', arguments: {} });
     expect(JSON.parse(res.content[0].text).user.role).toBe('OWNER');
     await client.close();
+  });
+});
+
+describe('security review regressions (through Fastify)', () => {
+  it('H1: percent-encoded paths are refused and the handler never runs', async () => {
+    globalThis.__impersonateRan = false;
+    for (const path of ['/api/admin/%69mpersonate', '/api/%61uth/login', '/api/projects/x/cms/rotat%65-keys', '/api/admin/%6dcp/grants']) {
+      for (const method of ['POST', 'GET']) {
+        const { result, data } = await callTool(owner.tokens.access_token, 'os_api_request', { method, path });
+        expect(result.isError).toBe(true);
+        expect(data.code).toBe('INVALID_REQUEST');
+      }
+    }
+    expect(globalThis.__impersonateRan).toBe(false);
+    expect(db._tables.mcpConfirmation.some((r) => /impersonate/.test(r.routeKey || ''))).toBe(false);
+  });
+
+  it('H1: an internal JWT replayed directly on another route / an encoded path is refused by the route guard', async () => {
+    const { mintInternalJwt } = await import('../../../src/mcp/invoke.js');
+    const tok = mintInternalJwt(OWNER, 'g-x', { rk: 'GET /api/users/me' });
+    const ok = await app.inject({ method: 'GET', url: '/api/users/me', headers: { authorization: `Bearer ${tok}` } });
+    expect(ok.statusCode).toBe(200);
+    const other = await app.inject({ method: 'GET', url: '/api/admin/clients', headers: { authorization: `Bearer ${tok}` } });
+    expect(other.json().code).toBe('MCP_ROUTE_REFUSED');
+    const enc = await app.inject({ method: 'POST', url: '/api/admin/%69mpersonate', headers: { authorization: `Bearer ${mintInternalJwt(OWNER, 'g-x', { rk: 'POST /api/admin/impersonate', cf: true })}` }, payload: {} });
+    expect(enc.statusCode).toBe(403);
+    expect(globalThis.__impersonateRan).toBe(false);
+    // the same encoded path with a normal human session still reaches the (owner-guarded) route: only MCP is restricted
+    const human = await app.inject({ method: 'POST', url: '/api/admin/%69mpersonate', headers: { authorization: `Bearer ${sessionJwt(OWNER)}` }, payload: {} });
+    expect(human.statusCode).toBe(200);
+    globalThis.__impersonateRan = false;
+  });
+
+  it('M3: critical action → preview with full body → approval_pending → owner approves in the OS (human, Origin) → runs once', async () => {
+    globalThis.__clientDeleted = null;
+    const first = await callTool(owner.tokens.access_token, 'os_api_request', { method: 'POST', path: '/api/admin/notifications/send-test-email', body: { to: 'someone@client.test', subject: 'Hello there' } });
+    expect(first.data).toMatchObject({ status: 'confirmation_required', owner_approval_required: true, preview: { level: 'critical', body: { to: 'someone@client.test', subject: 'Hello there' } } });
+    expect(first.data.approve_url).toMatch(/^http:\/\/localhost:5173\/portal\/admin\/mcp\?approve=/);
+    const del = await callTool(owner.tokens.access_token, 'os_api_request', { method: 'DELETE', path: '/api/admin/clients/c1' });
+    expect(del.data.preview.level).toBe('critical');
+    const token = del.data.confirm_token;
+    const pending = await callTool(owner.tokens.access_token, 'confirm_action', { confirm_token: token });
+    expect(pending.result.isError).toBeUndefined();
+    expect(pending.data).toMatchObject({ status: 'approval_pending' });
+    expect(globalThis.__clientDeleted).toBeNull();
+    const id = new URL(pending.data.approve_url).searchParams.get('approve');
+
+    // MCP itself cannot approve
+    const self = await callTool(owner.tokens.access_token, 'os_api_request', { method: 'POST', path: `/api/admin/mcp/approvals/${id}/approve` });
+    expect(self.data.code).toBe('BLOCKED');
+
+    const session = { authorization: `Bearer ${sessionJwt(OWNER)}` };
+    const list = await app.inject({ method: 'GET', url: '/api/admin/mcp/approvals', headers: session });
+    expect(list.json().map((r) => r.id)).toContain(id);
+    expect(JSON.stringify(list.json())).not.toMatch(/mcpx_|tokenHash|"args"/);
+    expect((await app.inject({ method: 'POST', url: `/api/admin/mcp/approvals/${id}/approve`, headers: session })).json().code).toBe('MCP_BAD_ORIGIN');
+    expect((await app.inject({ method: 'POST', url: `/api/admin/mcp/approvals/${id}/approve`, headers: { authorization: `Bearer ${sessionJwt(PM)}`, origin: SPA } })).statusCode).toBe(403);
+    const approve = await app.inject({ method: 'POST', url: `/api/admin/mcp/approvals/${id}/approve`, headers: { ...session, origin: SPA } });
+    expect(approve.json()).toEqual({ id, approved: true });
+
+    const done = await callTool(owner.tokens.access_token, 'confirm_action', { confirm_token: token });
+    expect(done.data).toMatchObject({ confirmed: true, result: { status: 200 } });
+    expect(globalThis.__clientDeleted).toBe('c1');
+    const row = db._tables.mcpConfirmation.find((r) => r.id === id);
+    expect(row.args).toEqual({});
+    expect(row.approvedById).toBe(OWNER.id);
+    expect((await callTool(owner.tokens.access_token, 'confirm_action', { confirm_token: token })).data.code).toBe('CONFIRM_USED');
+  });
+
+  it('M3: a denied critical action never runs', async () => {
+    globalThis.__clientDeleted = null;
+    const del = await callTool(owner.tokens.access_token, 'os_api_request', { method: 'DELETE', path: '/api/admin/clients/c2' });
+    const id = db._tables.mcpConfirmation.at(-1).id;
+    const deny = await app.inject({ method: 'POST', url: `/api/admin/mcp/approvals/${id}/deny`, headers: { authorization: `Bearer ${sessionJwt(OWNER)}`, origin: SPA } });
+    expect(deny.json()).toEqual({ id, approved: false });
+    expect((await callTool(owner.tokens.access_token, 'confirm_action', { confirm_token: del.data.confirm_token })).data.code).toBe('CONFIRM_USED');
+    expect(globalThis.__clientDeleted).toBeNull();
+  });
+
+  it('M3: MCP_CRITICAL_APPROVAL=off keeps the in-chat confirm only', async () => {
+    globalThis.__clientDeleted = null;
+    cfg.criticalApproval = false;
+    try {
+      const del = await callTool(owner.tokens.access_token, 'os_api_request', { method: 'DELETE', path: '/api/admin/clients/c3' });
+      expect(del.data.owner_approval_required).toBeUndefined();
+      const done = await callTool(owner.tokens.access_token, 'confirm_action', { confirm_token: del.data.confirm_token });
+      expect(done.data.confirmed).toBe(true);
+      expect(globalThis.__clientDeleted).toBe('c3');
+    } finally {
+      cfg.criticalApproval = true;
+    }
+  });
+
+  it('L1: JSON-RPC batches are rejected', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/mcp',
+      headers: { authorization: `Bearer ${owner.tokens.access_token}`, accept: ACCEPT, 'content-type': 'application/json' },
+      payload: [{ jsonrpc: '2.0', id: 1, method: 'tools/list' }, { jsonrpc: '2.0', id: 2, method: 'tools/list' }],
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe(-32600);
+  });
+
+  it('M5: global caps on new DCR clients and auth requests per hour; CF-Connecting-IP is the audited IP', async () => {
+    const saved = [cfg.dcrMaxPerHour, cfg.authRequestsMaxPerHour];
+    try {
+      cfg.dcrMaxPerHour = db._tables.mcpClient.length;
+      const reg = await app.inject({ method: 'POST', url: '/api/mcp/oauth/register', payload: { client_name: 'x', redirect_uris: [REDIRECT] } });
+      expect(reg.statusCode).toBe(429);
+      cfg.dcrMaxPerHour = saved[0];
+      const ok = await app.inject({ method: 'POST', url: '/api/mcp/oauth/register', headers: { 'cf-connecting-ip': '198.51.100.9' }, payload: { client_name: 'x', redirect_uris: [REDIRECT] } });
+      expect(ok.statusCode).toBe(201);
+      expect(db._tables.mcpClient.at(-1).registrationIp).toBe('198.51.100.9');
+      cfg.authRequestsMaxPerHour = db._tables.mcpAuthRequest.length;
+      const auth = await app.inject({ method: 'GET', url: `/api/mcp/oauth/authorize?response_type=code&client_id=${ok.json().client_id}&redirect_uri=${encodeURIComponent(REDIRECT)}&code_challenge=${s256Challenge(VERIFIER)}&code_challenge_method=S256` });
+      expect(auth.statusCode).toBe(429);
+    } finally {
+      [cfg.dcrMaxPerHour, cfg.authRequestsMaxPerHour] = saved;
+    }
   });
 });
 

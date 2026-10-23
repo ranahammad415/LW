@@ -18,14 +18,57 @@ export function isSecretKey(key) {
   return SECRET_KEY_RE.test(key) || SECRET_KEY_CAMEL_RE.test(key);
 }
 
-/** Copy of `value` with every secret-looking key's value replaced by [REDACTED] (null/empty values kept as is). */
+/** Capability-link keys (one-click WordPress logins, staff previews) and one-time codes. */
+const LINK_KEY_RE = /^(login|preview|pmPreview|clientPreview|magic)(Url|Link)$/i;
+const CODE_KEY_RE = /^(code|pairingCode|pairing_code|oneTimeCode|otp)$/;
+/** Error codes stay readable (`HUMAN_ONLY`, `MCP_PAUSED`, `HTTP_403`). */
+const ERROR_CODE_RE = /^[A-Z][A-Z0-9_]*$/;
+
+/** A string that carries a credential in its query (`?token=`, `agency_token=`, `?t=`, `_preview=`) or path. */
+export function maskSensitiveString(s) {
+  if (typeof s !== 'string' || !s) return s;
+  if (/token=/i.test(s)) return REDACTED;
+  return redactSensitiveUrl(s);
+}
+
+/**
+ * Copy of `value` with every secret-looking key's value replaced by [REDACTED] (null/empty values kept as is), login /
+ * preview links and one-time codes masked, and credential-bearing strings (token=, interview links) redacted.
+ */
 export function maskSecretsDeep(value, depth = 0) {
+  if (typeof value === 'string') return maskSensitiveString(value);
   if (depth > MAX_DEPTH || value === null || typeof value !== 'object') return value;
   if (Array.isArray(value)) return value.map((v) => maskSecretsDeep(v, depth + 1));
   const out = {};
   for (const [k, v] of Object.entries(value)) {
-    if (isSecretKey(k) && v !== null && v !== undefined && v !== '') out[k] = REDACTED;
+    const present = v !== null && v !== undefined && v !== '';
+    if (present && (isSecretKey(k) || LINK_KEY_RE.test(k))) out[k] = REDACTED;
+    else if (present && CODE_KEY_RE.test(k) && typeof v === 'string' && !ERROR_CODE_RE.test(v)) out[k] = REDACTED;
     else out[k] = maskSecretsDeep(v, depth + 1);
+  }
+  return out;
+}
+
+/**
+ * What the human sees in a confirm preview: every non-secret field in full (strings ≤ 500 chars), arrays as their
+ * first 10 items + a count, depth ≤ 4; only secret keys / credential strings are masked.
+ */
+export function previewBody(value, depth = 0) {
+  if (value === null || value === undefined) return value ?? null;
+  if (typeof value === 'string') {
+    const s = maskSensitiveString(value);
+    return s.length > 500 ? `${s.slice(0, 500)}… (${s.length} chars)` : s;
+  }
+  if (typeof value !== 'object') return value;
+  if (depth >= 4) return Array.isArray(value) ? `[${value.length} items]` : '{…}';
+  if (Array.isArray(value)) {
+    const items = value.slice(0, 10).map((v) => previewBody(v, depth + 1));
+    if (value.length > 10) items.push(`… and ${value.length - 10} more (${value.length} total)`);
+    return items;
+  }
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    out[k] = (isSecretKey(k) || LINK_KEY_RE.test(k)) && v !== null && v !== undefined && v !== '' ? REDACTED : previewBody(v, depth + 1);
   }
   return out;
 }

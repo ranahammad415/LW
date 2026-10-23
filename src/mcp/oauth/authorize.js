@@ -12,6 +12,8 @@ import { MCP_SCOPES, sameResource } from '../config.js';
 import { isValidCodeChallenge } from './pkce.js';
 import { generateSecret, isMcpPaused, sha256Hex, PREFIX } from './tokens.js';
 import { writeAudit } from '../audit.js';
+import { clientIp, mcpRateLimit } from '../clientIp.js';
+import { isPinnedRedirect } from './clients.js';
 
 const ERR_PAGE = (msg) =>
   `<!doctype html><html><head><meta charset="utf-8"><title>Authorization error</title></head><body style="font-family:sans-serif;max-width:560px;margin:3rem auto"><h1>Authorization error</h1><p>${msg}</p><p>Start the connection again from Claude.</p></body></html>`;
@@ -72,7 +74,7 @@ function userCanConnect(user, cfg) {
 }
 
 export async function authorizeRoutes(app, { cfg, db }) {
-  app.get('/api/mcp/oauth/authorize', { config: { rateLimit: { max: 30, timeWindow: '15 minutes' } } }, async (request, reply) => {
+  app.get('/api/mcp/oauth/authorize', { config: { rateLimit: mcpRateLimit(30, '15 minutes') } }, async (request, reply) => {
     reply.header('Cache-Control', 'no-store');
     const query = request.query || {};
     const clientId = q(query.client_id);
@@ -82,8 +84,14 @@ export async function authorizeRoutes(app, { cfg, db }) {
     if (!v.ok) {
       return reply.redirect(buildRedirect(v.redirectUri, { error: v.error, error_description: v.description, state: v.state, iss: cfg.issuer }), 302);
     }
+    // Global cap across all IPs and instances (review M5).
+    const recent = await db.mcpAuthRequest.count({ where: { createdAt: { gte: new Date(Date.now() - 3_600_000) } } });
+    if (recent >= cfg.authRequestsMaxPerHour) {
+      reply.header('Retry-After', '600');
+      return reply.code(429).type('text/html; charset=utf-8').send(ERR_PAGE('Too many connection attempts right now. Try again in a few minutes.'));
+    }
     const row = await db.mcpAuthRequest.create({
-      data: { ...v.value, ip: request.ip || null, expiresAt: new Date(Date.now() + cfg.authRequestTtlSec * 1000) },
+      data: { ...v.value, ip: clientIp(request), expiresAt: new Date(Date.now() + cfg.authRequestTtlSec * 1000) },
       select: { id: true },
     });
     return reply.redirect(`${cfg.spaUrl}/mcp/authorize?rid=${encodeURIComponent(row.id)}`, 302);
@@ -106,7 +114,7 @@ export async function authorizeRoutes(app, { cfg, db }) {
     const user = request.user;
     const base = {
       requestId: row.id,
-      client: { name: row.client.clientName, redirectHost: new URL(row.redirectUri).host, clientUri: row.client.clientUri || null },
+      client: { name: row.client.clientName, redirectHost: new URL(row.redirectUri).host, redirectUri: row.redirectUri, verified: isPinnedRedirect(row.redirectUri, cfg), clientUri: row.client.clientUri || null },
       requestedScope: row.scope,
       scopes: row.scope.split(' '),
       user: { name: user.name, email: user.email, role: user.role },
@@ -159,7 +167,7 @@ export async function authorizeRoutes(app, { cfg, db }) {
       return grant;
     });
     if (!result) return expired(reply);
-    await writeAudit(db, { grantId: result.id, userId: user.id, clientId: row.clientId, tool: 'oauth.consent', danger: 'auth', ok: true, args: { scope, client: row.client.clientName }, ip: request.ip }, request.log);
+    await writeAudit(db, { grantId: result.id, userId: user.id, clientId: row.clientId, tool: 'oauth.consent', danger: 'auth', ok: true, args: { scope, client: row.client.clientName }, ip: clientIp(request) }, request.log);
     return reply.send({ redirect_to: buildRedirect(row.redirectUri, { code, state: row.state, iss: cfg.issuer }) });
   });
 }

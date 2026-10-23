@@ -5,6 +5,19 @@
 import { z } from 'zod';
 import { executeOsRequest, resolveRoute } from '../invoke.js';
 import { applyFieldsLimit } from '../redact.js';
+import { idempotencyKeyFor } from './curated.js';
+
+const IDEM_BUCKET_MS = 15 * 60_000;
+
+/**
+ * Idempotency-Key for a non-GET os_api_request without one (review L2): same grant + request within the same
+ * 15-minute bucket → same key, so a retry after TIMEOUT replays instead of running twice on routes that support
+ * Idempotency-Key; a deliberate repeat later gets a new key.
+ */
+export function autoIdempotencyKey(ctx, args, now = Date.now()) {
+  if (args.idempotencyKey || String(args.method).toUpperCase() === 'GET') return args.idempotencyKey;
+  return idempotencyKeyFor(ctx, 'os_api_request', { method: args.method, path: args.path, query: args.query ?? null, body: args.body ?? null, bucket: Math.floor(now / IDEM_BUCKET_MS) });
+}
 
 const METHOD = z.enum(['GET', 'POST', 'PATCH', 'PUT', 'DELETE']);
 const RO = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
@@ -67,7 +80,7 @@ export const GENERIC_TOOLS = [
     run: async (ctx, args) => {
       const out = await executeOsRequest(
         ctx,
-        { method: args.method, path: args.path, query: args.query, body: args.body, idempotencyKey: args.idempotencyKey, toolName: 'os_api_request' },
+        { method: args.method, path: args.path, query: args.query, body: args.body, idempotencyKey: autoIdempotencyKey(ctx, args), toolName: 'os_api_request' },
         { toolArgs: { fields: args.fields, limit: args.limit } }
       );
       if (out.kind !== 'result') return out;

@@ -8,6 +8,7 @@
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { buildMcpServer } from './server.js';
 import { verifyMcpBearer } from './oauth/tokens.js';
+import { clientIp, mcpRateLimit } from './clientIp.js';
 
 const ALLOW_HEADERS = 'Authorization, Content-Type, Accept, Mcp-Session-Id, MCP-Protocol-Version, Last-Event-ID';
 
@@ -71,15 +72,17 @@ export async function mcpEndpointRoutes(app, { cfg, db, rootApp, getCatalog }) {
   // FRONTEND_URL origins only).
   app.options('/api/mcp', { config: { cors: false } }, preflight);
 
-  app.post('/api/mcp', { bodyLimit: 262_144, config: { cors: false, rateLimit: { max: 120, timeWindow: '1 minute' } } }, async (request, reply) => {
+  app.post('/api/mcp', { bodyLimit: 262_144, config: { cors: false, rateLimit: mcpRateLimit(120, '1 minute') } }, async (request, reply) => {
     mcpCorsHeaders(request, reply, cfg);
+    // JSON-RPC batches would run several tools behind one per-minute slot check (review L1); Claude does not batch.
+    if (Array.isArray(request.body)) return reply.code(400).send(jsonRpcError(-32600, 'Batch requests are not supported'));
     const auth = await verifyMcpBearer(db, request, cfg);
     if (!auth.ok) {
       if (auth.status === 401) reply.header('WWW-Authenticate', wwwAuthenticate(cfg, auth));
       if (auth.status === 403) reply.header('WWW-Authenticate', wwwAuthenticate(cfg, { error: 'insufficient_scope', description: auth.description }));
       return reply.code(auth.status).send({ error: auth.error || (auth.status === 401 ? 'unauthorized' : 'forbidden'), error_description: auth.description, ...(auth.code ? { code: auth.code } : {}) });
     }
-    const ctx = { ...auth.ctx, app: rootApp, cfg, db, catalog: getCatalog(), ip: request.ip, log: request.log };
+    const ctx = { ...auth.ctx, app: rootApp, cfg, db, catalog: getCatalog(), ip: clientIp(request), log: request.log };
     const out = await handleMcpPost(ctx, request);
     reply.code(out.status);
     for (const [k, v] of Object.entries(out.headers)) reply.header(k, v);

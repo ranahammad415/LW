@@ -127,7 +127,7 @@ import { purgeGoogleTokenIssuances } from './lib/googleBroker.js';
 import { runWeeklyClientDigest } from './lib/weeklyDigest.js';
 import { runScheduledTaskSync } from './lib/dataImport/scheduledSync.js';
 import { runInterviewSchedulerTick, isSchedulerEnabled, isLeader } from './lib/interviewScheduler.js';
-import { loadMcpConfig, installMcpRouteCollector, registerMcp, purgeMcpRecords } from './mcp/index.js';
+import { loadMcpConfig, installMcpRouteCollector, installMcpRouteGuard, registerMcp, purgeMcpRecords } from './mcp/index.js';
 import { adminMcpRoutes } from './routes/admin/mcp.js';
 
 // ── Startup secret validation (fail-fast) ─────────────────────────────────
@@ -164,6 +164,8 @@ if (mcpConfig.enabled && mcpConfig.errors.length) {
   process.exit(1);
 }
 const mcpRouteCollector = mcpConfig.enabled ? installMcpRouteCollector(app) : null;
+// Enforces the classification on the route Fastify actually matched for every MCP-originated request (review H1).
+if (mcpConfig.enabled) installMcpRouteGuard(app);
 
 // Ensure uploads directory exists
 const __filename = fileURLToPath(import.meta.url);
@@ -646,13 +648,18 @@ try {
       if (idempotencyKeys || engineReview || googleTokenAudit) {
         app.log.info({ idempotencyKeys, engineReview, googleTokenAudit }, 'Engine retention purge complete');
       }
-      // Remote MCP server retention (expired auth requests / tokens / confirmations, audit > MCP_AUDIT_RETENTION_DAYS).
-      if (mcpConfig.enabled) {
-        const mcp = await purgeMcpRecords(mcpConfig);
-        if (Object.values(mcp).some(Boolean)) app.log.info({ mcp }, 'MCP retention purge complete');
-      }
     } catch (err) {
       app.log.error({ err }, 'Engine retention purge failed');
+    }
+    // Remote MCP server retention (expired auth requests / tokens / confirmations, audit > MCP_AUDIT_RETENTION_DAYS).
+    // Own try/catch so one failure never skips the other purge.
+    if (mcpConfig.enabled) {
+      try {
+        const mcp = await purgeMcpRecords(mcpConfig);
+        if (Object.values(mcp).some(Boolean)) app.log.info({ mcp }, 'MCP retention purge complete');
+      } catch (err) {
+        app.log.error({ err }, 'MCP retention purge failed');
+      }
     }
   });
 

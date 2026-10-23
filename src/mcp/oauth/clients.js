@@ -1,21 +1,24 @@
 /**
  * Dynamic client registration (RFC 7591) for MCP connectors, and client authentication at the token endpoint.
- * Redirect policy: absolute URIs only; https, or http only for loopback hosts; the host (or a parent domain) must be
- * in MCP_REDIRECT_HOST_ALLOWLIST; no fragments, no wildcards; at most 10 URIs. A secret is issued only for the
- * client_secret_post / client_secret_basic auth methods (stored as sha256).
+ * Redirect policy (security review M4): an exact URI from MCP_REDIRECT_URI_ALLOWLIST (default Claude's two hosted
+ * callbacks), or a loopback http(s)://localhost|127.0.0.1[:port] URI (Claude Code / Desktop local flows). No subdomain
+ * matching, no fragments, no wildcards, no credentials; at most 10 URIs. A global DB-counted cap limits new clients
+ * per hour (MCP_DCR_MAX_PER_HOUR). A secret is issued only for the client_secret_post / client_secret_basic auth
+ * methods (stored as sha256).
  */
 import { generateSecret, sameHash, sha256Hex } from './tokens.js';
 import { MCP_SCOPES } from '../config.js';
 import { publicJsonHeaders } from './metadata.js';
+import { clientIp, mcpRateLimit } from '../clientIp.js';
 
 const AUTH_METHODS = ['none', 'client_secret_post', 'client_secret_basic'];
 const GRANT_TYPES = ['authorization_code', 'refresh_token'];
 const MAX_URIS = 10;
-const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]']);
+const LOOPBACK = new Set(['localhost', '127.0.0.1']);
 
-function hostAllowed(host, allowlist) {
-  const h = String(host || '').toLowerCase();
-  return allowlist.some((a) => h === a || h.endsWith(`.${a}`));
+/** True for a redirect URI on Claude's pinned hosted callbacks (shown as verified on the consent page). */
+export function isPinnedRedirect(uri, cfg) {
+  return (cfg.pinnedRedirectUris || []).includes(uri);
 }
 
 /** Policy check for one redirect URI. Returns null when allowed, else the reason. */
@@ -30,12 +33,10 @@ export function checkRedirectUri(uri, cfg) {
   }
   if (u.hash || uri.includes('#')) return 'redirect_uri must not have a fragment';
   if (u.username || u.password) return 'redirect_uri must not carry credentials';
-  if (u.protocol === 'http:') {
-    if (!LOOPBACK.has(u.hostname)) return 'http redirect_uri is only allowed for localhost';
-  } else if (u.protocol !== 'https:') {
-    return 'redirect_uri must use https';
-  }
-  if (!hostAllowed(u.hostname, cfg.redirectHosts)) return `redirect host ${u.hostname} is not allowed`;
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return 'redirect_uri must use https';
+  if (LOOPBACK.has(u.hostname)) return null;
+  if (u.protocol === 'http:') return 'http redirect_uri is only allowed for localhost';
+  if (!(cfg.redirectUris || []).includes(uri)) return `redirect_uri ${uri} is not on the allow-list`;
   return null;
 }
 
@@ -167,17 +168,24 @@ export async function authenticateClient(db, request) {
 export async function registerRoute(app, { cfg, db }) {
   app.post(
     '/api/mcp/oauth/register',
-    { config: { cors: false, rateLimit: { max: 10, timeWindow: '1 hour' } }, bodyLimit: 16_384 },
+    { config: { cors: false, rateLimit: mcpRateLimit(10, '1 hour') }, bodyLimit: 16_384 },
     async (request, reply) => {
       publicJsonHeaders(reply);
       const parsed = validateRegistration(request.body, cfg);
       if (!parsed.ok) return reply.code(400).send({ error: parsed.error, error_description: parsed.description });
+      // Global cap across all IPs and instances (per-IP limits are spoofable behind trustProxy; review M5).
+      const recent = await db.mcpClient.count({ where: { createdAt: { gte: new Date(Date.now() - 3_600_000) } } });
+      if (recent >= cfg.dcrMaxPerHour) {
+        reply.header('Retry-After', '600');
+        return reply.code(429).send({ error: 'temporarily_unavailable', error_description: 'Too many client registrations; try again later' });
+      }
+      const ip = clientIp(request);
       const secret = parsed.value.tokenEndpointAuthMethod === 'none' ? null : generateSecret('mcps_');
       const row = await db.mcpClient.create({
-        data: { ...parsed.value, clientSecretHash: secret ? sha256Hex(secret) : null, registrationIp: request.ip || null },
+        data: { ...parsed.value, clientSecretHash: secret ? sha256Hex(secret) : null, registrationIp: ip },
       });
       request.log?.info?.(
-        { mcpClientId: row.id, clientName: row.clientName, redirectHosts: row.redirectUris.map((u) => new URL(u).host), ip: request.ip },
+        { mcpClientId: row.id, clientName: row.clientName, redirectHosts: row.redirectUris.map((u) => new URL(u).host), ip },
         'MCP client registered'
       );
       return reply.code(201).send(registrationResponse(row, secret));

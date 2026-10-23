@@ -10,6 +10,7 @@ import { publicJsonHeaders } from './metadata.js';
 import { issueTokenPair, revokeGrantAndFamily, revokeTokenByValue, rotateRefreshToken, sameHash, sha256Hex, looksLikeSecret, PREFIX, isMcpPaused } from './tokens.js';
 import { AUTH_USER_SELECT } from '../../lib/apiTokens.js';
 import { writeAudit } from '../audit.js';
+import { clientIp, mcpRateLimit } from '../clientIp.js';
 
 function oauthError(reply, error, description, status = 400) {
   return reply.code(error === 'invalid_client' ? 401 : status).send({ error, error_description: description });
@@ -50,7 +51,7 @@ export async function exchangeCode(db, { body, client, cfg, now = new Date() }) 
 }
 
 export async function tokenRoutes(app, { cfg, db }) {
-  app.post('/api/mcp/oauth/token', { config: { cors: false, rateLimit: { max: 60, timeWindow: '15 minutes' } }, bodyLimit: 16_384 }, async (request, reply) => {
+  app.post('/api/mcp/oauth/token', { config: { cors: false, rateLimit: mcpRateLimit(60, '15 minutes') }, bodyLimit: 16_384 }, async (request, reply) => {
     publicJsonHeaders(reply);
     const body = request.body && typeof request.body === 'object' ? request.body : {};
     const auth = await authenticateClient(db, request);
@@ -70,7 +71,7 @@ export async function tokenRoutes(app, { cfg, db }) {
       const out = await rotateRefreshToken(db, { raw: body.refresh_token, clientId: client.id, resource: body.resource, cfg });
       if (!out.ok) {
         if (out.reuse) {
-          await writeAudit(db, { grantId: out.grantId, userId: out.userId, clientId: client.id, tool: 'oauth.refresh_reuse', danger: 'auth', ok: false, errorCode: 'REFRESH_REUSE', ip: request.ip }, request.log);
+          await writeAudit(db, { grantId: out.grantId, userId: out.userId, clientId: client.id, tool: 'oauth.refresh_reuse', danger: 'auth', ok: false, errorCode: 'REFRESH_REUSE', ip: clientIp(request) }, request.log);
         }
         return oauthError(reply, out.error, out.description);
       }
@@ -79,13 +80,13 @@ export async function tokenRoutes(app, { cfg, db }) {
     return oauthError(reply, 'unsupported_grant_type', 'grant_type must be authorization_code or refresh_token');
   });
 
-  app.post('/api/mcp/oauth/revoke', { config: { cors: false, rateLimit: { max: 60, timeWindow: '15 minutes' } }, bodyLimit: 16_384 }, async (request, reply) => {
+  app.post('/api/mcp/oauth/revoke', { config: { cors: false, rateLimit: mcpRateLimit(60, '15 minutes') }, bodyLimit: 16_384 }, async (request, reply) => {
     publicJsonHeaders(reply);
     const auth = await authenticateClient(db, request);
     if (!auth.ok) return oauthError(reply, auth.error, auth.description);
     const out = await revokeTokenByValue(db, { raw: request.body?.token, clientId: auth.client.id });
     if (out.revoked) {
-      await writeAudit(db, { grantId: out.grantId, userId: out.userId, clientId: auth.client.id, tool: 'oauth.revoke', danger: 'auth', ok: true, args: { kind: out.kind }, ip: request.ip }, request.log);
+      await writeAudit(db, { grantId: out.grantId, userId: out.userId, clientId: auth.client.id, tool: 'oauth.revoke', danger: 'auth', ok: true, args: { kind: out.kind }, ip: clientIp(request) }, request.log);
     }
     return reply.code(200).send({});
   });

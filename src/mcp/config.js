@@ -6,7 +6,8 @@
  * canonical resource URI (RFC 8707) is that URL; the OAuth issuer is its origin.
  */
 const ROLES = ['OWNER', 'PM', 'TEAM_MEMBER', 'CONTRACTOR', 'CLIENT'];
-const DEFAULT_REDIRECT_HOSTS = 'claude.ai,claude.com,anthropic.com,localhost,127.0.0.1';
+/** Claude's hosted OAuth callbacks (exact). Loopback http(s)://localhost|127.0.0.1:<port> is always allowed (Claude Code / Desktop). */
+export const PINNED_REDIRECT_URIS = ['https://claude.ai/api/mcp/auth_callback', 'https://claude.com/api/mcp/auth_callback'];
 const DEFAULT_CORS = 'https://claude.ai,https://claude.com';
 
 export const MCP_SCOPES = ['os:read', 'os:write'];
@@ -102,7 +103,11 @@ export function loadMcpConfig(env = process.env) {
     spaUrl,
     consentOrigins,
     allowedRoles,
-    redirectHosts: list(env.MCP_REDIRECT_HOST_ALLOWLIST || DEFAULT_REDIRECT_HOSTS).map((h) => h.toLowerCase()),
+    redirectUris: env.MCP_REDIRECT_URI_ALLOWLIST ? list(env.MCP_REDIRECT_URI_ALLOWLIST) : [...PINNED_REDIRECT_URIS],
+    pinnedRedirectUris: [...PINNED_REDIRECT_URIS],
+    criticalApproval: !['off', 'false', '0'].includes(String(env.MCP_CRITICAL_APPROVAL ?? 'on').trim().toLowerCase()),
+    dcrMaxPerHour: int(env.MCP_DCR_MAX_PER_HOUR, 20, 1, 1_000),
+    authRequestsMaxPerHour: int(env.MCP_AUTH_REQUESTS_MAX_PER_HOUR, 200, 1, 10_000),
     corsOrigins,
     accessTtlSec: int(env.MCP_ACCESS_TTL_SEC, 3600, 300, 86_400),
     refreshTtlDays: int(env.MCP_REFRESH_TTL_DAYS, 30, 1, 90),
@@ -115,5 +120,6 @@ export function loadMcpConfig(env = process.env) {
     authRequestTtlSec: 600,
     codeTtlSec: 300,
     confirmTtlSec: 300,
+    criticalTtlSec: 1800,
   };
 }
