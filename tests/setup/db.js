@@ -46,6 +46,13 @@ export async function truncateAllTables() {
   await prisma.$executeRawUnsafe('SET FOREIGN_KEY_CHECKS = 0')
   // Table names match Prisma model names (no @@map in schema)
   const tables = [
+    // Remote MCP server (children before parents)
+    'mcpauditlog',
+    'mcpconfirmation',
+    'mcptoken',
+    'mcpauthrequest',
+    'mcpgrant',
+    'mcpclient',
     'apitoken',
     'idempotencykey',
     'engine_review_outbox',

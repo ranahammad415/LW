@@ -104,6 +104,7 @@ model User {
   backlinkOrdersRequested     BacklinkOrder[]          @relation("BacklinkOrderRequester")
   backlinkOrderEvents         BacklinkOrderEvent[]     @relation("BacklinkOrderEventActor")
   apiTokens                   ApiToken[]               @relation("ApiTokenUser")
+  mcpGrants                   McpGrant[]               @relation("McpGrantUser")
 
   @@map("user")
 }
@@ -2770,6 +2771,9 @@ model AgencySetting {
   securityOnCallUserIds Json?
   /// Security platform: OS retention of status history / evidence / transitions / daily points, in days (plan §5.4).
   securityRetentionDays Int     @default(400)
+  /// Remote MCP server (features/mcp-server.md): OWNER "Pause MCP" switch; set = /api/mcp answers 503 MCP_PAUSED.
+  mcpPausedAt       DateTime?
+  mcpPausedById     String?  @db.VarChar(191)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @default(now()) @updatedAt
 
@@ -4361,4 +4365,160 @@ model ExternalFormReceipt {
   @@index([projectId, externalId, receivedAt])
   @@index([receivedAt])
   @@map("externalformreceipt")
+}
+
+// ── Remote MCP server (docs/ledger/features/mcp-server.md) ─────────────────────────────────────────────────────────
+// The OS is its own OAuth 2.1 authorization server for Claude connectors. Codes, tokens, confirm tokens and client
+// secrets are stored as sha256 hex only. Audit and confirmation rows have no FKs on purpose: they outlive revocation.
+
+/// A client registered through dynamic client registration (RFC 7591), e.g. a Claude connector.
+model McpClient {
+  id                      String    @id @default(uuid())
+  clientName              String    @db.VarChar(100)
+  /// JSON array of exact redirect URIs (policy: src/mcp/oauth/clients.js).
+  redirectUris            Json
+  /// none | client_secret_post | client_secret_basic
+  tokenEndpointAuthMethod String    @default("none") @db.VarChar(32)
+  clientSecretHash        String?   @db.VarChar(64)
+  grantTypes              Json
+  responseTypes           Json
+  scope                   String?   @db.VarChar(100)
+  clientUri               String?   @db.VarChar(500)
+  logoUri                 String?   @db.VarChar(500)
+  softwareId              String?   @db.VarChar(100)
+  softwareVersion         String?   @db.VarChar(50)
+  registrationIp          String?   @db.VarChar(64)
+  createdAt               DateTime  @default(now())
+  lastUsedAt              DateTime?
+  disabledAt              DateTime?
+  disabledById            String?   @db.VarChar(191)
+
+  grants       McpGrant[]
+  authRequests McpAuthRequest[]
+
+  @@map("mcpclient")
+}
+
+/// One /authorize attempt (10 minutes). The SPA consent page only sees its id; state, PKCE and redirect stay here.
+model McpAuthRequest {
+  id                  String    @id @default(uuid())
+  clientId            String
+  redirectUri         String    @db.VarChar(500)
+  state               String?   @db.VarChar(1024)
+  scope               String    @db.VarChar(100)
+  resource            String    @db.VarChar(500)
+  codeChallenge       String    @db.VarChar(128)
+  codeChallengeMethod String    @default("S256") @db.VarChar(8)
+  /// pending | approved | denied | consumed | expired
+  status              String    @default("pending") @db.VarChar(16)
+  userId              String?   @db.VarChar(191)
+  codeHash            String?   @unique @db.VarChar(64)
+  codeExpiresAt       DateTime?
+  grantId             String?   @db.VarChar(191)
+  ip                  String?   @db.VarChar(64)
+  expiresAt           DateTime
+  createdAt           DateTime  @default(now())
+
+  client McpClient @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([expiresAt])
+  @@map("mcpauthrequest")
+}
+
+/// A user's consent for one client. Revoking it kills every token at once; a tokenVersion bump does too.
+model McpGrant {
+  id               String    @id @default(uuid())
+  userId           String
+  clientId         String
+  /// "os:read" or "os:read os:write"
+  scope            String    @db.VarChar(100)
+  userTokenVersion Int       @default(0)
+  createdAt        DateTime  @default(now())
+  lastUsedAt       DateTime?
+  revokedAt        DateTime?
+  revokedById      String?   @db.VarChar(191)
+  revokedReason    String?   @db.VarChar(64)
+
+  user   User       @relation("McpGrantUser", fields: [userId], references: [id], onDelete: Cascade)
+  client McpClient  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  tokens McpToken[]
+
+  @@index([userId])
+  @@index([clientId])
+  @@map("mcpgrant")
+}
+
+/// Access (mcpa_, 1 h) and refresh (mcpr_, 30 d sliding, rotated, reuse detected per family) tokens.
+model McpToken {
+  id        String    @id @default(uuid())
+  grantId   String
+  /// access | refresh
+  kind      String    @db.VarChar(8)
+  tokenHash String    @unique @db.VarChar(64)
+  prefix    String    @db.VarChar(12)
+  familyId  String    @db.VarChar(191)
+  parentId  String?   @db.VarChar(191)
+  resource  String    @db.VarChar(500)
+  expiresAt DateTime
+  usedAt    DateTime?
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  grant McpGrant @relation(fields: [grantId], references: [id], onDelete: Cascade)
+
+  @@index([grantId, kind])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@map("mcptoken")
+}
+
+/// A previewed dangerous action waiting for confirm_action (single use, 5 minutes). Executes the stored args only.
+model McpConfirmation {
+  id         String    @id @default(uuid())
+  grantId    String    @db.VarChar(191)
+  userId     String    @db.VarChar(191)
+  tool       String    @db.VarChar(64)
+  routeKey   String?   @db.VarChar(200)
+  argsHash   String    @db.VarChar(64)
+  args       Json
+  preview    Json
+  tokenHash  String    @unique @db.VarChar(64)
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([expiresAt])
+  @@index([userId, createdAt])
+  @@map("mcpconfirmation")
+}
+
+/// One row per MCP tool call, OAuth consent / refresh / revoke and blocked attempt. Never a token or response body.
+model McpAuditLog {
+  id             String   @id @default(uuid())
+  grantId        String?  @db.VarChar(191)
+  userId         String   @db.VarChar(191)
+  clientId       String?  @db.VarChar(191)
+  tool           String   @db.VarChar(64)
+  routeMethod    String?  @db.VarChar(8)
+  routePattern   String?  @db.VarChar(200)
+  path           String?  @db.VarChar(500)
+  argsSummary    Json?
+  /// read | write | dangerous | blocked | auth
+  danger         String   @db.VarChar(16)
+  confirmed      Boolean  @default(false)
+  confirmationId String?  @db.VarChar(191)
+  statusCode     Int?
+  ok             Boolean
+  errorCode      String?  @db.VarChar(64)
+  durationMs     Int      @default(0)
+  resultBytes    Int      @default(0)
+  truncated      Boolean  @default(false)
+  ip             String?  @db.VarChar(64)
+  createdAt      DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([grantId, createdAt])
+  @@index([createdAt])
+  @@map("mcpauditlog")
 }
