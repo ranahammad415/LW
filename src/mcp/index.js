@@ -38,6 +38,13 @@ export function registerMcp(app, { cfg, collector, db = prisma }) {
         done(err);
       }
     });
+    // Public endpoints: never echo internal error text (Prisma messages carry the DB host). 4xx keep their message.
+    scope.setErrorHandler((err, request, reply) => {
+      const status = Number.isInteger(err.statusCode) && err.statusCode >= 400 && err.statusCode < 500 ? err.statusCode : 500;
+      if (status >= 500) request.log.error({ err }, 'MCP route failed');
+      reply.header('Cache-Control', 'no-store');
+      return reply.code(status).send(status >= 500 ? { error: 'server_error', error_description: 'Internal error' } : { error: 'invalid_request', error_description: err.message });
+    });
     // Browser preflights for the public OAuth JSON endpoints (no credentials).
     const preflight = async (_request, reply) => publicJsonHeaders(reply).code(204).send();
     for (const p of ['/api/mcp/oauth/register', '/api/mcp/oauth/token', '/api/mcp/oauth/revoke', '/.well-known/oauth-authorization-server', '/.well-known/oauth-protected-resource', `/.well-known/oauth-protected-resource${cfg.resourcePath}`]) {
