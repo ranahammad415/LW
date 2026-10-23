@@ -16,7 +16,11 @@ import { redact, redactString } from '../siteAdapters/redact.js';
 import { isoOrNull, sanitizeSiteActor } from '../siteAdapters/security.js';
 
 export const SIGNALS_EVENT_TYPES = Object.freeze(['signals.batch', 'signals.erased', 'signals.config_changed']);
-export const SIGNAL_TYPES = Object.freeze(['visit', 'pageview', 'engagement', 'cta_click', 'form_start', 'vitals', 'lead_submitted', 'lead_attributed']);
+/** v1.9.0 §40.3 appended `form_submit` (tier B: an embedded third-party form's submit, browser-reported). */
+export const SIGNAL_TYPES = Object.freeze(['visit', 'pageview', 'engagement', 'cta_click', 'form_start', 'vitals', 'lead_submitted', 'lead_attributed', 'form_submit']);
+/** v1.9.0 §40.3: signalEvent.lead.provider (optional; absent = the site's own form) and form_submit's heuristic. */
+export const LEAD_PROVIDERS = Object.freeze(['emdash', 'ghl']);
+export const FORM_SUBMIT_HEURISTICS = Object.freeze(['sticky', 'height']);
 /** Stable within contract 1 (never renamed or removed): Health v2 reads it. */
 export const REF_CLASSES = Object.freeze(['ai', 'search', 'social', 'referral', 'direct', 'email', 'ads', 'internal', 'unknown']);
 export const SIGNAL_CONSENT_SOURCES = Object.freeze(['default-us', 'optout-link', 'gpc', 'config-optin']);
@@ -216,6 +220,7 @@ const NON_NULL = Object.freeze({
   vitals: ['page', 'vitals'],
   lead_submitted: ['lead'],
   lead_attributed: ['lead', 'attribution', 'path'],
+  form_submit: ['page', 'lead'],
 });
 
 /**
@@ -259,6 +264,15 @@ export function sanitizeSignal(e, { siteId = null, ctx = { clamped: 0 } } = {}) 
     if (leadId === undefined) return { error: 'signal.lead.leadId is invalid' };
     if ((type === 'lead_submitted' || type === 'lead_attributed') && !leadId) return { error: 'signal.lead.leadId is required' };
     lead = { leadId, formId: text(e.lead.formId, SIGNAL_LIMITS.formId, ctx), placement: text(e.lead.placement, SIGNAL_LIMITS.placement, ctx) };
+    // v1.9.0 §40.3: optional keys, kept only when valid (an unknown value is dropped, never the signal)
+    if (e.lead.provider !== undefined && e.lead.provider !== null) {
+      if (LEAD_PROVIDERS.includes(e.lead.provider)) lead.provider = e.lead.provider;
+      else ctx.clamped += 1;
+    }
+    if (type === 'form_submit' && e.lead.heuristic !== undefined && e.lead.heuristic !== null) {
+      if (FORM_SUBMIT_HEURISTICS.includes(e.lead.heuristic)) lead.heuristic = e.lead.heuristic;
+      else ctx.clamped += 1;
+    }
   }
   let engagement = null;
   if (isObj(e.engagement)) {

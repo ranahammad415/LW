@@ -72,6 +72,12 @@ SET @col := (SELECT COUNT(*) FROM information_schema.COLUMNS
 SET @sql := IF(@col = 0, 'ALTER TABLE `signalsession` ADD COLUMN `formSubmits` INTEGER NOT NULL DEFAULT 0', 'SELECT 1');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
+-- ── leadattribution: GHL leads are found by their session (no lead event of their own) ──
+SET @idx := (SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = @db AND TABLE_NAME = 'leadattribution' AND INDEX_NAME = 'leadattribution_projectId_sessionId_idx');
+SET @sql := IF(@idx = 0, 'CREATE INDEX `leadattribution_projectId_sessionId_idx` ON `leadattribution`(`projectId`, `sessionId`)', 'SELECT 1');
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
 -- ── externalformendpoint ──
 CREATE TABLE IF NOT EXISTS `externalformendpoint` (
   `id` VARCHAR(191) NOT NULL,

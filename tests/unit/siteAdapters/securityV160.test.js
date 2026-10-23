@@ -120,7 +120,7 @@ describe('ingest validation, bounds and redaction', () => {
     expect(full.backups.client[0].label).toBe('Office NAS');
     const summary = sanitizeStatus(ex('security-status.response').status);
     for (const c of summary.checks) expect(c.evidence).toBeUndefined();
-    expect(CONTRACT_REVISION).toBe('1.8.0');
+    expect(CONTRACT_REVISION).toBe('1.9.0');
     expect(ERROR_CODES.UNKNOWN_CHECK.status).toBe(422);
     for (const r of ['security-config-set', 'security-run', 'security-ack']) expect(MUTATION_ROUTES.has(r)).toBe(true);
     for (const r of ['security-status', 'security-history', 'backup-status', 'logs-pull', 'security-config-get']) expect(MUTATION_ROUTES.has(r)).toBe(false);
@@ -430,7 +430,8 @@ describe('client view allow-list (O-4)', () => {
     expect(view.items).toHaveLength(1);
     expect(view.items[0]).toEqual({ text: expect.stringContaining('photos and files'), state: 'watch', since: expect.any(String), agencyNote: 'Re-running tonight', eta: null });
     expect(view.tiles.backup.destinations[0]).toEqual({ label: 'Office NAS', lastOkAt: expect.any(String), ok: false });
-    expect(JSON.stringify(view)).not.toMatch(/93|evidence|edge\.|oasispoolspas|cd08cc1|0\.1\.0/);
+    // timestamps are masked first: their milliseconds may contain "93" (the old flake); the score must not leak
+    expect(JSON.stringify(view).replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z/g, '<date>')).not.toMatch(/\b93\b|evidence|edge\.|oasispoolspas|cd08cc1|0\.1\.0/);
   });
 
   it('API tokens never reach the staff security routes or the agency security settings', () => {

@@ -57,6 +57,8 @@ export const MUTATION_ROUTES = new Set([
   'signals-erase',
   // v1.8.0 §39.3 (compare-and-set on baseRev; a person OWNER / PM or the OS listing monitor as kind system)
   'seo-citations-upsert',
+  // v1.9.0 §40.1 (capability leadImport; the OS lead-import job as kind system, or a person pressing Retry)
+  'lead-import',
 ]);
 
 export class CmsBridgeError extends Error {
@@ -366,6 +368,8 @@ export const emdashRoutes = {
   seoCitationsList: (conn, opts) => siteRequest(conn, 'seo-citations-list', {}, opts),
   seoCitationsUpsert: (conn, body, opts) => siteRequest(conn, 'seo-citations-upsert', body, opts),
   seoAiPrompts: (conn, opts) => siteRequest(conn, 'seo-ai-prompts', {}, opts),
+  /** v1.9.0 §40 (capability leadImport): read-only mirror of an OS provider lead. Mutation; body carries PII. */
+  leadImport: (conn, body, opts) => siteRequest(conn, 'lead-import', body, opts),
 };
 
 function siteCaps(project) {

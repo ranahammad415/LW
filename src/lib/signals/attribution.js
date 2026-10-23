@@ -87,6 +87,20 @@ export async function upsertSiteAttribution(lead, { attribution, path = null, he
 export async function applyLeadAttributed(project, ev) {
   const d = ev.data;
   if (!d || !isLeadId(d.leadId)) throw Object.assign(new Error('data.leadId is invalid'), { code: 'VALIDATION' });
+  // v1.9.0 §40.4: the site's MIRROR of an OS provider lead (lead-import). Join on externalRef.osLeadId (our CmsLead of
+  // that provider), remember the mirror's id, fill the attribution's gaps. Never a second lead, never parked.
+  const ext = d.externalRef;
+  if (ext && typeof ext === 'object' && !Array.isArray(ext)) {
+    if (ext.provider !== 'ghl' || !isLeadId(ext.osLeadId)) throw Object.assign(new Error('data.externalRef is invalid'), { code: 'VALIDATION' });
+    const lead = await prisma.cmsLead.findUnique({
+      where: { projectId_leadId: { projectId: project.id, leadId: ext.osLeadId } },
+      select: { id: true, projectId: true, leadId: true, siteCreatedAt: true, receivedAt: true, erasedAt: true, provider: true, cmsMirrorLeadId: true },
+    });
+    if (!lead || lead.provider !== 'ghl' || lead.erasedAt) return 'stale';
+    if (!sanitizeLeadAttribution(d.attribution)) throw Object.assign(new Error('data.attribution is invalid'), { code: 'VALIDATION' });
+    if (!lead.cmsMirrorLeadId) await prisma.cmsLead.update({ where: { id: lead.id }, data: { cmsMirrorLeadId: d.leadId } });
+    return upsertSiteAttribution(lead, { attribution: d.attribution, path: d.path });
+  }
   const lead = await prisma.cmsLead.findUnique({ where: { projectId_leadId: { projectId: project.id, leadId: d.leadId } }, select: { id: true, projectId: true, leadId: true, siteCreatedAt: true, receivedAt: true, erasedAt: true } });
   if (!lead) throw Object.assign(new Error('lead not stored yet'), { code: 'LEAD_NOT_STORED' });
   if (lead.erasedAt) return 'stale';
@@ -145,7 +159,8 @@ export function deriveAttribution(row, leadSession, visitorSessions, leadPagevie
     sessionsBeforeLead: Math.max(0, before.length - 1),
     timeToLeadSec: firstTouch?.at ? Math.max(0, Math.round((leadAt - Date.parse(firstTouch.at)) / 1000)) : null,
     sessionToLeadSec: Math.max(0, Math.round((leadAt - new Date(leadSession.startedAt).getTime()) / 1000)),
-    mismatch: !!(snapSource && lastTouch?.source && snapSource !== lastTouch.source),
+    // v1.9.0: a session found by the ±10 min form_submit window (no oa_sid on the GHL lead) is a guess: always flagged.
+    mismatch: row.siteSnapshot?.match === 'time-window' || !!(snapSource && lastTouch?.source && snapSource !== lastTouch.source),
   };
 }
 
@@ -188,6 +203,11 @@ export async function attributeLeads({ limit = 500, now = new Date(), log } = {}
     });
     const d = deriveAttribution(row, leadSession, visitorSessions, pageviews);
     await prisma.leadAttribution.update({ where: { id: row.id }, data: { ...d, needsDerive: false, derivedAt: now } });
+    // v1.9.0: a GoHighLevel lead has no lead event of its own (form_submit carries leadId null): link the session here
+    // so the explorer shows it (the sessionizer keeps the link on rebuilds, sessionize.js).
+    if (!leadSession.leadId) {
+      await prisma.signalSession.updateMany({ where: { projectId: row.projectId, sessionId: leadSession.sessionId, leadId: null }, data: { leadId: row.siteLeadId, leadCount: 1 } });
+    }
     await markDirty(row.projectId, [row.leadAt]);
     derived += 1;
   }
@@ -204,8 +224,11 @@ const fmtMinutes = (sec) => {
   return h < 48 ? `${h} h` : `${Math.round(h / 24)} days`;
 };
 
+/** v1.9.0: the lead came from an embedded GoHighLevel form (OS webhook), not from the site's own form. */
+export const isProviderAttribution = (a) => typeof a?.siteSnapshot?.origin === 'string' && a.siteSnapshot.origin.startsWith('ghl');
+
 function formWords(a) {
-  const form = a.formId === 'quote' || !a.formId ? 'quote form' : `${a.formId} form`;
+  const form = isProviderAttribution(a) ? 'contact form' : a.formId === 'quote' || !a.formId ? 'quote form' : `${a.formId} form`;
   return a.placement ? `${form} (${String(a.placement).replace(/_/g, ' ')})` : form;
 }
 
@@ -259,5 +282,7 @@ export function staffAttribution(a) {
     lastSource: a.lastSource || null,
     siteLastSource: a.siteSnapshot?.lastTouch?.source || null,
     derivedAt: a.derivedAt || null,
+    // v1.9.0: GoHighLevel leads: how the visit was found (oa_sid join, the form's own fields, or the ±10 min window)
+    ...(isProviderAttribution(a) ? { provider: 'ghl', match: a.siteSnapshot?.match || (a.sessionId ? 'session' : a.siteSnapshot?.lastTouch ? 'fields' : 'none') } : {}),
   };
 }

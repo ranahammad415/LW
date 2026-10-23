@@ -13,6 +13,8 @@ const PATTERNS = [
   // EmDash bridge review links (?t=<capability token>) and preview tokens (plan §6 Logging)
   [/([?&]t=)[^&#\s]+/g, '$1[redacted]'],
   [/([?&]_preview=)[^&#\s]+/gi, '$1[redacted]'],
+  // GoHighLevel forms webhook: the per-project token is the path (features/ghl-forms.md)
+  [/(\/webhooks\/ghl\/forms\/)[^/?#\s]+/g, '$1[redacted]'],
 ];
 
 export function redactSensitiveUrl(url) {

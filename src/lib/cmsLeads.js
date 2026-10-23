@@ -16,11 +16,12 @@ import { promises as fsp } from 'node:fs';
 import { prisma } from './prisma.js';
 import { probeImage } from './imageProbe.js';
 import { guardedFetch } from './siteAdapters/netGuard.js';
-import { leadToRow, leadAnalyticsMeta, leadPhotoUrlAllowed, LEAD_PHOTO_MAX_BYTES, LEAD_ERASE_REASONS } from './siteAdapters/leads.js';
+import { leadToRow, leadPhotoUrlAllowed, LEAD_PHOTO_MAX_BYTES, LEAD_ERASE_REASONS } from './siteAdapters/leads.js';
 import { CmsBridgeError, emdashRoutes, INTERACTIVE_RETRY_DELAYS_MS } from './siteAdapters/emdash.js';
 import { loadEmdashConnection } from './cmsStore.js';
 import { upsertSiteAttribution, applyLeadAttributed, heardFromOf } from './signals/attribution.js';
 import { leadErasureOps, prepareLeadErasure, afterLeadErasure } from './signals/erase.js';
+import { afterNewLead } from './leadSideEffects.js';
 
 export function leadsDir() {
   return process.env.CMS_LEADS_DIR ? path.resolve(process.env.CMS_LEADS_DIR) : path.resolve(process.cwd(), 'private-uploads', 'cms-leads');
@@ -33,61 +34,53 @@ function scrub(err) {
   return e;
 }
 
-function utcDay(d) {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-}
-
-async function bumpLeadMetrics(projectId, row) {
-  const occurredAt = row.siteCreatedAt || new Date();
-  const ruleId = `emdash:${row.formId || 'form'}`.slice(0, 80);
-  await prisma.siteLeadEvent.create({
-    data: { projectId, eventType: 'form_submit', ruleId, ruleLabel: row.formName, pagePath: row.sourcePath, occurredAt, meta: leadAnalyticsMeta(row) },
-  });
-  const day = utcDay(occurredAt);
-  const existing = await prisma.siteLeadDailyMetric.findUnique({ where: { projectId_date: { projectId, date: day } } });
-  const b = existing?.breakdowns && typeof existing.breakdowns === 'object' ? existing.breakdowns : {};
-  const rules = Array.isArray(b.rules) ? [...b.rules] : [];
-  const paths = Array.isArray(b.paths) ? [...b.paths] : [];
-  const r = rules.find((x) => x.eventType === 'form_submit' && (x.ruleId || x.ruleLabel) === ruleId);
-  if (r) r.count += 1;
-  else rules.push({ ruleId, ruleLabel: row.formName || null, eventType: 'form_submit', count: 1 });
-  if (row.sourcePath) {
-    const p = paths.find((x) => x.path === row.sourcePath);
-    if (p) p.count += 1;
-    else paths.push({ path: row.sourcePath, count: 1 });
-  }
-  if (existing) {
-    await prisma.siteLeadDailyMetric.update({
-      where: { id: existing.id },
-      data: { formSubmits: { increment: 1 }, leads: { increment: 1 }, breakdowns: { rules, paths } },
-    });
-  } else {
-    await prisma.siteLeadDailyMetric.create({ data: { projectId, date: day, formSubmits: 1, leads: 1, breakdowns: { rules, paths } } });
-  }
+/**
+ * v1.9.0: is this site lead id the mirror of an OS provider lead (lead-import)? A mirror is never a second lead: the
+ * site never sends lead.created for it (contract §40.2), and if one arrived anyway it is ignored (no double count in
+ * the lead metrics / Health v2 L1). `origin` / `externalRef` on the event mark a mirror as well.
+ */
+async function mirrorOwner(projectId, siteLeadId) {
+  if (!siteLeadId) return null;
+  return prisma.cmsLead.findFirst({ where: { projectId, cmsMirrorLeadId: String(siteLeadId).slice(0, 64) }, select: { id: true, leadId: true, erasedAt: true } });
 }
 
 /** Apply a lead event. Returns 'applied' | 'stale' (tombstoned / already known). */
-export async function applyLeadEvent(project, ev) {
+export async function applyLeadEvent(project, ev, { log } = {}) {
   try {
     if (ev.type === 'lead.created') {
       const { row, photos } = leadToRow(ev.lead, project.cmsSiteId, { siteUrl: project.wpUrl });
       const existing = await prisma.cmsLead.findUnique({ where: { projectId_leadId: { projectId: project.id, leadId: row.leadId } }, select: { id: true } });
       if (existing) return 'stale'; // known or erased (tombstone): never resurrect
-      const created = await prisma.cmsLead.create({ data: { projectId: project.id, ...row } });
+      if ((ev.lead.origin && ev.lead.origin !== 'website') || ev.lead.externalRef || (await mirrorOwner(project.id, row.leadId))) return 'stale';
+      const created = await prisma.cmsLead.create({ data: { projectId: project.id, provider: 'emdash', ...row } });
       for (const p of photos) await prisma.cmsLeadPhoto.create({ data: { leadRowId: created.id, ...p } });
       // v1.7.0 §38.5: the site's attribution snapshot (+ the "How did you hear about us?" answer). No PII.
       if (ev.lead.attribution || heardFromOf(row)) {
         await upsertSiteAttribution({ ...created, projectId: project.id, leadId: row.leadId }, { attribution: ev.lead.attribution, heardFrom: heardFromOf(row) });
       }
-      await bumpLeadMetrics(project.id, row).catch(() => {});
+      // Metrics, staff notification, realtime: the same for every provider (lib/leadSideEffects.js).
+      await afterNewLead(project.id, { ...row, provider: 'emdash', receivedAt: created.receivedAt }, { log });
       if (photos.some((p) => p.sourceUrl)) copyLeadPhotos(created.id, { busyRetries: LEAD_PHOTO_BUSY_RETRIES }).catch(() => {});
       return 'applied';
     }
     if (ev.type === 'lead.attributed') {
       // Retryable (LEAD_NOT_STORED) when the CmsLead is not stored yet: the site's outbox parks and re-sends it.
+      // v1.9.0: with data.externalRef the lead is the site's mirror of our provider lead (joined on osLeadId).
       return await applyLeadAttributed(project, ev);
     }
     if (ev.type === 'lead.erased') {
+      // v1.9.0 §40.2: the site deleted the MIRROR of a provider lead (its lead policy, or our lead-erase): our row
+      // stays (the OS owns that lead); only the link to the mirror is cleared.
+      const mirrored = await prisma.cmsLead.findMany({ where: { projectId: project.id, cmsMirrorLeadId: String(ev.leadId).slice(0, 64) }, select: { id: true, erasedAt: true, erasedReason: true } });
+      if (mirrored.length) {
+        const live = mirrored.filter((m) => !m.erasedAt).map((m) => m.id);
+        if (live.length) await prisma.cmsLead.updateMany({ where: { id: { in: live } }, data: { cmsMirrorLeadId: null } });
+        // Our erase of the mirror was still owed (site unreachable): the site deleted it itself, nothing is owed now.
+        for (const m of mirrored.filter((x) => x.erasedAt && parseErasedReason(x.erasedReason).siteErase)) {
+          await prisma.cmsLead.update({ where: { id: m.id }, data: { erasedReason: parseErasedReason(m.erasedReason).reason, utm: null } });
+        }
+        return live.length ? 'applied' : 'stale';
+      }
       const done = await eraseLocalLead(project.id, ev.leadId, 'site');
       return done ? 'applied' : 'stale';
     }
@@ -281,11 +274,18 @@ export async function eraseLocalLead(projectId, leadId, reason, { sitePending = 
   await deletePhotoFiles(lead.photos);
   // O-R3B-3: sessions that keep another lead after this one is gone, and the lead's rollup day (read before).
   const prep = await prepareLeadErasure(projectId, lead.leadId);
+  // v1.9.0: a provider lead's mirror on the site has its own id (cmsMirrorLeadId): its visit-row links go as well.
+  const mirrorId = lead.provider === 'ghl' && lead.cmsMirrorLeadId ? lead.cmsMirrorLeadId : null;
+  const mirrorPrep = mirrorId ? await prepareLeadErasure(projectId, mirrorId) : { relinks: [], dates: [] };
+  const ghl = lead.provider === 'ghl';
+  // The "delete the contact in GoHighLevel too" checklist item: owed after a person's erase (not after retention).
+  const externalOwed = ghl && !!lead.externalId && reason !== 'retention' && reason !== 'site';
   // One transaction: photo rows, the lead's attribution (v1.7.0 §38.5, plan §5.5: deleted in the SAME transaction as
   // the lead's erasure) and its links on visit rows, and the PII.
   await prisma.$transaction([
     prisma.cmsLeadPhoto.deleteMany({ where: { leadRowId: lead.id } }),
-    ...leadErasureOps(prisma, projectId, lead.leadId, prep.relinks),
+    ...leadErasureOps(prisma, projectId, lead.leadId, prep.relinks.filter((r) => r.leadId !== mirrorId)),
+    ...(mirrorId ? leadErasureOps(prisma, projectId, mirrorId, mirrorPrep.relinks.filter((r) => r.leadId !== lead.leadId)) : []),
     prisma.cmsLead.update({
       where: { id: lead.id },
       data: {
@@ -296,10 +296,27 @@ export async function eraseLocalLead(projectId, leadId, reason, { sitePending = 
         sourcePath: null,
         erasedAt: now,
         erasedReason: sitePending ? `${SITE_ERASE_PENDING}${reason}`.slice(0, 32) : reason,
+        ...(ghl
+          ? {
+              // the mirror job never runs for an erased lead; the contact link stays only while the checklist is owed
+              ...(['pending', 'sending', 'failed', 'skipped'].includes(lead.mirrorState) ? { mirrorState: 'cancelled', mirrorNextAt: null } : {}),
+              externalErasePending: externalOwed,
+              ...(externalOwed ? {} : { externalUrl: null, externalId: null }),
+            }
+          : {}),
       },
     }),
   ]);
   await afterLeadErasure(projectId, prep);
+  if (mirrorId) await afterLeadErasure(projectId, mirrorPrep);
+  return true;
+}
+
+/** The checklist item was done by a person: the contact is deleted in GoHighLevel. The contact link is dropped. */
+export async function confirmExternalErase(projectId, leadId) {
+  const lead = await prisma.cmsLead.findUnique({ where: { projectId_leadId: { projectId, leadId: String(leadId).slice(0, 64) } }, select: { id: true, erasedAt: true, externalErasePending: true } });
+  if (!lead || !lead.erasedAt || !lead.externalErasePending) return false;
+  await prisma.cmsLead.update({ where: { id: lead.id }, data: { externalErasePending: false, externalUrl: null, externalId: null } });
   return true;
 }
 
@@ -314,29 +331,39 @@ export async function eraseLead({ projectId, leadId, reason, user, log }) {
   if (!LEAD_ERASE_REASONS.includes(reason)) throw new CmsBridgeError({ status: 400, code: 'VALIDATION', message: 'Choose a reason.' });
   // e2e O17: only a lead we know (by the site's leadId, not our row id) can be erased from the OS; an unknown id must
   // never reach the site or leave a tombstone for a lead that does not exist.
-  const known = await prisma.cmsLead.findUnique({ where: { projectId_leadId: { projectId, leadId: String(leadId).slice(0, 64) } }, select: { id: true, erasedAt: true } });
+  const known = await prisma.cmsLead.findUnique({ where: { projectId_leadId: { projectId, leadId: String(leadId).slice(0, 64) } }, select: { id: true, erasedAt: true, provider: true, cmsMirrorLeadId: true, externalId: true, externalUrl: true } });
   if (!known) throw new CmsBridgeError({ status: 404, code: 'NOT_FOUND', message: 'Unknown lead.' });
+  // v1.9.0: a GoHighLevel lead lives in GHL (the OS cannot delete it there: manual checklist item), in the OS, and as
+  // a read-only mirror on the site once lead-import ran (erased with the existing lead-erase, by the mirror's id).
+  const ghl = known.provider === 'ghl';
+  const external = ghl && known.externalId && !known.erasedAt ? { provider: 'ghl', label: 'Delete the contact in GoHighLevel too', url: known.externalUrl || null } : null;
+  if (ghl && !known.cmsMirrorLeadId) {
+    const done = await eraseLocalLead(projectId, leadId, reason);
+    log?.info?.({ projectId, reason }, 'GoHighLevel lead erased (no site mirror)');
+    return { erased: done, alreadyGone: false, sitePending: false, ...(external ? { external } : {}) };
+  }
+  const siteLeadId = ghl ? known.cmsMirrorLeadId : String(leadId);
   const actor = leadActor(user);
   let res;
   let reached = false;
   try {
     const { conn } = await loadEmdashConnection(projectId);
     reached = true;
-    res = await emdashRoutes.leadErase(conn, { leadId: String(leadId), reason, actor }, { retryDelays: INTERACTIVE_RETRY_DELAYS_MS });
+    res = await emdashRoutes.leadErase(conn, { leadId: siteLeadId, reason, actor }, { retryDelays: INTERACTIVE_RETRY_DELAYS_MS });
   } catch (err) {
     const code = err instanceof CmsBridgeError ? err.code : 'NETWORK';
     if (reached && code === 'NOT_FOUND') {
       // The site no longer has it: nothing is owed there.
       await eraseLocalLead(projectId, leadId, reason);
-      return { erased: true, alreadyGone: true, sitePending: false };
+      return { erased: true, alreadyGone: true, sitePending: false, ...(external ? { external } : {}) };
     }
     await eraseLocalLead(projectId, leadId, reason, { sitePending: { code: String(code).slice(0, 40), actor } });
     log?.warn?.({ projectId, code }, 'EmDash lead erased in the OS; the site erase is pending');
-    return { erased: true, alreadyGone: false, sitePending: true };
+    return { erased: true, alreadyGone: false, sitePending: true, ...(external ? { external } : {}) };
   }
   await eraseLocalLead(projectId, leadId, reason);
   log?.info?.({ projectId, reason }, 'EmDash lead erased');
-  return { erased: !!res?.erased, alreadyGone: !!res?.alreadyGone, sitePending: false };
+  return { erased: ghl ? true : !!res?.erased, alreadyGone: !!res?.alreadyGone, sitePending: false, ...(external ? { external } : {}) };
 }
 
 /**
@@ -347,7 +374,7 @@ export async function eraseLead({ projectId, leadId, reason, user, log }) {
 export async function retryPendingSiteErases({ now = new Date(), limit = 20, log } = {}) {
   const rows = await prisma.cmsLead.findMany({
     where: { erasedAt: { not: null }, erasedReason: { startsWith: SITE_ERASE_PENDING } },
-    select: { id: true, projectId: true, leadId: true, erasedReason: true, utm: true },
+    select: { id: true, projectId: true, leadId: true, erasedReason: true, utm: true, provider: true, cmsMirrorLeadId: true },
     orderBy: { erasedAt: 'asc' },
     take: 200,
   });
@@ -357,6 +384,13 @@ export async function retryPendingSiteErases({ now = new Date(), limit = 20, log
     const st = row.utm && typeof row.utm === 'object' && row.utm.siteErase && typeof row.utm.siteErase === 'object' ? row.utm.siteErase : {};
     if (st.nextAt && Date.parse(st.nextAt) > now.getTime()) continue;
     const { reason } = parseErasedReason(row.erasedReason);
+    // v1.9.0: a provider lead is erased on the site through its mirror's id; without a mirror nothing is owed there.
+    const siteLeadId = row.provider === 'ghl' ? row.cmsMirrorLeadId : row.leadId;
+    if (!siteLeadId) {
+      await prisma.cmsLead.update({ where: { id: row.id }, data: { erasedReason: reason, utm: null } });
+      out.done += 1;
+      continue;
+    }
     let conn;
     try {
       const p = await prisma.project.findUnique({ where: { id: row.projectId }, select: { cmsRepairNeededAt: true } });
@@ -368,7 +402,7 @@ export async function retryPendingSiteErases({ now = new Date(), limit = 20, log
     out.tried += 1;
     const attempts = (Number.isInteger(st.attempts) ? st.attempts : 0) + 1;
     try {
-      await emdashRoutes.leadErase(conn, { leadId: String(row.leadId), reason: LEAD_ERASE_REASONS.includes(reason) ? reason : 'other', actor: st.actor }, { retryDelays: [] });
+      await emdashRoutes.leadErase(conn, { leadId: String(siteLeadId), reason: LEAD_ERASE_REASONS.includes(reason) ? reason : 'other', actor: st.actor }, { retryDelays: [] });
       await prisma.cmsLead.update({ where: { id: row.id }, data: { erasedReason: reason, utm: null } });
       out.done += 1;
     } catch (err) {

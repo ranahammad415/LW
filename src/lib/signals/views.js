@@ -15,9 +15,10 @@ import { prisma } from '../prisma.js';
 import { BOT_THRESHOLD, isSessionId, isVisitorId, rowToSignal } from './validate.js';
 import { CHANNELS, channelOf, sourceLabel, utcDay, addMonths, addDays, DAY_MS } from './common.js';
 import { sha256 } from './ingest.js';
-import { clientAttribution, staffAttribution } from './attribution.js';
+import { clientAttribution, staffAttribution, isProviderAttribution } from './attribution.js';
 import { hasSignals, loadSignalsMirror } from './config.js';
 import { RETENTION } from './retention.js';
+import { leadsByProvider, unmatchedFormSubmits } from './metrics.js';
 
 export const shortHash = (id) => (id ? sha256(id).slice(0, 8) : null);
 const iso = (v) => (v ? new Date(v).toISOString() : null);
@@ -48,6 +49,7 @@ const SESSION_LIST_SELECT = {
   engaged: true,
   ctaClicks: true,
   formStarts: true,
+  formSubmits: true,
   refClass: true,
   refSource: true,
   utmCampaign: true,
@@ -80,6 +82,7 @@ export function staffSession(s) {
     engaged: s.engaged,
     ctaClicks: s.ctaClicks,
     formStarts: s.formStarts,
+    formSubmits: Number(s.formSubmits) || 0,
     refClass: s.refClass,
     refSource: s.refSource ?? null,
     sourceLabel: sourceLabel(s.refClass, s.refSource),
@@ -154,7 +157,7 @@ export async function sessionTimeline(projectId, sessionId) {
         cta: sig.cta || null,
         engagement: sig.engagement || null,
         vitals: sig.vitals || null,
-        lead: sig.lead ? { formId: sig.lead.formId ?? null, placement: sig.lead.placement ?? null, hasLead: !!e.leadId } : null,
+        lead: sig.lead ? { formId: sig.lead.formId ?? null, placement: sig.lead.placement ?? null, hasLead: !!e.leadId, ...(sig.lead.provider ? { provider: sig.lead.provider } : {}), ...(sig.lead.heuristic ? { heuristic: sig.lead.heuristic } : {}) } : null,
         botScore: e.botScore,
         compacted: !e.payload,
       };
@@ -265,6 +268,7 @@ export async function dataQuality(projectId, { now = new Date() } = {}) {
     prisma.leadAttribution.count({ where: { projectId, leadAt: { gte: addDays(now, -30) }, mismatch: true } }),
   ]);
   const mirror = await loadSignalsMirror(projectId);
+  const unmatchedFormSubmit = await unmatchedFormSubmits(projectId, { now }).catch(() => null);
   const lagDays = oldestPayload?.at ? (now - new Date(oldestPayload.at)) / DAY_MS : null;
   return {
     days: stats.map((s) => ({ date: iso(s.date).slice(0, 10), batches: s.batches, events: s.events, innerDuplicates: s.innerDuplicates, rejectedInvalid: s.rejectedInvalid, clamped: s.clamped, botEvents: s.botEvents })),
@@ -282,6 +286,8 @@ export async function dataQuality(projectId, { now = new Date() } = {}) {
     retentionLagging: lagDays != null && lagDays > RETENTION.payloadDays + 2,
     leads30d: leads30,
     mismatchRate30d: leads30 ? Math.round((mismatched30 / leads30) * 1000) / 1000 : null,
+    // v1.9.0: `leads.unmatched_form_submit` (embedded-form submits without a lead; leads without a visit session)
+    unmatchedFormSubmit,
   };
 }
 
@@ -311,6 +317,8 @@ export async function staffOverview(project, q = {}) {
     visitors: await rangeVisitors(project.id, from, to),
     byClass,
     aiShare: sessions ? Math.round(((byClass.ai?.sessions || 0) / sessions) * 1000) / 1000 : null,
+    // v1.9.0: leads by form provider (Website form / GoHighLevel form)
+    byProvider: await leadsByProvider(project.id, from, to),
   };
 }
 
@@ -477,8 +485,9 @@ export async function clientSignalsView(project, { now = new Date() } = {}) {
     devices.set(r.formFactor, d);
   }
 
-  // Recent enquiries: the sentences only (no ids, no names)
+  // Recent enquiries: the sentences only (no ids, no names); v1.9.0 adds which form (Website form / GoHighLevel form)
   const recent = await prisma.leadAttribution.findMany({ where: { projectId }, orderBy: { leadAt: 'desc' }, take: 10 });
+  const [providersThisMonth, providersLastMonth] = await Promise.all([leadsByProvider(projectId, monthStart, addDays(now, 1)), leadsByProvider(projectId, lastMonthStart, monthStart)]);
   const totalLeads = total(thisMonth) + total(lastMonth);
   const botShare = bots + humans ? bots / (bots + humans) : null;
   return {
@@ -494,7 +503,8 @@ export async function clientSignalsView(project, { now = new Date() } = {}) {
     visitorsThisMonth: await rangeVisitors(projectId, monthStart, addDays(now, 1)),
     areas: [...regions.values()].sort((a, b) => b.sessions - a.sessions).slice(0, 10),
     devices: [...devices.values()].sort((a, b) => b.sessions - a.sessions),
-    recentLeads: recent.map((a) => ({ at: iso(a.leadAt), ...clientAttribution(a) })),
+    recentLeads: recent.map((a) => ({ at: iso(a.leadAt), ...clientAttribution(a), form: isProviderAttribution(a) ? 'GoHighLevel form' : 'Website form' })),
+    byProvider: { thisMonth: providersThisMonth, lastMonth: providersLastMonth },
     notes: {
       aiMode: "Google's AI Mode and AI Overviews cannot be separated from Google Search; they are counted as Google Search.",
       bots: botShare == null ? null : `About ${Math.round(botShare * 100)} % of visits in the last 30 days came from bots and are not counted.`,

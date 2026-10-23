@@ -8,10 +8,12 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { prisma } from '../../lib/prisma.js';
 import { ensureProjectAccess } from '../../lib/ensureProjectAccess.js';
+import { isAgentOrToken } from '../../lib/apiTokens.js';
 import { CmsBridgeError } from '../../lib/siteAdapters/emdash.js';
 import { eraseLead, photoPath, parseErasedReason, SITE_ERASE_PENDING, SITE_ERASE_FAILED } from '../../lib/cmsLeads.js';
 import { pullSiteReports, listSiteReports } from '../../lib/cmsReports.js';
 import { staffAttribution } from '../../lib/signals/attribution.js';
+import { mirrorView } from '../../lib/ghlForms/leadImport.js';
 
 const LEAD_ROLES = ['OWNER', 'PM'];
 const STAFF = ['OWNER', 'PM', 'TEAM_MEMBER', 'CONTRACTOR'];
@@ -64,6 +66,15 @@ function formatLead(l) {
     photos: (l.photos || []).map((p) => ({ id: p.id, contentType: p.contentType, bytes: p.bytes, copied: !!p.copiedAt, error: p.error || null })),
     // v1.7.0 §38.5 / plan §6.3: "Came from … → landed on … → … → quote form" + model / mismatch / session link.
     attribution: l.erasedAt ? null : staffAttribution(l.attribution || null),
+    // v1.9.0: emdash (the site's form) | ghl (embedded GoHighLevel form, received by the OS webhook). Staff only:
+    // the GHL contact link, the site mirror state (lead-import) and the erasure checklist item.
+    provider: l.provider || 'emdash',
+    ...(l.provider === 'ghl'
+      ? {
+          external: { provider: 'ghl', url: l.externalUrl || null, erasePending: l.externalErasePending === true },
+          mirror: mirrorView(l),
+        }
+      : {}),
   };
 }
 
@@ -81,12 +92,19 @@ export async function pmCmsLeadsReportsRoutes(app) {
         take,
         include: { photos: true, attribution: true },
       });
-      const [sitePending, siteFailed] = await Promise.all([
+      const [sitePending, siteFailed, externalOwed] = await Promise.all([
         prisma.cmsLead.count({ where: { projectId: project.id, erasedReason: { startsWith: SITE_ERASE_PENDING } } }),
         prisma.cmsLead.count({ where: { projectId: project.id, erasedReason: { startsWith: SITE_ERASE_FAILED } } }),
+        // v1.9.0 erasure checklist: erased GoHighLevel leads whose contact still has to be deleted in GoHighLevel
+        prisma.cmsLead.findMany({ where: { projectId: project.id, externalErasePending: true }, orderBy: { erasedAt: 'desc' }, take: 50, select: { leadId: true, erasedAt: true, externalUrl: true } }),
       ]);
       reply.header('cache-control', 'no-store');
-      return reply.send({ items: rows.map(formatLead), retentionMonths: project.cmsLeadRetentionMonths ?? 24, siteErase: { pending: sitePending, failed: siteFailed } });
+      return reply.send({
+        items: rows.map(formatLead),
+        retentionMonths: project.cmsLeadRetentionMonths ?? 24,
+        siteErase: { pending: sitePending, failed: siteFailed },
+        externalErase: externalOwed.map((l) => ({ leadId: l.leadId, erasedAt: l.erasedAt, url: l.externalUrl || null, label: 'Delete the contact in GoHighLevel too' })),
+      });
     } catch (err) {
       return sendError(reply, err, request.log);
     }
@@ -116,6 +134,8 @@ export async function pmCmsLeadsReportsRoutes(app) {
     try {
       const project = await projectFor(request, reply, ['OWNER']);
       if (!project) return;
+      // v1.9.0: people only (the site call is made as a person; agents / API tokens never erase leads)
+      if (isAgentOrToken(request)) return reply.status(403).send({ code: 'HUMAN_ONLY', message: 'Agent accounts and API tokens cannot erase leads' });
       const out = await eraseLead({ projectId: project.id, leadId: String(request.params.leadId).slice(0, 64), reason: request.body?.reason, user: request.user, log: request.log });
       return reply.send(out);
     } catch (err) {

@@ -15,6 +15,23 @@
  */
 import { prisma } from '../prisma.js';
 import { markDirty, touchFromVisit, DAY_MS } from './common.js';
+import { matchFormSubmitToLead } from '../ghlForms/attribution.js';
+
+/**
+ * v1.9.0, pure: the session's lead ids in the OS's terms. A mirror id (the site's copy of a GoHighLevel lead) is
+ * replaced by our lead's id, and leads attached to the session by their attribution (GHL leads: no lead event) are
+ * added, so one lead is never counted twice. Order: lead events first (as sessionLeadIds), then attached leads.
+ */
+export function mergeSessionLeadIds(evLeadIds, mirrors = [], attached = []) {
+  const toOs = new Map(mirrors.map((m) => [m.cmsMirrorLeadId, m.leadId]));
+  const out = [];
+  for (const id of evLeadIds) {
+    const x = toOs.get(id) || id;
+    if (!out.includes(x)) out.push(x);
+  }
+  for (const a of attached) if (a?.siteLeadId && !out.includes(a.siteLeadId)) out.push(a.siteLeadId);
+  return out;
+}
 
 export const SESSIONIZE_BATCH = 5000;
 const CLAIM_OFFSET_MS = 100 * 365.25 * DAY_MS;
@@ -94,6 +111,8 @@ export function buildSession(projectId, sessionId, events, existing = null) {
     engaged: engagements.length > 0 || pageviews.length >= 2,
     ctaClicks: evs.filter((e) => e.type === 'cta_click').length,
     formStarts: evs.filter((e) => e.type === 'form_start').length,
+    // v1.9.0 §40.3: an embedded third-party form reached its thank-you page (or was inferred inline)
+    formSubmits: evs.filter((e) => e.type === 'form_submit').length,
     refClass: touch.class,
     refSource: touch.source,
     utmCampaign: pay(visit).utm?.campaign ?? null,
@@ -116,7 +135,7 @@ export function buildSession(projectId, sessionId, events, existing = null) {
   };
   if (existing && compacted) {
     // Some payloads are already compacted (or rows deleted after compaction): never lose what the session held.
-    for (const k of ['pageviews', 'engagedSec', 'ctaClicks', 'formStarts']) built[k] = Math.max(built[k], Number(existing[k]) || 0);
+    for (const k of ['pageviews', 'engagedSec', 'ctaClicks', 'formStarts', 'formSubmits']) built[k] = Math.max(built[k], Number(existing[k]) || 0);
     for (const k of ['formFactor', 'uaFamily', 'region', 'city', 'tz', 'localHour', 'ipPrefix', 'utmCampaign', 'country']) if (built[k] == null) built[k] = existing[k] ?? null;
     if (new Date(existing.startedAt) < built.startedAt) {
       built.startedAt = new Date(existing.startedAt);
@@ -137,6 +156,19 @@ export async function rebuildSession(projectId, sessionId) {
   if (!events.length) return [];
   const existing = await prisma.signalSession.findUnique({ where: { projectId_sessionId: { projectId, sessionId } } });
   const s = buildSession(projectId, sessionId, events, existing);
+  // v1.9.0: the site's mirror of a GoHighLevel lead names its own id on lead events (→ our lead's id), and a GHL lead
+  // joined by oa_sid / the ±10 min window has no lead event at all (→ its LeadAttribution names this session).
+  const evLeadIds = sessionLeadIds(events);
+  const mirrors = evLeadIds.length ? await prisma.cmsLead.findMany({ where: { projectId, cmsMirrorLeadId: { in: evLeadIds } }, select: { leadId: true, cmsMirrorLeadId: true } }) : [];
+  let attached = await prisma.leadAttribution.findMany({ where: { projectId, sessionId }, orderBy: { leadAt: 'asc' }, take: 50, select: { siteLeadId: true } });
+  const formSubmits = events.filter((e) => e.type === 'form_submit');
+  if (formSubmits.length && !attached.length && !evLeadIds.length) {
+    const matched = await matchFormSubmitToLead(projectId, sessionId, formSubmits);
+    if (matched) attached = [{ siteLeadId: matched }];
+  }
+  const leadIds = mergeSessionLeadIds(evLeadIds, mirrors, attached);
+  s.leadId = leadIds[0] ?? null;
+  s.leadCount = leadIds.length;
   let isNewVisitor = false;
   if (s.visitorId) {
     const earlier = await prisma.signalSession.findFirst({ where: { projectId, visitorId: s.visitorId, startedAt: { lt: s.startedAt }, NOT: { sessionId } }, select: { id: true } });
@@ -155,9 +187,9 @@ export async function rebuildSession(projectId, sessionId) {
       for (const l of later) dates.push(l.startedAt);
     }
   }
-  // Lead attributions to (re-)derive: EVERY lead of this session, and the visitor's leads (first touch may change).
-  const leadIds = sessionLeadIds(events);
-  if (leadIds.length) await prisma.leadAttribution.updateMany({ where: { projectId, siteLeadId: { in: leadIds } }, data: { needsDerive: true } });
+  // Lead attributions to (re-)derive: EVERY lead of this session (by id, or naming this session: GHL leads whose
+  // session arrived after the lead), and the visitor's leads (first touch may change).
+  await prisma.leadAttribution.updateMany({ where: { projectId, OR: [...(leadIds.length ? [{ siteLeadId: { in: leadIds } }] : []), { sessionId }] }, data: { needsDerive: true } });
   if (s.visitorId) await prisma.leadAttribution.updateMany({ where: { projectId, visitorId: s.visitorId }, data: { needsDerive: true } });
   return dates;
 }

@@ -92,6 +92,9 @@ import { pmDigestRoutes } from './routes/pm/digest.js';
 import { pmClientDashboardRoutes } from './routes/pm/clientDashboard.js';
 import { wpWebhookRoutes } from './routes/webhooks.js';
 import { emdashWebhookRoutes } from './routes/webhooks/emdash.js';
+import { ghlFormsWebhookRoutes } from './routes/webhooks/ghlForms.js';
+import { pmGhlFormsRoutes } from './routes/pm/ghlForms.js';
+import { startGhlFormsJobs } from './lib/ghlForms/jobs.js';
 import { realtimeRoutes } from './routes/realtime.js';
 import { toolRoutes } from './routes/tool.js';
 import omniSearchRoutes from './routes/omniSearch/index.js';
@@ -314,6 +317,9 @@ app.register(publicKnowledgeInterviewRoutes, { prefix: '/api/public' });
 app.register(wpWebhookRoutes, { prefix: '/api/webhooks' });
 // EmDash bridge (contract agency-os-bridge/v1): HMAC-signed site → OS calls, raw-body parser scoped to this plugin.
 app.register(emdashWebhookRoutes, { prefix: '/api/webhooks/emdash' });
+// Embedded GoHighLevel forms (features/ghl-forms.md): per-project URL token, 64 KiB body cap and parsers scoped here.
+app.register(ghlFormsWebhookRoutes, { prefix: '/api/webhooks/ghl' });
+app.register(pmGhlFormsRoutes, { prefix: '/api/pm' });
 app.register(realtimeRoutes, { prefix: '/api/realtime' });
 app.register(toolRoutes, { prefix: '/api/tool' });
 // OmniSearch is a large, self-contained sub-app kept hidden by default to reduce
@@ -606,6 +612,8 @@ try {
   // First-party visit signals (EmDash contract v1.7.0 §38): sessionize / attribute every 5 min, nightly bots, rollup,
   // retention and signals-summary. Leader only (lib/signals/jobs.js); SIGNALS_ENABLED=false turns the jobs off.
   startSignalsJobs(app.log);
+  // Embedded GoHighLevel forms (contract 1.9.0 lead-import mirror queue every minute, receipts purge 04:40). Leader only.
+  startGhlFormsJobs(app.log);
 
   // SEO Engine retention (OS-05 / OS-14): hourly purge of expired Idempotency-Key rows. Leader only
   // (NODE_APP_INSTANCE 0 / unset); the deletes are plain conditional deleteMany calls, so a double run is harmless.

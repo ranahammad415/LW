@@ -138,6 +138,15 @@ export function sanitizeKeyState(k) {
   return { keyId: id(k.keyId), prevKeyId: id(k.prevKeyId), prevExpiresAt: at(k.prevExpiresAt), prevRevokedAt: at(k.prevRevokedAt) };
 }
 
+/**
+ * site-info.leads.forms[] item (v1.5.0 { id, name }; v1.9.0 §40.1 adds optional provider (emdash | ghl; absent =
+ * emdash) and external (true = a third party's form whose leads never come as lead.created).
+ */
+export function sanitizeLeadForm(f) {
+  const provider = f?.provider === 'ghl' ? 'ghl' : 'emdash';
+  return { id: String(f?.id || '').slice(0, 64), name: String(f?.name || '').slice(0, 200), provider, external: f?.external === true };
+}
+
 function siteInfoProjectData(siteInfo, contract, now) {
   const health = siteInfo?.health && typeof siteInfo.health === 'object' ? siteInfo.health : {};
   return {
@@ -169,7 +178,7 @@ function siteInfoProjectData(siteInfo, contract, now) {
       // v1.5.0 §26: the WordPress site this EmDash site replaces (key hint only, never the key) and lead forms.
       ...(sanitizeMigratedFrom(siteInfo?.migratedFrom) ? { migratedFrom: sanitizeMigratedFrom(siteInfo.migratedFrom) } : {}),
       ...(siteInfo?.leads && typeof siteInfo.leads === 'object'
-        ? { leads: { forms: Array.isArray(siteInfo.leads.forms) ? siteInfo.leads.forms.slice(0, 20).map((f) => ({ id: String(f?.id || '').slice(0, 64), name: String(f?.name || '').slice(0, 200) })) : [], siteRetentionDays: Number.isInteger(siteInfo.leads.siteRetentionDays) ? siteInfo.leads.siteRetentionDays : null } }
+        ? { leads: { forms: Array.isArray(siteInfo.leads.forms) ? siteInfo.leads.forms.slice(0, 20).map(sanitizeLeadForm) : [], siteRetentionDays: Number.isInteger(siteInfo.leads.siteRetentionDays) ? siteInfo.leads.siteRetentionDays : null } }
         : {}),
       // site-info only (errata v1.0.1 adds framework.blockSchemas): stored for later use, not relied on.
       ...(siteInfo?.framework && typeof siteInfo.framework === 'object' ? { framework: siteInfo.framework } : {}),

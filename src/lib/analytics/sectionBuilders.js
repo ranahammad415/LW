@@ -1122,6 +1122,7 @@ function aggregateLeadRows(rows) {
   };
   const ruleMap = new Map();
   const pathMap = new Map();
+  const providerMap = new Map();
 
   for (const r of rows) {
     const key = r.date.toISOString().slice(0, 10);
@@ -1169,6 +1170,13 @@ function aggregateLeadRows(rows) {
         pathMap.set(p.path, (pathMap.get(p.path) || 0) + (Number(p.count) || 0));
       }
     }
+    // GHL forms (contract 1.9.0): leads per form provider (emdash = Website form, ghl = GoHighLevel form)
+    if (bd?.providers && Array.isArray(bd.providers)) {
+      for (const p of bd.providers) {
+        if (p?.provider !== 'emdash' && p?.provider !== 'ghl') continue;
+        providerMap.set(p.provider, (providerMap.get(p.provider) || 0) + (Number(p.count) || 0));
+      }
+    }
   }
 
   const series = [...seriesMap.values()].sort((a, b) => a.date.localeCompare(b.date));
@@ -1176,8 +1184,11 @@ function aggregateLeadRows(rows) {
   const paths = [...pathMap.entries()]
     .map(([path, count]) => ({ path, count }))
     .sort((a, b) => b.count - a.count);
+  const providers = [...providerMap.entries()]
+    .map(([provider, count]) => ({ provider, label: provider === 'ghl' ? 'GoHighLevel form' : 'Website form', count }))
+    .sort((a, b) => b.count - a.count);
 
-  return { series, totals, rules, paths };
+  return { series, totals, rules, paths, providers };
 }
 
 /**
@@ -1303,6 +1314,7 @@ export async function buildLeadsView(clientIds, view, query) {
     byType,
     rules: curr.rules,
     paths: curr.paths,
+    byProvider: curr.providers,
     emptyHint:
       rows.length === 0
         ? 'No lead events in this period. Enable Lead Tracking in the WordPress plugin and configure forms, thank-you pages, or phone/email buttons.'

@@ -4166,6 +4166,7 @@ model LeadAttribution {
   @@index([projectId, createdAt])
   @@index([projectId, visitorId])
   @@index([projectId, leadAt])
+  @@index([projectId, sessionId])
   @@index([needsDerive])
   @@map("leadattribution")
 }
