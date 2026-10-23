@@ -31,6 +31,7 @@ export const HEALTH_PROJECT_SELECT = Object.freeze({
   gmbPlaceId: true,
   gmbRating: true,
   gmbReviewsCount: true,
+  bingSiteUrl: true,
 });
 
 /** How far back one load reaches before `from`: two windows + a year (YoY) + the GSC lag. */
@@ -66,8 +67,11 @@ export async function loadHealthBundle(project, { from, to, cfg } = {}) {
   const wantR5 = !!cfg?.factors?.R5;
   const wantA1 = !!cfg?.factors?.A1;
   const a1From = new Date(asDate(start).getTime() - (cfg?.factors?.A1?.maxAgeDays ?? 45) * MS_DAY);
+  // Config v3 proposal (Bing Webmaster): V5 clicks / S4 crawl rows, only with a bound Bing site and the factor active.
+  const wantBing = !!project.bingSiteUrl && !!cfg?.factors?.V5;
+  const wantBingCrawl = !!project.bingSiteUrl && !!cfg?.factors?.S4;
 
-  const [gsc, ga4, gmb, reviews, leads, status, points, failChecks, runs, citations, aiRuns] = await Promise.all([
+  const [gsc, ga4, gmb, reviews, leads, status, points, failChecks, runs, citations, aiRuns, bing, bingCrawl] = await Promise.all([
     project.gscSiteUrl
       ? prisma.gscDailyMetric.findMany({ where: { projectId: pid, date: range }, select: { date: true, clicks: true, impressions: true, ctr: true, position: true } })
       : none,
@@ -110,6 +114,10 @@ export async function loadHealthBundle(project, { from, to, cfg } = {}) {
           take: 60,
         })
       : none,
+    wantBing ? prisma.bingDailyMetric.findMany({ where: { projectId: pid, date: range }, select: { date: true, clicks: true, impressions: true } }) : none,
+    wantBingCrawl
+      ? prisma.bingCrawlDaily.findMany({ where: { projectId: pid, date: range }, select: { date: true, crawledPages: true, code4xx: true, code5xx: true, crawlErrors: true } })
+      : none,
   ]);
 
   const rows = (list, map) => (Array.isArray(list) ? list.map((r) => ({ ...map(r), date: day(r.date) })) : null);
@@ -138,6 +146,8 @@ export async function loadHealthBundle(project, { from, to, cfg } = {}) {
           return { at: iso(r.finishedAt), cells: cells.length, cited: cells.filter((x) => x.cited).length };
         })
       : null,
+    bing: rows(bing, (r) => ({ clicks: r.clicks, impressions: r.impressions })),
+    bingCrawl: rows(bingCrawl, (r) => ({ crawledPages: r.crawledPages || 0, errors: (r.code4xx || 0) + (r.code5xx || 0) + (r.crawlErrors || 0) })),
   };
 }
 
@@ -152,7 +162,14 @@ function indexByDate(list) {
 function maps(bundle) {
   if (!bundle._maps) {
     // Built once per bundle. Rows after a slice date are never summed: every window ends at or before its anchor.
-    bundle._maps = { gsc: indexByDate(bundle.gsc), ga4: indexByDate(bundle.ga4), gmb: indexByDate(bundle.gmb), leads: indexByDate(bundle.leads) };
+    bundle._maps = {
+      gsc: indexByDate(bundle.gsc),
+      ga4: indexByDate(bundle.ga4),
+      gmb: indexByDate(bundle.gmb),
+      leads: indexByDate(bundle.leads),
+      bing: indexByDate(bundle.bing),
+      bingCrawl: indexByDate(bundle.bingCrawl),
+    };
   }
   return bundle._maps;
 }
@@ -290,5 +307,20 @@ export function sliceBundle(bundle, date, cfg, { backfilled = false, now = Date.
       linked: Array.isArray(bundle.aiRuns),
       runs: (bundle.aiRuns || []).filter((r) => r.at && r.at.slice(0, 10) <= w.date),
     },
+    // Config v3 proposal: V5 uses the same windows as GSC clicks (lag-anchored); S4 the last `days` crawl days ending
+    // at the score date.
+    bing: { linked: !!p.bingSiteUrl && Array.isArray(bundle.bing), ...sums(m.bing, w, BING_FIELDS) },
+    bingCrawl: bingCrawlWindow(bundle, m.bingCrawl, w.date, cfg),
   };
+}
+
+const BING_FIELDS = ['clicks', 'impressions'];
+
+/** S4 window: sums over (date − days, date]. Pure. */
+function bingCrawlWindow(bundle, byDate, date, cfg) {
+  const linked = !!bundle.project?.bingSiteUrl && Array.isArray(bundle.bingCrawl);
+  if (!linked) return { linked: false, rows: 0, crawledPages: 0, errors: 0 };
+  const days = cfg?.factors?.S4?.days ?? 7;
+  const s = sumRange(byDate, { from: addDays(date, -(days - 1)), to: date }, ['crawledPages', 'errors']);
+  return { linked: true, rows: s.rows, crawledPages: s.crawledPages, errors: s.errors };
 }

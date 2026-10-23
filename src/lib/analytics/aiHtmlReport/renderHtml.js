@@ -31,6 +31,7 @@ function sourceTag(source, tag) {
   if (tag === 'context') return '<div class="tag tag-ctx">Context</div>';
   if (source === 'gsc') return '<div class="tag tag-gsc">GSC WIN</div>';
   if (source === 'ga4') return '<div class="tag tag-ga">GA4 WIN</div>';
+  if (source === 'bing') return '<div class="tag tag-gsc">BING WIN</div>';
   return '<div class="tag tag-ga">WIN</div>';
 }
 

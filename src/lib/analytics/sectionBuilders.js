@@ -7,6 +7,16 @@ import { buildClientAnalytics } from './freezeSnapshot.js';
 import { getClientTrafficSeries } from './gscSeries.js';
 import { stripTrailingIncomplete } from './seriesUtils.js';
 import { profileTotals, periodReviewStats } from './gmbMetrics.js';
+import {
+  getBingSeries,
+  bingShare,
+  aggregateWeekly,
+  loadWeeklyQueries,
+  loadWeeklyPages,
+  copilotReferrals,
+  crawlErrors,
+  crawlIssueSummary,
+} from './bingSeries.js';
 
 function cycleRange(cycle) {
   const start = new Date(Date.UTC(cycle.year, cycle.month - 1, 1));
@@ -207,6 +217,7 @@ async function clientProjects(clientId) {
       gmbReviewsCount: true,
       dataforseoDomain: true,
       targetMarket: true,
+      bingSiteUrl: true,
       client: { select: { agencyName: true, websiteUrl: true } },
     },
   });
@@ -227,6 +238,7 @@ async function resolveAnalyticsContext(clientIds, query) {
     ga4: projects.some((p) => !!p.ga4PropertyId),
     gmb: projects.some((p) => !!p.gmbLocationId || !!p.gmbCid || !!p.gmbPlaceId),
     seo: projects.some((p) => !!p.dataforseoDomain),
+    bing: projects.some((p) => !!p.bingSiteUrl),
   };
 
   // Compare-to-previous / YoY are on unless explicitly disabled (?compare=0 / ?compareYoY=0).
@@ -1341,5 +1353,159 @@ export async function buildLeadsView(clientIds, view, query) {
     source: ctx.source,
     data: viewData,
   };
+}
+
+// ── Bing Webmaster (features/bing-webmaster.md) ──
+
+export const BING_VIEWS = Object.freeze(['overview', 'queries', 'pages', 'crawl']);
+
+function brandTokensFor(projects, extra = []) {
+  return [
+    ...new Set(
+      projects
+        .flatMap((p) => [p.client?.agencyName, p.client?.websiteUrl, p.gscSiteUrl, p.bingSiteUrl, ...extra])
+        .filter(Boolean)
+        .map((s) =>
+          String(s)
+            .toLowerCase()
+            .replace(/^https?:\/\//, '')
+            .replace(/^www\./, '')
+            .replace(/^sc-domain:/, '')
+            .split(/[./\s-]+/)[0]
+        )
+        .filter((t) => t && t.length > 2)
+    ),
+  ];
+}
+
+function rankBuckets(rows) {
+  const pos = (r) => r.position;
+  return {
+    top3: rows.filter((r) => pos(r) != null && pos(r) <= 3).length,
+    top10: rows.filter((r) => pos(r) != null && pos(r) <= 10).length,
+    top20: rows.filter((r) => pos(r) != null && pos(r) <= 20).length,
+    rest: rows.filter((r) => pos(r) == null || pos(r) > 20).length,
+  };
+}
+
+const BING_WEEKLY_NOTE =
+  'Bing reports top queries and pages per week; every week that starts inside the period is included, so totals can differ slightly from the daily figures.';
+
+/**
+ * Bing analytics views: overview | queries | pages | crawl. `audience: 'client'` (the /api/client route) never gets
+ * crawl-issue URLs (counts and labels only). Unknown views (incl. the staff-only `ops`, Phase 3) → 404.
+ * Closed cycles: the overview KPIs come from the frozen snapshot's `bing` block when it has one.
+ */
+export async function buildBingView(clientIds, view, query, { audience = 'staff', now = new Date() } = {}) {
+  if (!BING_VIEWS.includes(view)) return { status: 404, message: 'Unknown Bing view' };
+  const ctx = await resolveAnalyticsContext(clientIds, query);
+  if (ctx.error) return ctx.error;
+  if (!ctx.links.bing) {
+    return empty(false, 'Connect a Bing Webmaster site in Admin → Integrations', ctx.cycle, ctx.source);
+  }
+  const bingIds = ctx.projects.filter((p) => !!p.bingSiteUrl).map((p) => p.id);
+  const { start, end } = ctx.range;
+  const base = { linked: true, emptyReason: null, cycle: metaCycle(ctx), range: metaRange(ctx), source: ctx.source };
+
+  if (view === 'overview') {
+    const keys = ['clicks', 'impressions', 'ctr'];
+    const [cur, prev, yoy, google, copilot] = await Promise.all([
+      getBingSeries(bingIds, { start, end }),
+      ctx.prevRange ? getBingSeries(bingIds, ctx.prevRange) : Promise.resolve(null),
+      ctx.yoyRange ? getBingSeries(bingIds, ctx.yoyRange) : Promise.resolve(null),
+      ctx.links.gsc ? getClientTrafficSeries(ctx.clientId, { start, end }) : Promise.resolve(null),
+      copilotReferrals(ctx.projectIds, { start, end }),
+    ]);
+    const p = prev?.hasActivity ? prev.totals : null;
+    const y = yoy?.hasActivity ? yoy.totals : null;
+    const frozen = ctx.frozen?.bing || null;
+    const t = frozen?.totals || cur.totals;
+    const kpis = {
+      clicks: t.clicks,
+      impressions: t.impressions,
+      ctr: t.ctr,
+      clicksDelta: frozen ? frozen.deltas?.clicks ?? null : p ? pctDelta(t.clicks, p.clicks) : null,
+      impressionsDelta: frozen ? frozen.deltas?.impressions ?? null : p ? pctDelta(t.impressions, p.impressions) : null,
+      ctrDelta: frozen ? frozen.deltas?.ctr ?? null : p ? pctDelta(t.ctr, p.ctr) : null,
+      clicksYoyDelta: frozen ? frozen.yoyDeltas?.clicks ?? null : y ? pctDelta(t.clicks, y.clicks) : null,
+      impressionsYoyDelta: frozen ? frozen.yoyDeltas?.impressions ?? null : y ? pctDelta(t.impressions, y.impressions) : null,
+    };
+    const series = stripTrailingIncomplete(
+      attachYoySeries(attachPrevSeries(cur.series, prev?.series || [], keys), yoy?.series || [], keys),
+      ['clicks', 'impressions']
+    );
+    const gTotals = google?.totals || null;
+    const googleByDate = new Map((google?.series || []).map((r) => [r.date, r.clicks || 0]));
+    const compare = gTotals
+      ? {
+          google: { clicks: gTotals.clicks, impressions: gTotals.impressions },
+          bing: { clicks: t.clicks, impressions: t.impressions },
+          bingShareClicks: bingShare(t.clicks, gTotals.clicks),
+          bingShareImpressions: bingShare(t.impressions, gTotals.impressions),
+          series: cur.series.map((r) => ({ date: r.date, googleClicks: googleByDate.get(r.date) || 0, bingClicks: r.clicks })),
+        }
+      : null;
+    return { ...base, source: frozen ? 'frozen' : base.source, data: { kpis, series, compare, copilotReferrals: copilot } };
+  }
+
+  if (view === 'queries' || view === 'pages') {
+    const isPages = view === 'pages';
+    const rows = isPages ? await loadWeeklyPages(bingIds, { start, end }) : await loadWeeklyQueries(bingIds, { start, end });
+    const agg = aggregateWeekly(rows, isPages ? 'url' : 'query');
+    const tokens = brandTokensFor(ctx.projects);
+    const list = agg.slice(0, isPages ? 100 : 200).map((r) => (isPages ? r : { ...r, brand: isBrandQuery(r.query, tokens) ? 'Brand' : 'Generic' }));
+    const sum = (arr, k) => arr.reduce((s, x) => s + (x[k] || 0), 0);
+    const weeks = new Set((rows || []).map((r) => new Date(r.weekStart).toISOString().slice(0, 10))).size;
+    if (isPages) return { ...base, data: { pages: list, total: agg.length, weeks, note: BING_WEEKLY_NOTE } };
+    const brand = agg.filter((q) => isBrandQuery(q.query, tokens));
+    const generic = agg.filter((q) => !isBrandQuery(q.query, tokens));
+    return {
+      ...base,
+      data: {
+        queries: list,
+        total: agg.length,
+        weeks,
+        rankings: rankBuckets(agg),
+        brandGeneric: {
+          brand: { keywords: brand.length, clicks: sum(brand, 'clicks'), impressions: sum(brand, 'impressions') },
+          generic: { keywords: generic.length, clicks: sum(generic, 'clicks'), impressions: sum(generic, 'impressions') },
+        },
+        note: BING_WEEKLY_NOTE,
+      },
+    };
+  }
+
+  // crawl
+  const [rows, latest, issues] = await Promise.all([
+    prisma.bingCrawlDaily.findMany({
+      where: { projectId: { in: bingIds }, date: { gte: start, lte: end } },
+      select: { date: true, crawledPages: true, inIndex: true, code4xx: true, code5xx: true, crawlErrors: true },
+      orderBy: { date: 'asc' },
+    }),
+    prisma.bingCrawlDaily.findMany({
+      where: { projectId: { in: bingIds }, date: { lte: end } },
+      orderBy: { date: 'desc' },
+      take: Math.max(1, bingIds.length),
+    }),
+    crawlIssueSummary(bingIds, { now, listTake: audience === 'client' ? 0 : 100 }),
+  ]);
+  const byDate = new Map();
+  for (const r of rows || []) {
+    const k = new Date(r.date).toISOString().slice(0, 10);
+    const acc = byDate.get(k) || { date: k, crawledPages: 0, inIndex: 0, errors: 0 };
+    acc.crawledPages += r.crawledPages || 0;
+    acc.inIndex += r.inIndex || 0;
+    acc.errors += crawlErrors(r);
+    byDate.set(k, acc);
+  }
+  const newestDay = latest?.[0] ? new Date(latest[0].date).toISOString().slice(0, 10) : null;
+  const latestRows = (latest || []).filter((r) => new Date(r.date).toISOString().slice(0, 10) === newestDay);
+  const sumL = (k) => latestRows.reduce((s, r) => s + (r[k] || 0), 0);
+  const latestOut = newestDay
+    ? { date: newestDay, crawledPages: sumL('crawledPages'), inIndex: sumL('inIndex'), inLinks: sumL('inLinks'), code2xx: sumL('code2xx'), code301: sumL('code301'), code302: sumL('code302'), code4xx: sumL('code4xx'), code5xx: sumL('code5xx'), blockedByRobotsTxt: sumL('blockedByRobotsTxt'), containsMalware: sumL('containsMalware'), crawlErrors: sumL('crawlErrors') }
+    : null;
+  const issuesOut = { open: issues.open, byLabel: issues.byLabel, resolved30d: issues.resolved30d };
+  if (audience !== 'client') issuesOut.openIssues = issues.list;
+  return { ...base, data: { latest: latestOut, series: [...byDate.values()], issues: issuesOut } };
 }
 

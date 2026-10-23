@@ -1,6 +1,57 @@
 import { prisma } from '../prisma.js';
 import { generateChat, isAiConfigured } from '../ai.js';
 import { normalizeAiContent } from './formalTemplate/renderFormalHtml.js';
+import { bingBlock } from '../analytics/freezeSnapshot.js';
+
+/** Plain Bing figures for the client report (no URLs, ids or vendor terms beyond "Bing"). Pure. */
+export function plainBingSummary(block) {
+  if (!block?.totals) return null;
+  return {
+    clicks: block.totals.clicks ?? 0,
+    impressions: block.totals.impressions ?? 0,
+    clicksChangePct: block.deltas?.clicks ?? null,
+    shareOfSearchClicksPct: block.share?.clicksPct ?? null,
+  };
+}
+
+/**
+ * Bing summary of the reporting month (features/bing-webmaster.md): the frozen cycle snapshot's `bing` block when
+ * the cycle has a snapshot, else computed from the stored Bing tables. null without a bound Bing site. Never throws.
+ */
+export async function monthlyBingSummary({ clientId, month, year, workCycleId = null }) {
+  try {
+    if (workCycleId) {
+      const snap = await prisma.workCycleAnalyticsSnapshot.findUnique({
+        where: { workCycleId_clientId: { workCycleId, clientId } },
+        select: { data: true },
+      });
+      if (snap?.data) return plainBingSummary(snap.data.bing);
+    }
+    const projects = await prisma.project.findMany({ where: { clientId, bingSiteUrl: { not: null } }, select: { id: true } });
+    if (!projects?.length) return null;
+    const start = new Date(Date.UTC(year, month - 1, 1));
+    const end = new Date(Date.UTC(year, month, 0));
+    const prev = { start: new Date(Date.UTC(year, month - 2, 1)), end: new Date(Date.UTC(year, month - 1, 0)) };
+    const g = await prisma.gscDailyMetric.aggregate({
+      where: { project: { clientId }, date: { gte: start, lte: end } },
+      _sum: { clicks: true, impressions: true },
+    });
+    const google = { clicks: g?._sum?.clicks || 0, impressions: g?._sum?.impressions || 0 };
+    return plainBingSummary(await bingBlock(projects.map((p) => p.id), { start, end, prev, yoy: null }, google));
+  } catch {
+    return null;
+  }
+}
+
+/** One plain sentence for the report ("Bing search brought N visits, up x% on last month."); '' without data. Pure. */
+export function bingReportLine(summary) {
+  if (!summary || !summary.clicks) return '';
+  const n = Number(summary.clicks).toLocaleString('en-US');
+  let s = `Bing search brought ${n} visit${summary.clicks === 1 ? '' : 's'}`;
+  const d = summary.clicksChangePct;
+  if (typeof d === 'number' && Math.abs(d) >= 1) s += `, ${d > 0 ? 'up' : 'down'} ${Math.round(Math.abs(d))}% on last month`;
+  return `${s}.`;
+}
 
 const ACTIVE_TASK_STATUSES = [
   'TO_DO',
@@ -402,6 +453,7 @@ export async function gatherClientFacts({ clientId, agencyName, websiteUrl, mont
     }));
 
   const tasksWithComments = recentCompleted.filter((t) => t.commentSnippets?.length).length;
+  const bingSummary = await monthlyBingSummary({ clientId, month, year, workCycleId });
 
   return {
     clientName: agencyName,
@@ -430,6 +482,8 @@ export async function gatherClientFacts({ clientId, agencyName, websiteUrl, mont
       platforms,
     },
     searchKpis: kpis,
+    // null without a bound Bing site: the report then says nothing about Bing.
+    bingSummary,
   };
 }
 
@@ -553,9 +607,14 @@ export function buildFallbackFormalContent(facts) {
     preparedBy: facts.preparedBy || 'Local Waves',
     executive: {
       strategicApproach: `For ${monthLabel}, we focused on practical search improvements for ${facts.clientName} across ${sections.length} area(s) of work — always aiming for clearer visibility and a stronger website foundation.`,
-      performanceGains: kpiBits
-        ? `Here is how visibility looked this period (in plain terms): ${kpiBits}.`
-        : `We completed ${facts.tasks.completed} tasks and published ${facts.content.published} content piece(s).`,
+      performanceGains: [
+        kpiBits
+          ? `Here is how visibility looked this period (in plain terms): ${kpiBits}.`
+          : `We completed ${facts.tasks.completed} tasks and published ${facts.content.published} content piece(s).`,
+        bingReportLine(facts.bingSummary),
+      ]
+        .filter(Boolean)
+        .join(' '),
       localVisibility:
         sections.some((s) => /local|listing|nearby/i.test(s.title))
           ? `We improved how local customers can find and trust your business online.`
@@ -582,6 +641,7 @@ async function buildNarrative(facts) {
   for (const kpi of facts.searchKpis) {
     metrics[kpi.label || kpi.metric] = kpi.change ? `${kpi.value} (${kpi.change})` : kpi.value;
   }
+  if (facts.bingSummary) metrics['Bing search visits'] = bingReportLine(facts.bingSummary) || facts.bingSummary.clicks;
 
   if (!isAiConfigured()) {
     const formal = buildFallbackFormalContent(facts);

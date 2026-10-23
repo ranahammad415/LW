@@ -9,6 +9,7 @@ import {
   buildSeoView,
   buildLlmView,
   buildLeadsView,
+  buildBingView,
 } from '../../lib/analytics/sectionBuilders.js';
 import { generateAiHtmlReport } from '../../lib/analytics/aiHtmlReport/index.js';
 import {
@@ -152,6 +153,17 @@ export async function adminAnalyticsRoutes(app) {
       const { clientId, view } = request.params;
       if (!(await assertClientExists(clientId, reply))) return;
       return sendSection(reply, await buildLeadsView([clientId], view, request.query));
+    }
+  );
+
+  // Bing Webmaster (features/bing-webmaster.md): overview | queries | pages | crawl (staff audience: issue URLs).
+  app.get(
+    '/analytics/:clientId/bing/:view',
+    { onRequest: [app.verifyJwt, requireOwner] },
+    async (request, reply) => {
+      const { clientId, view } = request.params;
+      if (!(await assertClientExists(clientId, reply))) return;
+      return sendSection(reply, await buildBingView([clientId], view, request.query, { audience: 'staff' }));
     }
   );
 

@@ -9,6 +9,7 @@ import {
   buildGmbView,
   buildSeoView,
   buildLlmView,
+  buildBingView,
 } from '../sectionBuilders.js';
 import { clientHealthAt } from '../../health/healthViews.js';
 
@@ -76,7 +77,7 @@ export async function aggregateReportFacts({ clientIds, start, end, compare = tr
     compareYoY: compareYoY === false ? '0' : '1',
   };
 
-  const [gsc, ga4, gmb, seo, llm, client] = await Promise.all([
+  const [gsc, ga4, gmb, seo, llm, client, bingOverview, bingQueries] = await Promise.all([
     buildGscView(clientIds, 'all', query),
     buildGa4View(clientIds, 'channels', query),
     buildGmbView(clientIds, 'overview', query).catch(() => null),
@@ -86,6 +87,8 @@ export async function aggregateReportFacts({ clientIds, start, end, compare = tr
       where: { id: clientIds[0] },
       select: { id: true, agencyName: true, websiteUrl: true },
     }),
+    buildBingView(clientIds, 'overview', query).catch(() => null),
+    buildBingView(clientIds, 'queries', query).catch(() => null),
   ]);
 
   if (gsc?.status) return { error: gsc };
@@ -201,6 +204,21 @@ export async function aggregateReportFacts({ clientIds, start, end, compare = tr
     );
   }
 
+  // Bing Webmaster (features/bing-webmaster.md): one KPI card when a Bing site is bound (never invented when unlinked).
+  const bing = bingFactsForAi(bingOverview, bingQueries);
+  if (bing) {
+    kpiCards.push(
+      kpiCard({
+        source: 'bing',
+        key: 'bingClicks',
+        label: 'Bing Clicks',
+        value: bing.kpis.clicks,
+        prevValue: prevFromDelta(bing.kpis.clicks, bing.kpis.clicksDelta),
+        delta: bing.kpis.clicksDelta,
+      })
+    );
+  }
+
   // Channel surge as optional win card
   const topChannelGain = channels
     .map((c) => ({
@@ -306,6 +324,7 @@ export async function aggregateReportFacts({ clientIds, start, end, compare = tr
   if (ga4Linked) sources.push('GA4');
   if (seo?.linked) sources.push('DataForSEO');
   if (gmb?.linked) sources.push('GMB');
+  if (bing) sources.push('Bing');
   if (llm?.linked !== false && llm?.data) sources.push('AI Visibility');
 
   const optional = {};
@@ -321,6 +340,7 @@ export async function aggregateReportFacts({ clientIds, start, end, compare = tr
   if (llm?.data?.kpis) {
     optional.llm = { kpis: llm.data.kpis };
   }
+  if (bing) optional.bing = bing;
 
   // Compact AI payload
   const factsForAi = {
@@ -434,6 +454,27 @@ export function gmbFactsForAi(data) {
       ? 'Calls, directions, website clicks and impressions are not available (Google Business Profile access is not connected yet). They are missing data, not zero: do not mention them as numbers.'
       : null,
     kpis,
+  };
+}
+
+/**
+ * Bing facts for the KPI row and the narrative (features/bing-webmaster.md): null when no Bing site is bound (the
+ * narrative must then not mention Bing numbers at all). clicks / impressions / deltas / share of (Google + Bing)
+ * search clicks / top 5 queries of the weeks in the period. Pure.
+ */
+export function bingFactsForAi(overview, queries) {
+  if (!overview?.linked || !overview.data?.kpis) return null;
+  const k = overview.data.kpis;
+  return {
+    kpis: {
+      clicks: k.clicks ?? 0,
+      impressions: k.impressions ?? 0,
+      clicksDelta: k.clicksDelta ?? null,
+      impressionsDelta: k.impressionsDelta ?? null,
+      shareOfSearchClicksPct: overview.data.compare?.bingShareClicks ?? null,
+    },
+    topQueries: (queries?.data?.queries || []).slice(0, 5).map((q) => ({ query: q.query, clicks: q.clicks, impressions: q.impressions })),
+    note: 'Bing figures come from Bing Webmaster Tools (daily clicks and impressions; top queries are weekly). Report them only as given.',
   };
 }
 
