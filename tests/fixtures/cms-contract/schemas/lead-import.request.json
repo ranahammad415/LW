@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/lead-import.request.json",
+  "title": "lead-import (v1.9.0)",
+  "description": "Mirror one lead the OS received from an embedded third-party form (GoHighLevel workflow webhook) into the site's leads collection, read-only. Mutation: X-AOS-Idempotency-Key. Idempotent on (externalRef.provider, externalRef.id, formId): a repeat answers created: false with the existing entry id. The site never emits lead.created for a mirror and never e-mails; it writes the lead_submitted signal and enqueues lead.attributed (data.externalRef). Actor: the OS's system job (or a person retrying it); kind agent 403 HUMAN_ONLY. PII: fields travel only here (never logged, never in errors).",
+  "type": "object",
+  "properties": {
+    "lead": {
+      "type": "object",
+      "properties": {
+        "externalRef": {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "enum": [
+                "ghl"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "description": "the provider's contact id"
+            },
+            "url": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^https://",
+                  "maxLength": 500,
+                  "description": "staff deep link to the contact in the provider's app"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "provider",
+            "id",
+            "url"
+          ]
+        },
+        "osLeadId": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$",
+          "description": "the OS's lead id (xg_<ULID> for provider leads)"
+        },
+        "formId": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+          "description": "the site's id of the external form (site-info.leads.forms[].id with external: true, e.g. ghl-contact)"
+        },
+        "formName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "createdAt": {
+          "$ref": "common.json#/$defs/dateTime"
+        },
+        "fields": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "phone": {
+              "type": "string",
+              "maxLength": 40
+            },
+            "email": {
+              "type": "string",
+              "maxLength": 254
+            },
+            "town": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "postalCode": {
+              "type": "string",
+              "maxLength": 20
+            },
+            "message": {
+              "type": "string",
+              "maxLength": 2000
+            },
+            "extra": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string",
+                "maxLength": 500
+              },
+              "maxProperties": 20,
+              "description": "other form values, plain text (e.g. source: website-embed)"
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "description": "PII: only in this request; never in logs, other events or snapshots"
+        },
+        "signals": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "sid": {
+                  "type": "string",
+                  "pattern": "^s_[0-9A-HJKMNP-TV-Z]{26}$",
+                  "description": "server-minted session id (cookie _oa_sid, 30 min rolling)"
+                },
+                "vid": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^v_[0-9A-HJKMNP-TV-Z]{26}$",
+                      "description": "server-minted visitor id (cookie _oa_vid, 13 months rolling); null in session-only mode"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "sid",
+                "vid"
+              ],
+              "description": "the visit ids the form carried (hidden fields oa_sid / oa_vid), only when they have the server-minted shape"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "utm": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "medium": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "campaign": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "term": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "content": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "source",
+                "medium",
+                "campaign",
+                "term",
+                "content"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pagePath": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^/",
+              "maxLength": 2048,
+              "description": "the page with the embedded form (oa_page)"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "landing": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^/",
+              "maxLength": 2048,
+              "description": "the session's landing page (oa_landing)"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "externalRef",
+        "osLeadId",
+        "formId",
+        "createdAt",
+        "fields",
+        "signals",
+        "utm",
+        "pagePath",
+        "landing"
+      ]
+    },
+    "actor": {
+      "$ref": "common.json#/$defs/osActor"
+    }
+  },
+  "required": [
+    "lead",
+    "actor"
+  ]
+}

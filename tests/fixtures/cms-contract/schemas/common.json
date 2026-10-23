@@ -1612,6 +1612,10 @@
         "seoAiPrompts": {
           "type": "boolean",
           "description": "v1.8.0 (§39): seo-ai-prompts, the AI-visibility prompt set (emdash-seo API 1.2.0 aiPrompts is present)"
+        },
+        "leadImport": {
+          "type": "boolean",
+          "description": "v1.9.0 (§40): lead-import, the read-only mirror of a lead the OS received from an embedded third-party form (GoHighLevel); site-info.leads.forms lists those forms with external: true"
         }
       },
       "required": [
@@ -7304,7 +7308,8 @@
             "form_start",
             "vitals",
             "lead_submitted",
-            "lead_attributed"
+            "lead_attributed",
+            "form_submit"
           ]
         },
         "sessionId": {
@@ -8034,6 +8039,20 @@
                       "type": "null"
                     }
                   ]
+                },
+                "provider": {
+                  "enum": [
+                    "emdash",
+                    "ghl"
+                  ],
+                  "description": "v1.9.0 (§40), optional: the form's provider (ghl = an embedded GoHighLevel form; absent = the site's own form)"
+                },
+                "heuristic": {
+                  "enum": [
+                    "sticky",
+                    "height"
+                  ],
+                  "description": "v1.9.0 (§40), form_submit only, optional: the submit was inferred in the page (inline mode: sticky = the form's set-sticky-contacts message, height = the frame collapsed); absent = the thank-you page after the provider's redirect. The OS may discount heuristic submits"
                 }
               },
               "required": [
@@ -8417,6 +8436,30 @@
           "if": {
             "properties": {
               "type": {
+                "const": "form_submit"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "page": {
+                "type": "object"
+              },
+              "lead": {
+                "type": "object",
+                "properties": {
+                  "leadId": {
+                    "type": "null"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
                 "const": "vitals"
               }
             }
@@ -8616,6 +8659,31 @@
             "timeToLeadSec",
             "sessionToLeadSec"
           ]
+        },
+        "externalRef": {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "enum": [
+                "ghl"
+              ]
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "osLeadId": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            }
+          },
+          "required": [
+            "provider",
+            "id",
+            "osLeadId"
+          ],
+          "description": "v1.9.0 (§40), optional: the lead is the site's mirror of an OS lead from an embedded third-party form (lead-import); leadId is the mirror's site entry id and osLeadId the OS's own lead id (join on it: a mirror never has a lead.created)"
         }
       },
       "required": [

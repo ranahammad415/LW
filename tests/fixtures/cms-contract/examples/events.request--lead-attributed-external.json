@@ -1,0 +1,61 @@
+{
+  "contract": 1,
+  "siteId": "site_9f3c2a7b41d0",
+  "sentAt": "2026-10-23T14:06:00Z",
+  "events": [
+    {
+      "eventId": "01JB3QLATTR000000000000190",
+      "siteId": "site_9f3c2a7b41d0",
+      "type": "lead.attributed",
+      "at": "2026-10-23T14:05:40Z",
+      "cursor": 1202,
+      "actor": {
+        "kind": "system",
+        "source": "plugin"
+      },
+      "data": {
+        "leadId": "01JB3QMIRROR00000000000001",
+        "attribution": {
+          "model": "site-snapshot",
+          "firstTouch": {
+            "at": "2026-10-19T22:10:04Z",
+            "class": "search",
+            "source": "google",
+            "campaign": null,
+            "medium": null,
+            "landing": "/"
+          },
+          "lastTouch": {
+            "at": "2026-10-23T13:58:02Z",
+            "class": "ads",
+            "source": "google",
+            "campaign": "winter-closing",
+            "medium": "cpc",
+            "landing": "/offers/winter-closing/"
+          },
+          "sessionId": "s_01JB3Q7Z9F8K2M4N6P8R0T2V00",
+          "visitorId": "v_01JB2R1S3T5V7X9Z1B3D5F7H9K",
+          "landing": "/offers/winter-closing/",
+          "formId": "ghl-contact",
+          "placement": "embedded_form"
+        },
+        "path": {
+          "pagesBefore": [
+            {
+              "path": "/offers/winter-closing/",
+              "at": "2026-10-23T13:58:02Z"
+            }
+          ],
+          "sessionsBefore": 1,
+          "timeToLeadSec": 316656,
+          "sessionToLeadSec": 309
+        },
+        "externalRef": {
+          "provider": "ghl",
+          "id": "pXy7Qe3LmN0aB1cD2eF3",
+          "osLeadId": "xg_01JB3QGHL000000000000001"
+        }
+      }
+    }
+  ]
+}

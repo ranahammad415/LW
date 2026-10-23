@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.localwaves.dev/agency-os-bridge/v1/lead-import.response.json",
+  "title": "lead-import response (v1.9.0)",
+  "description": "leadId = the mirror's site entry id (lead-erase takes it). created false = this external lead was mirrored before (the existing entry, unchanged). attribution = the snapshot the site stored (site-snapshot from its buffered session rows, else cookie-only from the OS's utm / landing), null when nothing was known.",
+  "type": "object",
+  "properties": {
+    "ok": {
+      "const": true
+    },
+    "idempotentReplay": {
+      "type": "boolean",
+      "description": "v1.0.1: true on a response replayed from the idempotency store (EmDash strips the X-AOS-Idempotent-Replay header)"
+    },
+    "leadId": {
+      "$ref": "common.json#/$defs/id"
+    },
+    "created": {
+      "type": "boolean"
+    },
+    "attribution": {
+      "anyOf": [
+        {
+          "$ref": "common.json#/$defs/leadAttribution"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "ok",
+    "leadId",
+    "created",
+    "attribution"
+  ]
+}

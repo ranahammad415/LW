@@ -1,0 +1,8 @@
+{
+  "ok": false,
+  "error": {
+    "code": "HUMAN_ONLY",
+    "message": "Importing leads is done by the Agency OS lead-import job or a person, not by an agent",
+    "retryable": false
+  }
+}

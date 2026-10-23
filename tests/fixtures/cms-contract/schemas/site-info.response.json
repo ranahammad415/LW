@@ -199,6 +199,17 @@
               "name": {
                 "type": "string",
                 "maxLength": 200
+              },
+              "provider": {
+                "enum": [
+                  "emdash",
+                  "ghl"
+                ],
+                "description": "v1.9.0 (§40), optional: emdash = the site's own form (the default when absent); ghl = an embedded GoHighLevel form"
+              },
+              "external": {
+                "type": "boolean",
+                "description": "v1.9.0 (§40), optional: a third party's form; its leads reach the OS from the provider (webhook), never as lead.created, and come back to the site only through lead-import"
               }
             },
             "required": [

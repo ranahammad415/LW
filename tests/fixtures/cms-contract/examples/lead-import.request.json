@@ -1,0 +1,42 @@
+{
+  "lead": {
+    "externalRef": {
+      "provider": "ghl",
+      "id": "pXy7Qe3LmN0aB1cD2eF3",
+      "url": "https://list.localwavesmarketing.com/v2/location/LoC4tIoN0000000000/contacts/detail/pXy7Qe3LmN0aB1cD2eF3"
+    },
+    "osLeadId": "xg_01JB3QGHL000000000000001",
+    "formId": "ghl-contact",
+    "formName": "Oasis Contact Form",
+    "createdAt": "2026-10-23T14:03:11Z",
+    "fields": {
+      "name": "Pat Example",
+      "phone": "+1 262 555 0100",
+      "email": "pat@example.com",
+      "town": "Waukesha, WI",
+      "postalCode": "53186",
+      "message": "Please quote a winter closing for an 18x36 in-ground pool.",
+      "extra": {
+        "source": "website-embed"
+      }
+    },
+    "signals": {
+      "sid": "s_01JB3Q7Z9F8K2M4N6P8R0T2V00",
+      "vid": "v_01JB2R1S3T5V7X9Z1B3D5F7H9K"
+    },
+    "utm": {
+      "source": "google",
+      "medium": "cpc",
+      "campaign": "winter-closing",
+      "term": null,
+      "content": null
+    },
+    "pagePath": "/offers/winter-closing/",
+    "landing": "/offers/winter-closing/"
+  },
+  "actor": {
+    "kind": "system",
+    "osUserId": "00000000-0000-4000-8000-000000000000",
+    "name": "Agency OS lead import"
+  }
+}
