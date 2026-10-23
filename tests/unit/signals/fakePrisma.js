@@ -20,6 +20,8 @@ const UNIQUES = {
   signalRollupDirty: [['projectId', 'date']],
   signalConfigMirror: [['projectId']],
   cmsLead: [['projectId', 'leadId']],
+  externalFormEndpoint: [['tokenHash'], ['projectId', 'provider']],
+  externalFormReceipt: [['dedupeKey']],
 };
 
 const DEFAULTS = {
@@ -27,9 +29,11 @@ const DEFAULTS = {
   signalErasure: () => ({ siteState: 'none', siteAttempts: 0, at: new Date(), origin: 'os', siteNextAt: null, siteLastError: null, siteRows: null, siteConfirmedAt: null, pendingSubject: null, rowsEvents: 0, rowsSessions: 0, rowsAttributions: 0 }),
   signalIngestStat: () => ({ batches: 0, events: 0, innerDuplicates: 0, rejectedInvalid: 0, clamped: 0, botEvents: 0, siteSummary: null, siteSummaryAt: null }),
   signalEvent: () => ({ sessionizedAt: null, payloadCompactedAt: null, visitorId: null, refSource: null, country: null, leadId: null, botScore: 0 }),
-  signalSession: () => ({ rescoreBotScore: null, leadCount: 0 }),
+  signalSession: () => ({ rescoreBotScore: null, leadCount: 0, formSubmits: 0 }),
   signalConfigMirror: () => ({ stale: false, rev: null, config: null, buffer: null }),
-  cmsLead: () => ({ erasedAt: null, erasedReason: null, siteCreatedAt: null, receivedAt: new Date() }),
+  cmsLead: () => ({ erasedAt: null, erasedReason: null, siteCreatedAt: null, receivedAt: new Date(), provider: 'emdash', externalId: null, externalUrl: null, cmsMirrorLeadId: null, mirrorState: null, mirrorAttempts: 0, mirrorNextAt: null, mirrorError: null, externalErasePending: false }),
+  externalFormEndpoint: () => ({ provider: 'ghl', headerSecretHash: null, rotatedAt: null, prevTokenHash: null, prevValidUntil: null, revokedAt: null, lastReceivedAt: null, createdAt: new Date() }),
+  externalFormReceipt: () => ({ provider: 'ghl', receivedAt: new Date(), reason: null, shape: null, payloadHash: null, dedupeKey: null, externalId: null, formId: null, leadId: null, duplicateOf: null, ipHash: null, bytes: 0 }),
 };
 
 const OPS = new Set(['in', 'notIn', 'not', 'lt', 'lte', 'gt', 'gte', 'equals', 'startsWith', 'contains']);
@@ -95,6 +99,12 @@ function pick(row, select) {
   for (const [k, v] of Object.entries(select)) if (v) out[k] = clone(row[k]);
   return out;
 }
+
+/** Relations named in a select (`attribution: { select }`) are loaded like an include. */
+const relSelect = (select, include) => {
+  const fromSelect = select ? Object.fromEntries(Object.entries(select).filter(([, v]) => isPlain(v))) : {};
+  return Object.keys(fromSelect).length || include ? { ...(include || {}), ...fromSelect } : undefined;
+};
 
 function sortRows(rows, orderBy) {
   if (!orderBy) return rows;
@@ -167,7 +177,7 @@ export function createFakePrisma({ queryRaw = async () => [] } = {}) {
     },
     async findUnique({ where, select, include }) {
       const r = rowsOf(name).find((x) => matches(x, where));
-      return r ? withInclude(r, pick(r, select), include) : null;
+      return r ? withInclude(r, pick(r, select), relSelect(select, include)) : null;
     },
     async findFirst({ where, orderBy, select } = {}) {
       const r = sortRows(rowsOf(name).filter((x) => matches(x, where)), orderBy)[0];
@@ -185,7 +195,7 @@ export function createFakePrisma({ queryRaw = async () => [] } = {}) {
         });
       }
       rows = rows.slice(skip, take === undefined ? undefined : skip + take);
-      return rows.map((r) => withInclude(r, pick(r, select), arguments[0]?.include));
+      return rows.map((r) => withInclude(r, pick(r, select), relSelect(select, arguments[0]?.include)));
     },
     async count({ where } = {}) {
       return rowsOf(name).filter((x) => matches(x, where)).length;

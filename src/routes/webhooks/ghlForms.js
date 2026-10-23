@@ -56,6 +56,22 @@ export async function ghlFormsWebhookRoutes(app, opts = {}) {
       done(e, undefined);
     }
   });
+  // text/plain only when it is a JSON body sent without its content type (a GHL raw body whose header was not set);
+  // anything else is 415.
+  app.removeContentTypeParser('text/plain');
+  app.addContentTypeParser('text/plain', { parseAs: 'string' }, (request, raw, done) => {
+    request.ghlBytes = Buffer.byteLength(raw || '', 'utf8');
+    try {
+      const v = JSON.parse(raw);
+      if (v && typeof v === 'object' && !Array.isArray(v)) return done(null, v);
+    } catch {
+      /* not JSON */
+    }
+    const e = new Error('unsupported');
+    e.statusCode = 415;
+    e.code = 'FST_ERR_CTP_INVALID_MEDIA_TYPE';
+    return done(e, undefined);
+  });
   app.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'string' }, (request, raw, done) => {
     request.ghlBytes = Buffer.byteLength(raw || '', 'utf8');
     const out = {};
