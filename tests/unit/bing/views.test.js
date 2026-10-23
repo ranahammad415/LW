@@ -164,6 +164,23 @@ describe('frozen snapshot block / report facts / monthly line', () => {
   });
 });
 
+describe('fleet', () => {
+  it('one row per bound project, errors first, verified from the live site list', async () => {
+    const { bingFleet } = await import('../../../src/lib/bing/bingViews.js');
+    db.overrides['project.findMany'] = async () => [
+      { id: 'p1', name: 'A', clientId: 'c1', bingSiteUrl: 'https://www.example.com/', bingLastSyncedAt: null, bingSyncError: null, client: { agencyName: 'Alpha' } },
+      { id: 'p2', name: 'B', clientId: 'c2', bingSiteUrl: 'https://b.com/', bingLastSyncedAt: null, bingSyncError: 'Bing refused this site', client: { agencyName: 'Beta' } },
+    ];
+    db.overrides['bingDailyMetric.groupBy'] = async () => [{ projectId: 'p1', _sum: { clicks: 40 } }];
+    db.overrides['bingCrawlIssue.groupBy'] = async () => [{ projectId: 'p2', _count: { _all: 3 } }];
+    const out = await bingFleet({ sites: [{ siteUrl: 'https://www.example.com/', verified: true }] });
+    expect(out.projects.map((r) => [r.projectId, r.verified, r.clicks28, r.openIssues, !!r.error])).toEqual([
+      ['p2', false, 0, 3, true],
+      ['p1', true, 40, 0, false],
+    ]);
+  });
+});
+
 describe('redaction', () => {
   it('credential columns never leave the API; Bing staff fields are dropped for client audiences', () => {
     const out = redactResponseSecrets({ connection: { id: 'x', apiKeyEnc: 'iv.tag.data', accessTokenEnc: 'a', refreshTokenEnc: 'r', accountLabel: 'me' } });
