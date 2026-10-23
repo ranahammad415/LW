@@ -419,6 +419,8 @@ describe('follow-up: rollback data gap and orphans (answer 2), failed after comp
   it('a rolled-back full restore: gap completed.at → rolledBackAt; the restore\'s own orphans are cleared, the rollback window orphans', async () => {
     await prisma.cmsLead.create({ data: { projectId: 'p1', leadId: 'before_restore', siteCreatedAt: new Date('2026-11-02T12:00:00Z') } });
     await prisma.cmsLead.create({ data: { projectId: 'p1', leadId: 'between', siteCreatedAt: new Date('2026-11-04T12:00:00Z') } });
+    // O-C191-6: created in the completion second (whole-second times): lost by the rollback, so the rollback window marks it
+    await prisma.cmsLead.create({ data: { projectId: 'p1', leadId: 'at_completion', siteCreatedAt: new Date('2026-11-03T09:14:20Z') } });
     await apply(evOf('backup.restore_completed'));
     expect(lead('before_restore').orphanedByRestoreId).toBe(RID);
     await apply(evOf('backup.restore_rolled_back'));
@@ -427,6 +429,7 @@ describe('follow-up: rollback data gap and orphans (answer 2), failed after comp
     expect(r.dataGapTo.toISOString()).toBe('2026-11-05T07:40:00.000Z');
     expect(lead('before_restore').orphanedByRestoreId).toBeNull();
     expect(lead('between').orphanedByRestoreId).toBe(RID);
+    expect(lead('at_completion').orphanedByRestoreId).toBe(RID);
   });
   it('restore_failed after restore_completed (same restoreId): result stays ok, logged at WARN as a site bug', async () => {
     await apply(evOf('backup.restore_completed'));

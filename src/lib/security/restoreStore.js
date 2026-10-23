@@ -176,7 +176,7 @@ async function syncDataGap(row) {
  * and before the restore finished. Only our own copies of site leads (provider emdash, not erased); GoHighLevel leads
  * are OS-owned. Marked, never deleted. Returns the number marked now.
  */
-export async function markOrphanLeads(row, { now = new Date(), from, to } = {}) {
+export async function markOrphanLeads(row, { now = new Date(), from, to, fromInclusive = false } = {}) {
   if (!row?.id || !isDbScope(row.scope) || !from || !to) return 0;
   const res = await prisma.cmsLead.updateMany({
     where: {
@@ -184,7 +184,7 @@ export async function markOrphanLeads(row, { now = new Date(), from, to } = {}) 
       provider: 'emdash',
       erasedAt: null,
       orphanedByRestoreId: null,
-      siteCreatedAt: { gt: new Date(from), lt: new Date(to) },
+      siteCreatedAt: { [fromInclusive ? 'gte' : 'gt']: new Date(from), lt: new Date(to) },
     },
     data: { orphanedByRestoreId: row.restoreId, orphanedAt: now },
   });
@@ -228,7 +228,8 @@ export async function requeueGhlMirrors(row, phase, { now = new Date(), log } = 
     epoch = row.restoreId;
   } else {
     if (!row.completedAt || !row.rolledBackAt) return 0;
-    window = { gt: new Date(row.completedAt), lt: new Date(row.rolledBackAt) };
+    // O-C191-6: inclusive start (whole-second times: a lead in the completion second lived in the restored database)
+    window = { gte: new Date(row.completedAt), lt: new Date(row.rolledBackAt) };
     epoch = row.rollbackId || `rb_${row.restoreId}`.slice(0, 64);
   }
   const claim = await prisma.siteRestore.updateMany({ where: { id: row.id, [claimCol]: null }, data: { [claimCol]: now } });
@@ -261,7 +262,7 @@ async function reconcileAfterSwap(row, phase, { now, log }) {
   if (phase === 'rolled_back') {
     const cleared = await clearOrphanLeads(row);
     // What the site received between the restore and the rollback lived in the database that was rolled away.
-    const n = row.completedAt && row.rolledBackAt ? await markOrphanLeads(row, { now, from: row.completedAt, to: row.rolledBackAt }) : 0;
+    const n = row.completedAt && row.rolledBackAt ? await markOrphanLeads(row, { now, from: row.completedAt, to: row.rolledBackAt, fromInclusive: true }) : 0;
     if (cleared || n) log?.info?.({ projectId: row.projectId, restoreId: row.restoreId, cleared, leads: n }, 'Site restore rolled back: orphan markers updated');
     await requeueGhlMirrors(row, 'rolled_back', { now, log });
   }
