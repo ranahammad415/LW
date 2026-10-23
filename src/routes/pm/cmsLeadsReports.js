@@ -69,6 +69,8 @@ function formatLead(l) {
     // v1.9.0: emdash (the site's form) | ghl (embedded GoHighLevel form, received by the OS webhook). Staff only:
     // the GHL contact link, the site mirror state (lead-import) and the erasure checklist item.
     provider: l.provider || 'emdash',
+    // v1.9.1 §41.4: the site lost this lead with a database restore; our copy is kept (staff only, reconciliation later).
+    orphanedByRestore: l.orphanedByRestoreId ? { at: l.orphanedAt || null } : null,
     ...(l.provider === 'ghl'
       ? {
           external: { provider: 'ghl', url: l.externalUrl || null, erasePending: l.externalErasePending === true },
