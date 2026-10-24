@@ -31,7 +31,8 @@ describe.skipIf(!URL_)('OS Backups MySQL round trip', () => {
   let ctl;
   let db;
   const KEY = crypto.randomBytes(32);
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lwos-rt-'));
+  // Not created at collection time: a skipped suite must leave nothing behind.
+  const dir = URL_ ? fs.mkdtempSync(path.join(os.tmpdir(), 'lwos-rt-')) : '';
   const saved = {};
   const FIX = ['user', 'apitoken', 'tricky', '_TaskAssignees', 'password_reset_token', '_prisma_migrations'];
 
