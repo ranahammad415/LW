@@ -102,10 +102,16 @@ import { adminAiUsageRoutes } from './routes/admin/ai-usage.js';
 import { adminIntegrationsRoutes } from './routes/admin/integrations.js';
 import { adminAnalyticsRoutes } from './routes/admin/analytics.js';
 import { adminApiTokenRoutes } from './routes/admin/apiTokens.js';
+import { adminOsBackupRoutes } from './routes/admin/osBackups.js';
+import { maintenanceGate, onMaintenanceEnded, startMaintenanceWatcher } from './lib/osBackup/maintenance.js';
+import { startOsBackupJobs } from './lib/osBackup/scheduler.js';
+import { clearAgencySettingsCache } from './lib/emailLayout.js';
+import { clearSiteInfoCache } from './lib/cmsDrafts.js';
+import { clearGscClientCache } from './lib/analytics/gscAdapter.js';
 import { pmInputRequestRoutes } from './routes/pm/inputRequests.js';
 import { modalityRoutes } from './routes/modalityRoutes.js';
 import { publicIssuesRoutes } from './routes/publicIssues.js';
-import cron from 'node-cron';
+import cron from './lib/osBackup/cronGate.js'; // node-cron + maintenance gate (features/os-backups.md)
 import { syncAllProjects } from './lib/wpSync.js';
 import { runScheduledAeoSweep } from './lib/aeoRunner.js';
 import { startPipelineSyncInterval } from './lib/pipelineSync.js';
@@ -204,6 +210,19 @@ await app.register(cors, {
   origin: corsOrigins,
   credentials: true,
 });
+// OS Backups maintenance gate (features/os-backups.md): right after CORS so a 503 still carries the CORS headers.
+// While ~/os-backups/maintenance.json exists every request gets 503 MAINTENANCE (Retry-After, no-store), except the
+// restore status / maintenance-clear routes, OPTIONS, and login during NEEDS_MIGRATION. GET /health answers
+// 503 { status: 'maintenance' } without touching the DB.
+app.addHook('onRequest', maintenanceGate);
+// After maintenance ends every instance drops its module caches (and, under PM2, recycles itself:
+// OS_RESTORE_RECYCLE_WORKERS, default true).
+onMaintenanceEnded(() => {
+  clearAgencySettingsCache();
+  clearSiteInfoCache();
+  clearGscClientCache();
+});
+startMaintenanceWatcher(app.log);
 await app.register(multipart, { limits: { fileSize: 25 * 1024 * 1024 } }); // 25MB
 await app.register(fastifyStatic, {
   root: UPLOADS_DIR,
@@ -243,6 +262,8 @@ app.register(adminAiUsageRoutes, { prefix: '/api/admin' });
 app.register(adminIntegrationsRoutes, { prefix: '/api/admin' });
 app.register(adminAnalyticsRoutes, { prefix: '/api/admin' });
 app.register(adminApiTokenRoutes, { prefix: '/api/admin' });
+// OS Backups (features/os-backups.md): OWNER only, HUMAN_ONLY (no API token / agent / MCP), restore behind password + OTP.
+app.register(adminOsBackupRoutes, { prefix: '/api/admin' });
 app.register(projectRoutes, { prefix: '/api/projects' });
 app.register(projectCmsRoutes, { prefix: '/api/projects' });
 app.register(taskRoutes, { prefix: '/api/tasks' });
@@ -614,6 +635,9 @@ try {
   startSignalsJobs(app.log);
   // Embedded GoHighLevel forms (contract 1.9.0 lead-import mirror queue every minute, receipts purge 04:40). Leader only.
   startGhlFormsJobs(app.log);
+  // OS Backups (features/os-backups.md): 4-hourly backup, hourly monitor / retention, crash recovery every minute,
+  // daily detect. Leader only; registered only with OS_BACKUP_ENABLED=true and a valid OS_BACKUP_ENCRYPTION_KEY.
+  startOsBackupJobs(app.log);
 
   // SEO Engine retention (OS-05 / OS-14): hourly purge of expired Idempotency-Key rows. Leader only
   // (NODE_APP_INSTANCE 0 / unset); the deletes are plain conditional deleteMany calls, so a double run is harmless.
