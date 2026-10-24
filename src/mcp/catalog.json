@@ -99,7 +99,7 @@
 {"m":"DELETE","p":"/api/admin/issues/:issueId/comments/:commentId","g":"OWNER","pu":"DELETE /api/admin/issues/:issueId/comments/:commentId — delete own comment"},
 {"m":"PATCH","p":"/api/admin/issues/:issueId/comments/:commentId","g":"OWNER","pu":"PATCH /api/admin/issues/:issueId/comments/:commentId — edit own comment"},
 {"m":"GET","p":"/api/admin/issues/all","g":"OWNER","pu":""},
-{"m":"GET","p":"/api/admin/mcp/approvals","g":"OWNER, human session only (authMethod jwt, not viaMcp, not agent)","pu":"Critical MCP actions waiting for approval: [{id,grantId,userId,tool,routeKey,preview,createdAt,expiresAt}] (never the stored args or token)"},
+{"m":"GET","p":"/api/admin/mcp/approvals","g":"OWNER, human session only (authMethod jwt, not viaMcp, not agent)","pu":"Critical MCP actions waiting for approval: [{id,grantId,userId,tool,routeKey,preview,createdAt,expiresAt}] plus full: {query, body} (the exact stored request, untruncated, masked with maskSecretsDeep; the stored args object and the token ar"},
 {"m":"POST","p":"/api/admin/mcp/approvals/:id/approve","g":"same + browser Origin in FRONTEND_URL / MCP_SPA_URL (403 MCP_BAD_ORIGIN)","pu":"Sets McpConfirmation.approvedAt/ById (pending, unexpired, unconsumed critical only, else 404); Claude then runs it with confirm_action; audit approval.approve"},
 {"m":"POST","p":"/api/admin/mcp/approvals/:id/deny","g":"same","pu":"Marks it consumed and clears the stored args; it never runs; audit approval.deny"},
 {"m":"GET","p":"/api/admin/mcp/audit","g":"same","pu":"MCP audit log ?limit(≤200)&offset&tool&danger&ok&from&to&grantId → {items,total,limit,offset}"},
