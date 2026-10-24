@@ -354,7 +354,7 @@ export async function runJob(jobId, { cfg = loadConfig(), log = console.log } = 
     const job = await store.getJob(db, jobId);
     if (!job) throw new LwosError('NO_JOB', 'Job not found');
     ctx = makeCtx({ cfg, db, job, log });
-    ctx.controlThreadId = ctl.threadId;
+    ctx.controlThreadId = ctl.threadId ?? ctl.connection?.threadId;
     if (problem) throw new LwosError('DISABLED', problem);
     await store.updateJob(db, job.id, { status: 'RUNNING', workerPid: process.pid, workerHost: hostName(), heartbeatAt: new Date(), startedAt: new Date() });
     writeJobFile(cfg.dir, job.id, { type: job.type, status: 'RUNNING', workerPid: process.pid, workerHost: hostName(), heartbeatAt: new Date().toISOString() });
