@@ -160,7 +160,7 @@ export async function verifyRestore(db, manifest, { purged = [], requirePreserve
   const names = manifest.migrations?.names || [];
   if ((manifest.tables || []).some((t) => t.name === '_prisma_migrations')) {
     const rows = await db.rows('SELECT `migration_name` AS name FROM `_prisma_migrations` WHERE `finished_at` IS NOT NULL AND `rolled_back_at` IS NULL ORDER BY `migration_name`');
-    const got = rows.map((r) => String(r.name));
+    const got = rows.map((r) => String(r.name)).sort(); // compare in JS order on both sides (MySQL collation order may differ)
     if (got.join('|') !== [...names].sort().join('|')) problems.push('_prisma_migrations differs from the backup');
   }
   const present = await db.rows(`SELECT TABLE_NAME AS name FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN (${PRESERVED_TABLES.map(() => '?').join(',')})`, [...PRESERVED_TABLES]);
