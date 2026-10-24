@@ -81,7 +81,8 @@ for (const [scope, routes] of Object.entries(API_TOKEN_SCOPES)) {
 // Security platform: agents and tokens never act on security (reads included, to keep evidence away from automations).
 // Health score v2: tokens never read or write health scores, notes or config (deny for now).
 // Bing Webmaster credentials / binding (features/bing-webmaster.md) are never reachable with an API token.
-const DENIED_PREFIXES = ['/api/auth/', '/api/admin/api-tokens', '/api/pm/security/', '/api/admin/security-settings', '/api/admin/health/', '/api/admin/integrations/bing/'];
+// Remote MCP server: tokens never reach the OAuth consent API or the MCP admin routes.
+const DENIED_PREFIXES = ['/api/auth/', '/api/admin/api-tokens', '/api/pm/security/', '/api/admin/security-settings', '/api/admin/health/', '/api/admin/integrations/bing/', '/api/mcp', '/api/admin/mcp'];
 /** Never reachable with an API token (method + route): deleting OS drafts and the paid AI writer stay human-only. */
 const DENIED_METHOD_ROUTES = new Set(['DELETE /api/pm/cms-drafts/:id', 'POST /api/pm/cms-drafts/:id/ai-write']);
 const DENIED_ROUTES = new Set([

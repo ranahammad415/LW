@@ -44,6 +44,10 @@ export async function verifyJwt(request, reply) {
 
     request.user = user;
     request.authMethod = 'jwt';
+    // Remote MCP server (src/mcp/invoke.js): the 60 s internal JWT carries via:'mcp' and the grant id. No behaviour
+    // change; lets routes and logs tell MCP-originated requests apart.
+    request.viaMcp = payload.via === 'mcp';
+    request.mcpGrantId = request.viaMcp && typeof payload.mg === 'string' ? payload.mg : null;
   } catch (err) {
     if (err.name === 'TokenExpiredError') {
       return reply.status(401).send({ message: 'Access token expired' });

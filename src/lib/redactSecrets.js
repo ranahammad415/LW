@@ -23,6 +23,9 @@ const DROP_KEYS = new Set([
   // Agency Bing Webmaster credential (features/bing-webmaster.md): the encrypted API key and the Phase 3 OAuth token.
   'apiKeyEnc',
   'accessTokenEnc',
+  // Remote MCP server: authorization-code and client-secret hashes (src/mcp/oauth/*).
+  'codeHash',
+  'clientSecretHash',
 ]);
 export const REDACTED = '[REDACTED]';
 const MAX_DEPTH = 12;

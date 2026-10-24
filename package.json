@@ -38,6 +38,7 @@
     "@fastify/multipart": "^9.4.0",
     "@fastify/rate-limit": "^10.3.0",
     "@fastify/static": "^9.1.0",
+    "@modelcontextprotocol/sdk": "~1.32",
     "@prisma/client": "^6.0.0",
     "@xyflow/react": "^12.11.3",
     "axios": "^1.7.0",
@@ -58,7 +59,7 @@
     "playwright": "^1.48.0",
     "prisma": "^6.0.0",
     "yaml": "^2.3.4",
-    "zod": "^3.23.0"
+    "zod": "^3.25.0"
   },
   "devDependencies": {
     "vitest": "^2.1.0"
