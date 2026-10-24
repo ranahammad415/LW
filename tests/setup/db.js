@@ -54,6 +54,11 @@ export async function truncateAllTables() {
     'mcpgrant',
     'mcpclient',
     'apitoken',
+    // OS Backups preserved tables (features/os-backups.md)
+    'osbackup',
+    'osbackupjob',
+    'osbackupchallenge',
+    'osbackupstate',
     'idempotencykey',
     'engine_review_outbox',
     'engine_review_challenge',

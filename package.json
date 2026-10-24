@@ -28,7 +28,8 @@
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --pool=forks --poolOptions.forks.singleFork=true tests/api/",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "os-backup": "node scripts/os-backup.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.88.0",

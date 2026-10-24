@@ -1,6 +1,7 @@
 import { prisma } from './prisma.js';
 import { sendEmail } from './mailer.js';
 import { notificationEmailsPaused, PAUSED_EMAIL_ERROR } from './notificationEmailPause.js';
+import { isMaintenance, maintenanceGeneration } from './osBackup/maintenance.js';
 
 /**
  * In-memory email deferral queue.
@@ -28,9 +29,13 @@ const pendingJobs = new Map();
  */
 export function deferEmail({ logId, alertId, to, subject, html, text }) {
   const jobId = logId; // use logId as unique key
+  const generation = maintenanceGeneration();
 
   const handle = setTimeout(async () => {
     pendingJobs.delete(jobId);
+    // OS restore (features/os-backups.md): an email deferred before or during maintenance refers to data from before
+    // the restore. Drop it, without touching the (possibly restored) DB.
+    if (isMaintenance() || maintenanceGeneration() !== generation) return;
     try {
       // Check if the user already read the in-app notification
       if (alertId) {

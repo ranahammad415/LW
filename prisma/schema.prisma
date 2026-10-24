@@ -4800,3 +4800,123 @@ model McpAuditLog {
   @@index([createdAt])
   @@map("mcpauditlog")
 }
+
+// ── OS Backups (features/os-backups.md) ──────────────────────────────────────────────────────────────────────────────
+// Four PRESERVED tables: never dumped, never dropped by a restore, no relations / FKs (user ids are plain strings,
+// because the user rows change under a restore). Migration 20261115_os_backups. Raw SQL lives in lib/osBackup/store.js.
+
+/// Catalog mirror of the backup manifests on disk (~/os-backups/backups/*.manifest.json).
+model OsBackup {
+  id              String    @id @default(uuid())
+  fileName        String    @unique @db.VarChar(191)
+  /// SCHEDULED | MANUAL | SAFETY
+  kind            String    @db.VarChar(16)
+  /// RUNNING | READY | FAILED | PRUNED | MISSING
+  status          String    @db.VarChar(16)
+  engine          String    @db.VarChar(16)
+  startedAt       DateTime
+  finishedAt      DateTime?
+  durationMs      Int?
+  sizeBytes       BigInt?
+  plainBytes      BigInt?
+  tableCount      Int?
+  totalRows       BigInt?
+  rowCounts       Json?
+  sha256File      String?   @db.Char(64)
+  latestMigration String?   @db.VarChar(191)
+  migrationCount  Int?
+  appVersion      String?   @db.VarChar(64)
+  /// PENDING | OK | FAILED
+  verifyStatus    String    @default("PENDING") @db.VarChar(16)
+  verifiedAt      DateTime?
+  verifyError     String?   @db.VarChar(500)
+  error           String?   @db.VarChar(500)
+  createdById     String?   @db.VarChar(191)
+  createdByEmail  String?   @db.VarChar(191)
+  safetyForJobId  String?   @db.VarChar(191)
+  prunedAt        DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@index([status, startedAt])
+  @@index([kind, startedAt])
+  @@map("osbackup")
+}
+
+/// One backup / restore / rollback run (the live status is also in ~/os-backups/jobs/<id>.json).
+model OsBackupJob {
+  id               String    @id @default(uuid())
+  /// BACKUP | RESTORE | ROLLBACK
+  type             String    @db.VarChar(16)
+  /// CRON | MANUAL | CLI | RECOVERY
+  trigger          String    @db.VarChar(16)
+  /// QUEUED | RUNNING | SUCCEEDED | FAILED | ROLLED_BACK | FAILED_ROLLBACK | NEEDS_MIGRATION
+  status           String    @db.VarChar(24)
+  phase            String?   @db.VarChar(32)
+  progress         Json?
+  backupId         String?   @db.VarChar(191)
+  safetyBackupId   String?   @db.VarChar(191)
+  requestedById    String?   @db.VarChar(191)
+  requestedByEmail String?   @db.VarChar(191)
+  workerPid        Int?
+  workerHost       String?   @db.VarChar(100)
+  heartbeatAt      DateTime?
+  startedAt        DateTime?
+  finishedAt       DateTime?
+  error            String?   @db.VarChar(500)
+  createdAt        DateTime  @default(now())
+
+  @@index([type, createdAt])
+  @@index([status])
+  @@map("osbackupjob")
+}
+
+/// Email OTP for a restore or a download (HMAC-bound to user, action and backup), plus the one-time download ticket.
+model OsBackupChallenge {
+  id                 String    @id @default(uuid())
+  userId             String    @db.VarChar(191)
+  email              String    @db.VarChar(191)
+  /// RESTORE | DOWNLOAD
+  action             String    @db.VarChar(16)
+  backupId           String    @db.VarChar(191)
+  codeHash           String    @db.Char(64)
+  expiresAt          DateTime
+  attempts           Int       @default(0)
+  sendCount          Int       @default(1)
+  lastSentAt         DateTime
+  consumedAt         DateTime?
+  invalidatedAt      DateTime?
+  ip                 String?   @db.VarChar(64)
+  userAgent          String?   @db.VarChar(255)
+  /// sha256 of the 60-second single-use download ticket (DOWNLOAD only); cleared when used. Works across PM2 instances.
+  downloadTicketHash String?   @db.Char(64)
+  ticketExpiresAt    DateTime?
+  createdAt          DateTime  @default(now())
+
+  @@index([userId, action, createdAt])
+  @@index([downloadTicketHash])
+  @@map("osbackupchallenge")
+}
+
+/// Singleton (id = 1): schedule pause, DB lock row, failure streak, alert throttles, detection result.
+model OsBackupState {
+  id                  Int       @id
+  schedulePaused      Boolean   @default(false)
+  pausedById          String?   @db.VarChar(191)
+  pausedAt            DateTime?
+  lockJobId           String?   @db.VarChar(191)
+  lockedAt            DateTime?
+  heartbeatAt         DateTime?
+  consecutiveFailures Int       @default(0)
+  lastSuccessAt       DateTime?
+  lastFailureAt       DateTime?
+  lastError           String?   @db.VarChar(500)
+  lastFailureAlertAt  DateTime?
+  lastDiskAlertAt     DateTime?
+  lastStaleAlertAt    DateTime?
+  maintenanceJobId    String?   @db.VarChar(191)
+  detectJson          Json?
+  detectedAt          DateTime?
+  updatedAt           DateTime  @updatedAt
+
+  @@map("osbackupstate")
+}

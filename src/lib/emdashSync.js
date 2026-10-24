@@ -11,6 +11,7 @@
  * is idempotent, so a double tick is still safe.
  */
 import { prisma } from './prisma.js';
+import { isMaintenance } from './osBackup/maintenance.js';
 import { notify } from './notificationService.js';
 import { reconcileProjectMapsSafe } from './contentMapSync.js';
 import {
@@ -615,7 +616,7 @@ export function startEmdashSyncInterval(logger) {
   if (ms > 0) {
     let running = false;
     intervalId = setInterval(async () => {
-      if (running || !isCmsKeyCryptoConfigured()) return;
+      if (running || isMaintenance() || !isCmsKeyCryptoConfigured()) return; // OS restore: skip (features/os-backups.md)
       running = true;
       try {
         const ids = await pairedEmdashProjectIds();
@@ -635,6 +636,7 @@ export function startEmdashSyncInterval(logger) {
     }, ms);
   }
   hourlyId = setInterval(async () => {
+    if (isMaintenance()) return;
     try {
       await checkCmsConnections(logger);
       await cleanupCmsTables();
