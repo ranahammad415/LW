@@ -12,6 +12,7 @@ import { stripTrailingIncomplete } from './seriesUtils.js';
 import { clientHealthAt } from '../health/healthViews.js';
 import { TRACKED_KEYWORD_STATUSES } from './keywordStatus.js';
 import { profileTotals, periodReviewStats } from './gmbMetrics.js';
+import { getBingSeries, bingShare, aggregateWeekly, loadWeeklyQueries } from './bingSeries.js';
 
 /** First/last day (UTC) of a cycle's calendar month. */
 function cycleRange(cycle) {
@@ -129,7 +130,7 @@ export async function buildClientAnalytics(clientId, cycle, opts = {}) {
   // Tracked-keyword ranking distribution for the client's projects.
   const projects = await prisma.project.findMany({
     where: { clientId },
-    select: { id: true, gmbLocationId: true, gmbCid: true, gmbPlaceId: true, gmbRating: true, gmbReviewsCount: true },
+    select: { id: true, gmbLocationId: true, gmbCid: true, gmbPlaceId: true, gmbRating: true, gmbReviewsCount: true, bingSiteUrl: true },
   });
   const projectIds = projects.map((p) => p.id);
   const keywords = projectIds.length
@@ -334,10 +335,18 @@ export async function buildClientAnalytics(clientId, cycle, opts = {}) {
     conversions: ga4.conversions,
   };
 
+  // Bing Webmaster (features/bing-webmaster.md): totals, deltas, share of (Google + Bing) search clicks, top 5 queries.
+  const bing = await bingBlock(
+    projects.filter((p) => !!p.bingSiteUrl).map((p) => p.id),
+    { start, end, prev, yoy },
+    traffic.totals
+  );
+
   const links = await prisma.project.findMany({
     where: { clientId },
     select: {
       id: true,
+      bingSiteUrl: true,
       gscSiteUrl: true,
       ga4PropertyId: true,
       gmbLocationId: true,
@@ -382,6 +391,7 @@ export async function buildClientAnalytics(clientId, cycle, opts = {}) {
     aiVisibility,
     ga4,
     gmb,
+    bing,
     health,
     links: {
       gsc: links.some((l) => !!l.gscSiteUrl),
@@ -389,7 +399,47 @@ export async function buildClientAnalytics(clientId, cycle, opts = {}) {
       // A DataForSEO identity (CID / place_id) counts as linked too (features/local-seo.md).
       gmb: links.some((l) => !!l.gmbLocationId || !!l.gmbCid || !!l.gmbPlaceId),
       seo: links.some((l) => !!l.dataforseoDomain),
+      bing: links.some((l) => !!l.bingSiteUrl),
     },
+  };
+}
+
+/**
+ * Bing block of the snapshot (null without a bound project). Allow-listed numbers only: totals, deltas vs the previous
+ * and the YoY window (null without prior data), share of (Google + Bing) clicks / impressions, a daily series and the
+ * top 5 queries of the weeks starting in the period. No URLs, ids or costs.
+ */
+export async function bingBlock(bingIds, { start, end, prev, yoy }, googleTotals) {
+  if (!bingIds?.length) return null;
+  const [cur, p, y, weekly] = await Promise.all([
+    getBingSeries(bingIds, { start, end }),
+    prev ? getBingSeries(bingIds, prev) : Promise.resolve(null),
+    yoy ? getBingSeries(bingIds, yoy) : Promise.resolve(null),
+    loadWeeklyQueries(bingIds, { start, end }, 5000),
+  ]);
+  const d = (src) =>
+    src?.hasActivity
+      ? {
+          clicks: pctDelta(cur.totals.clicks, src.totals.clicks),
+          impressions: pctDelta(cur.totals.impressions, src.totals.impressions),
+          ctr: pctDelta(cur.totals.ctr, src.totals.ctr),
+        }
+      : null;
+  return {
+    totals: cur.totals,
+    deltas: d(p),
+    yoyDeltas: d(y),
+    share: {
+      clicksPct: bingShare(cur.totals.clicks, googleTotals?.clicks),
+      impressionsPct: bingShare(cur.totals.impressions, googleTotals?.impressions),
+    },
+    series: stripTrailingIncomplete(
+      cur.series.map((r) => ({ date: r.date, clicks: r.clicks, impressions: r.impressions })),
+      ['clicks', 'impressions']
+    ),
+    topQueries: aggregateWeekly(weekly, 'query')
+      .slice(0, 5)
+      .map((q) => ({ query: q.query, clicks: q.clicks, impressions: q.impressions })),
   };
 }
 

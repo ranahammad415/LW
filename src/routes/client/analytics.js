@@ -9,6 +9,7 @@ import {
   buildSeoView,
   buildLlmView,
   buildLeadsView,
+  buildBingView,
 } from '../../lib/analytics/sectionBuilders.js';
 import { generateAiHtmlReport } from '../../lib/analytics/aiHtmlReport/index.js';
 
@@ -206,6 +207,14 @@ export async function clientAnalyticsRoutes(app) {
     const clientIds = request.clientAccountIds;
     if (!clientIds?.length) return reply.send({ linked: false, data: null, source: 'none' });
     return sendSection(reply, await buildLeadsView(clientIds, request.params.view, request.query));
+  });
+
+  // Bing Webmaster (features/bing-webmaster.md): scoped to the caller's client accounts; client audience = crawl
+  // issue counts and labels only (no URLs). Unknown / staff-only views (e.g. `ops`) → 404.
+  app.get('/analytics/bing/:view', { onRequest: [app.verifyJwt, app.requireClient] }, async (request, reply) => {
+    const clientIds = request.clientAccountIds;
+    if (!clientIds?.length) return reply.send({ linked: false, data: null, source: 'none' });
+    return sendSection(reply, await buildBingView(clientIds, request.params.view, request.query, { audience: 'client' }));
   });
 
   /**

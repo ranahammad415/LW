@@ -5,7 +5,14 @@
  */
 import { prisma } from '../../lib/prisma.js';
 import { rejectAgentHealthWrite } from '../pm/health.js';
-import { getActiveConfig, validateConfig, listConfigVersions, createConfigVersion } from '../../lib/health/healthConfig.js';
+import {
+  getActiveConfig,
+  validateConfig,
+  listConfigVersions,
+  createConfigVersion,
+  activateConfigVersion,
+  ConfigActivationError,
+} from '../../lib/health/healthConfig.js';
 import {
   recomputeProject, recomputeClient, recomputeAll, backfillProject, profileFor, SCORED_STATUSES,
 } from '../../lib/health/healthScoreService.js';
@@ -38,6 +45,18 @@ export async function adminHealthRoutes(app) {
     // Today's rows with the new version: in the background (idempotent upserts; the response does not wait).
     recomputeAll({ log: request.log }).catch((err) => request.log.error({ err: err?.message }, 'Health recompute after config change failed'));
     return reply.send({ active: { version: row.version, config: row.config, note: row.note, createdAt: row.createdAt }, recompute: 'started' });
+  });
+
+  // Activate a stored version (e.g. the v3 Bing proposal stored inactive by 20261114_bing_webmaster). Owner, people only.
+  app.post('/health/config/:version/activate', write, async (request, reply) => {
+    try {
+      const row = await activateConfigVersion(request.params.version);
+      recomputeAll({ log: request.log }).catch((err) => request.log.error({ err: err?.message }, 'Health recompute after config activation failed'));
+      return reply.send({ active: { version: row.version, config: row.config, note: row.note, createdAt: row.createdAt }, recompute: 'started' });
+    } catch (err) {
+      if (err instanceof ConfigActivationError) return reply.status(err.status).send({ code: err.code, message: err.message });
+      throw err;
+    }
   });
 
   app.post('/health/recompute', write, async (request, reply) => {

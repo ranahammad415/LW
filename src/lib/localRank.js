@@ -28,6 +28,7 @@ import { dfsIdentifierForProject, hasGbpIdentity } from './analytics/gmbIdentifi
 import { projectSiteDomain } from './analytics/gbpIdentity.js';
 import { sameSite } from './analytics/domainMatch.js';
 import { TRACKED_KEYWORD_STATUSES } from './analytics/keywordStatus.js';
+import { getBingTask, storeCollectedBing, bingRankResultFromItems } from './bing/bingRank.js';
 
 export const MAPS_ZOOM = 14;
 export const GRID_MAX_SIZE = 7;
@@ -301,7 +302,7 @@ export const LOCAL_PROJECT_SELECT = Object.freeze({
   localGridEnabled: true,
   localGridSize: true,
   localGridSpacingKm: true,
-  client: { select: { websiteUrl: true } },
+  client: { select: { websiteUrl: true, agencyName: true } },
 });
 
 /** Keywords a local check covers: approved + trackLocal. */
@@ -448,15 +449,20 @@ export async function collectLocalRankTasks({ now = new Date(), get, env = proce
     if (!gridUpdates.has(t.gridId)) gridUpdates.set(t.gridId, []);
     gridUpdates.get(t.gridId).push({ pointIndex: t.pointIndex, ...u });
   };
+  // Kind `bing` (lib/bing/bingRank.js): a DataForSEO Bing organic task whose result goes to BingSerpRankDaily.
+  const storeError = async (t, errorCode) => {
+    if (t.kind === 'daily') await storeCollectedDaily(t, { status: 'error', errorCode }, now);
+    else if (t.kind === 'bing') await storeCollectedBing(t, { status: 'error', errorCode }, now);
+    else queueGrid(t, { error: true });
+  };
   for (const t of tasks) {
     if (now.getTime() - new Date(t.postedAt).getTime() > TASK_EXPIRY_MS) {
       await prisma.localRankTask.updateMany({ where: { id: t.id, status: 'pending' }, data: { status: 'expired', collectedAt: now, errorCode: 'DFS_EXPIRED' } });
-      if (t.kind === 'daily') await storeCollectedDaily(t, { status: 'error', errorCode: 'DFS_EXPIRED' }, now);
-      else queueGrid(t, { error: true });
+      await storeError(t, 'DFS_EXPIRED');
       summary.expired++;
       continue;
     }
-    const r = await getMapsTask(t.taskId, { get });
+    const r = t.kind === 'bing' ? await getBingTask(t.taskId, { get }) : await getMapsTask(t.taskId, { get });
     if (r.state === 'pending') {
       await prisma.localRankTask.update({ where: { id: t.id }, data: { polls: (t.polls || 0) + 1 } });
       summary.pending++;
@@ -469,8 +475,7 @@ export async function collectLocalRankTasks({ now = new Date(), get, env = proce
         break;
       }
       await prisma.localRankTask.updateMany({ where: { id: t.id, status: 'pending' }, data: { status: 'failed', collectedAt: now, errorCode: r.errorCode } });
-      if (t.kind === 'daily') await storeCollectedDaily(t, { status: 'error', errorCode: r.errorCode }, now);
-      else queueGrid(t, { error: true });
+      await storeError(t, r.errorCode);
       summary.failed++;
       continue;
     }
@@ -478,8 +483,13 @@ export async function collectLocalRankTasks({ now = new Date(), get, env = proce
       projects.set(t.projectId, await prisma.project.findUnique({ where: { id: t.projectId }, select: LOCAL_PROJECT_SELECT }));
     }
     const project = projects.get(t.projectId);
-    const res = project ? rankResultFromItems(project, r.items) : { status: 'not_found', rank: null };
     await prisma.localRankTask.updateMany({ where: { id: t.id, status: 'pending' }, data: { status: 'done', collectedAt: now } });
+    if (t.kind === 'bing') {
+      await storeCollectedBing(t, project ? bingRankResultFromItems(project, r.items) : { status: 'not_found' }, now);
+      summary.done++;
+      continue;
+    }
+    const res = project ? rankResultFromItems(project, r.items) : { status: 'not_found', rank: null };
     if (t.kind === 'daily') await storeCollectedDaily(t, res, now);
     else queueGrid(t, { rank: res.status === 'ok' ? res.rank : null });
     summary.done++;

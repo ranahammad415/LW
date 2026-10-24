@@ -18,12 +18,12 @@ export const PILLAR_LABELS = Object.freeze({
 });
 
 export const FACTOR_LABELS = Object.freeze({
-  V1: 'Google clicks', V2: 'Search impressions', V3: 'Average position', V4: 'CTR vs expected',
+  V1: 'Google clicks', V2: 'Search impressions', V3: 'Average position', V4: 'CTR vs expected', V5: 'Bing clicks',
   E1: 'Sessions', E2: 'Engagement quality', E3: 'Bounce rate',
   L1: 'Leads (forms, calls, emails)', L2: 'Lead conversion rate', L3: 'GA4 conversions',
   R1: 'Average rating', R2: 'New reviews', R3: 'Review reply rate', R4: 'Google Business actions', R5: 'Listings consistency',
   A1: 'AI citation rate',
-  S1: 'Security state', S2: 'Backups', S3: 'Site connection',
+  S1: 'Security state', S2: 'Backups', S3: 'Site connection', S4: 'Bing crawl health',
 });
 
 /**
@@ -112,6 +112,13 @@ export const SENTENCES = {
       : { kind: 'down', weight: Math.abs(d), text: 'Your average position in Google slipped' };
   },
   V4: (f) => level(f, 'Searchers click your Google listing more often than usual for its position', 'Fewer searchers click your Google listing than expected for its position'),
+  V5: (f) => {
+    const d = pctDelta(Number(f.raw?.cur), Number(f.raw?.prev));
+    if (!isNum(d) || Math.abs(d) < MOVE_MIN) return null;
+    return d > 0
+      ? { kind: 'up', weight: Math.abs(d) / 2, text: 'Your site is also gaining visits from Bing' }
+      : { kind: 'down', weight: Math.abs(d) / 2, text: 'Visits from Bing search fell versus the previous 4 weeks' };
+  },
   E1: (f) => moveSentence(f, 'Website visits are'),
   E2: (f) => level(f, 'Visitors spend a good amount of time on your website', 'Visitors leave your website quickly'),
   E3: (f) => level(f, 'Most visitors go on to view more of your website', 'Many visitors leave after viewing one page'),
@@ -141,6 +148,7 @@ export const SENTENCES = {
     return { kind: 'up', weight: 5, text: 'Website backups are up to date' };
   },
   S3: (f) => (isNum(f.score) && f.score <= 40 ? { kind: 'down', weight: 30, text: 'Your website has not checked in with us recently' } : null),
+  S4: (f) => level(f, 'Bing can read your site without problems', 'Bing is hitting broken pages on your site'),
 };
 
 /** Top `limit` improving and attention sentences for a set of factor results (one or more projects). */

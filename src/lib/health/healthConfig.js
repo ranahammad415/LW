@@ -4,9 +4,9 @@
  */
 import { z } from 'zod';
 import { prisma } from '../prisma.js';
-import { DEFAULT_CONFIG_V1, DEFAULT_CONFIG_V2, PILLARS, PROFILES } from './defaultConfig.js';
+import { DEFAULT_CONFIG_V1, DEFAULT_CONFIG_V2, DEFAULT_CONFIG_V3, PILLARS, PROFILES } from './defaultConfig.js';
 
-export { DEFAULT_CONFIG_V1, DEFAULT_CONFIG_V2, PILLARS, PROFILES };
+export { DEFAULT_CONFIG_V1, DEFAULT_CONFIG_V2, DEFAULT_CONFIG_V3, PILLARS, PROFILES };
 
 export const CONFIG_TTL_MS = 5 * 60 * 1000;
 let cache = null; // { at, config }
@@ -68,6 +68,9 @@ const FACTOR_SCHEMAS = {
   // Config v2 (contract 1.8.0): optional, so version 1 (without them) stays valid and loadable.
   R5: z.object({ ...factorBase, level: points, minChecked: z.number().int().min(1).max(200) }).optional(),
   A1: z.object({ ...factorBase, level: points, maxAgeDays: z.number().int().min(7).max(120), minCells: z.number().int().min(1).max(1000) }).optional(),
+  // Config v3 proposal (Bing Webmaster): optional, so versions 1 and 2 stay valid and loadable.
+  V5: z.object({ ...factorBase, minPrior: nonNegInt }).optional(),
+  S4: z.object({ ...factorBase, level: points, days: z.number().int().min(1).max(60), minCrawled: z.number().int().min(1).max(1_000_000) }).optional(),
 };
 
 const profileSchema = z
@@ -116,6 +119,34 @@ export async function listConfigVersions({ take = 20 } = {}) {
     take,
     select: { version: true, isActive: true, note: true, createdById: true, createdAt: true },
   });
+}
+
+export class ConfigActivationError extends Error {
+  constructor(status, code, message) {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+/**
+ * Make an existing stored version the only active one (e.g. the v3 Bing proposal the migration stores inactive). The
+ * stored JSON must still validate. One transaction, then the cache is dropped. Returns the activated row.
+ */
+export async function activateConfigVersion(version) {
+  const v = Number(version);
+  if (!Number.isInteger(v) || v < 1) throw new ConfigActivationError(400, 'BAD_VERSION', 'Unknown config version');
+  const row = await prisma.$transaction(async (tx) => {
+    const target = await tx.healthScoreConfig.findUnique({ where: { version: v } });
+    if (!target) throw new ConfigActivationError(404, 'NOT_FOUND', 'Config version not found');
+    const check = validateConfig(target.config);
+    if (!check.ok) throw new ConfigActivationError(409, 'INVALID_CONFIG', 'That stored version is not valid any more');
+    if (target.isActive) return target;
+    await tx.healthScoreConfig.updateMany({ where: { isActive: true }, data: { isActive: false } });
+    return tx.healthScoreConfig.update({ where: { version: v }, data: { isActive: true } });
+  });
+  invalidateConfigCache();
+  return row;
 }
 
 /**

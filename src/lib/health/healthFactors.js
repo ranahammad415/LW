@@ -91,6 +91,16 @@ export function V4(s, cfg) {
   return result('V4', cfg, { l, raw, reason: s.gsc.stale ? 'stale_source' : 'ok' });
 }
 
+/**
+ * V5 (config v3 proposal, Bing Webmaster): Bing search clicks (BingDailyMetric), current vs previous window, YoY blended
+ * when a year of rows exists (seasonDelta needs ≥ yoyMinCoverageDays rows). Trend only. unlinked without
+ * Project.bingSiteUrl; null (min_volume) under `minPrior` prior clicks; no_data without rows.
+ */
+export function V5(s, cfg) {
+  if (!s.bing?.linked) return unlinked('V5', cfg);
+  return volumeTrend('V5', cfg, s.bing, (x) => x.clicks);
+}
+
 // ── Engagement (GA4) ──
 
 /** E1: sessions trend. A GA4 property younger than shortWindowUntilDays uses 14/14-day windows, no YoY. */
@@ -316,7 +326,23 @@ export function S3(s, cfg) {
   return result('S3', cfg, { l: step ? step[1] : fc.beyond, raw: { cur: r1(age), prev: null, yoy: null } });
 }
 
-export const FACTOR_REGISTRY = Object.freeze({ V1, V2, V3, V4, E1, E2, E3, L1, L2, L3, R1, R2, R3, R4, R5, A1, S1, S2, S3 });
+/**
+ * S4 (config v3 proposal, Bing Webmaster): Bing crawl health. Level only: error share over the last `days` crawl days
+ * ending at the score date = (code4xx + code5xx + crawlErrors) / crawledPages × 100 → pl(level). null (no_data) when
+ * there are no crawl rows in that window; min_volume under `minCrawled` crawled pages. Point in time, so backfill works.
+ */
+export function S4(s, cfg) {
+  if (!s.bingCrawl?.linked) return unlinked('S4', cfg);
+  const fc = cfg.factors.S4;
+  const { rows, crawledPages, errors } = s.bingCrawl;
+  if (!rows) return result('S4', cfg, { reason: 'no_data' });
+  const share = crawledPages > 0 ? (errors / crawledPages) * 100 : null;
+  const raw = { cur: r1(share), prev: null, yoy: null };
+  if (crawledPages < (fc.minCrawled ?? 50)) return result('S4', cfg, { raw, reason: 'min_volume' });
+  return result('S4', cfg, { l: pl(share, fc.level), raw });
+}
+
+export const FACTOR_REGISTRY = Object.freeze({ V1, V2, V3, V4, V5, E1, E2, E3, L1, L2, L3, R1, R2, R3, R4, R5, A1, S1, S2, S3, S4 });
 
 /** Every configured factor that has an implementation, in registry order. */
 export function computeFactors(slice, cfg) {

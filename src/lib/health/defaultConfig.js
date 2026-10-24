@@ -65,6 +65,31 @@ export const DEFAULT_CONFIG_V2 = Object.freeze({
   },
 });
 
+/**
+ * Config version 3 PROPOSAL (Bing Webmaster, branch bing-webmaster; features/bing-webmaster.md): version 2 plus two
+ * Bing factors at half weight, so Bing (typically 5–15 % of search) cannot swing a pillar on its own.
+ * - V5 "Bing clicks" (visibility): trend only, BingDailyMetric clicks, current vs previous window, YoY blended when a
+ *   year of rows exists; null (min_volume) under `minPrior` prior clicks; unlinked without Project.bingSiteUrl.
+ * - S4 "Bing crawl health" (site): level only. Error share over the last `days` crawl days =
+ *   (code4xx + code5xx + crawlErrors) / crawledPages × 100 → pl(level); null when no crawl rows in that window or
+ *   fewer than `minCrawled` crawled pages.
+ * NOT ACTIVE BY DEFAULT: the owner must approve the weights. The migration 20261114_bing_webmaster stores exactly this
+ * object as the next version (isActive = 0); the owner activates it from the Health config card
+ * (POST /api/admin/health/config/:version/activate). DEFAULT_CONFIG stays version 2.
+ */
+export const DEFAULT_CONFIG_V3 = Object.freeze({
+  ...JSON.parse(JSON.stringify(DEFAULT_CONFIG_V2)),
+  version: 3,
+  factors: {
+    ...JSON.parse(JSON.stringify(DEFAULT_CONFIG_V2.factors)),
+    V5: { pillar: 'visibility', weight: 0.5, minPrior: 20 },
+    S4: { pillar: 'site', weight: 0.5, level: [[0, 100], [2, 70], [10, 20]], days: 7, minCrawled: 50 },
+  },
+});
+
+/** Note of the stored v3 proposal row (the migration's idempotency key). */
+export const CONFIG_V3_NOTE = 'v3 proposal (V5 Bing clicks, S4 Bing crawl health), weights 0.5, owner approval needed';
+
 /** The newest built-in defaults (used when the config table is empty or not migrated yet). */
 export const DEFAULT_CONFIG = DEFAULT_CONFIG_V2;
 
