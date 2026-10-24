@@ -36,6 +36,7 @@ function matchValue(v, cond) {
   if (typeof cond === 'object' && !Array.isArray(cond)) {
     for (const [op, arg] of Object.entries(cond)) {
       if (op === 'in' && !arg.includes(v)) return false;
+      if (op === 'notIn' && arg.includes(v)) return false;
       if (op === 'not' && (arg === null ? v === null || v === undefined : v === arg)) return false;
       if (op === 'lt' && !(v != null && cmp(v, arg) < 0)) return false;
       if (op === 'lte' && !(v != null && cmp(v, arg) <= 0)) return false;

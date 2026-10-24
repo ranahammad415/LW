@@ -6,6 +6,7 @@
 import { z } from 'zod';
 import { prisma } from '../../lib/prisma.js';
 import { invalidatePauseCache } from '../../mcp/oauth/tokens.js';
+import { maskSecretsDeep } from '../../mcp/redact.js';
 
 const USER_SELECT = { id: true, name: true, email: true, role: true };
 
@@ -194,9 +195,16 @@ export async function adminMcpRoutes(app, opts = {}) {
       where: { level: 'critical', approvedAt: null, consumedAt: null, expiresAt: { gt: new Date() } },
       orderBy: { createdAt: 'desc' },
       take: 100,
-      select: { id: true, grantId: true, userId: true, tool: true, routeKey: true, preview: true, createdAt: true, expiresAt: true },
+      select: { id: true, grantId: true, userId: true, tool: true, routeKey: true, preview: true, args: true, createdAt: true, expiresAt: true },
     });
-    return noStore(reply).send(rows);
+    // `full`: the exact stored query + body that will run, untruncated, secrets / credential strings still masked
+    // (re-review: the preview cuts long strings, the approver must see all of it). The stored args object itself is
+    // never returned.
+    const out = rows.map(({ args, ...r }) => ({
+      ...r,
+      full: { query: maskSecretsDeep(args?.request?.query ?? null), body: maskSecretsDeep(args?.request?.body ?? null) },
+    }));
+    return noStore(reply).send(out);
   });
 
   async function decide(request, reply, approve) {

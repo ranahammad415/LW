@@ -107,7 +107,9 @@ export function loadMcpConfig(env = process.env) {
     pinnedRedirectUris: [...PINNED_REDIRECT_URIS],
     criticalApproval: !['off', 'false', '0'].includes(String(env.MCP_CRITICAL_APPROVAL ?? 'on').trim().toLowerCase()),
     dcrMaxPerHour: int(env.MCP_DCR_MAX_PER_HOUR, 20, 1, 1_000),
-    authRequestsMaxPerHour: int(env.MCP_AUTH_REQUESTS_MAX_PER_HOUR, 200, 1, 10_000),
+    // Pending, unexpired auth requests for non-pinned redirects (re-review N2), and pending requests per client_id.
+    authRequestsMaxPerHour: int(env.MCP_AUTH_REQUESTS_MAX_PER_HOUR, 1000, 1, 100_000),
+    authRequestsPerClient: int(env.MCP_AUTH_REQUESTS_PER_CLIENT, 30, 1, 10_000),
     corsOrigins,
     accessTtlSec: int(env.MCP_ACCESS_TTL_SEC, 3600, 300, 86_400),
     refreshTtlDays: int(env.MCP_REFRESH_TTL_DAYS, 30, 1, 90),

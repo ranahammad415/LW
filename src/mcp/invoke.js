@@ -17,8 +17,50 @@ const METHODS = new Set(['GET', 'POST', 'PATCH', 'PUT', 'DELETE']);
 export const MAX_BODY_BYTES = 65_536;
 export const MAX_QUERY_BYTES = 2_048;
 export const MAX_PATH = 500;
-/** Concrete route paths only: no percent-encoding, no query, no exotic characters (security review H1). */
-const PATH_CHARS_RE = /^[A-Za-z0-9/_\-.:~]+$/;
+/**
+ * Concrete route paths only: no query, no exotic characters (security review H1). `%XX` is accepted syntactically
+ * here, but executeOsRequest then allows it only in segments the resolved route pattern declares as a whole `:param`
+ * (e.g. an emoji in /reactions/:emoji); a `%` in any static segment is refused (re-review).
+ */
+const PATH_CHARS_RE = /^[A-Za-z0-9/_\-.:~%]+$/;
+const BAD_PCT_RE = /%(?![0-9A-Fa-f]{2})/;
+/** Characters a decoded param segment may not contain (separators, a second encoding layer, control chars). */
+// eslint-disable-next-line no-control-regex
+const BAD_DECODED_RE = /[/\\?#%\u0000-\u001f\u007f]/;
+
+function decodeSegment(seg) {
+  try {
+    return decodeURIComponent(seg);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * After the route is resolved: every percent-encoded path segment must line up with a pattern segment that is exactly
+ * one `:param`. Returns { error } or { classifyPath } (the path with encoded segments replaced by `_`, so the
+ * classifier never sees `%`).
+ */
+export function checkEncodedSegments(path, pattern) {
+  if (!path.includes('%')) return { classifyPath: path };
+  const raw = path.split('/');
+  const pat = normalizePattern(pattern).split('/');
+  const rawTrim = raw.length > 1 && raw[raw.length - 1] === '' ? raw.slice(0, -1) : raw;
+  if (rawTrim.length !== pat.length) return { error: 'percent-encoding is only allowed in a route parameter segment' };
+  const out = [];
+  for (let i = 0; i < rawTrim.length; i += 1) {
+    const seg = rawTrim[i];
+    if (!seg.includes('%')) {
+      out.push(seg);
+      continue;
+    }
+    if (!/^:[A-Za-z_][A-Za-z0-9_]*$/.test(pat[i])) return { error: 'percent-encoding is only allowed in a route parameter segment' };
+    const dec = decodeSegment(seg);
+    if (dec === null || dec === '' || BAD_DECODED_RE.test(dec) || dec === '.' || dec === '..') return { error: 'invalid percent-encoded path segment' };
+    out.push('_');
+  }
+  return { classifyPath: out.join('/') };
+}
 
 /** `rk` = the classified "METHOD /pattern"; `cf` = confirmed through confirm_action (dangerous / critical). */
 export function mintInternalJwt(user, grantId, { rk = null, cf = false } = {}, secret = process.env.JWT_ACCESS_SECRET) {
@@ -46,8 +88,13 @@ export function validateOsRequest({ method, path, query, body }) {
   if (!METHODS.has(method)) return 'method must be GET, POST, PATCH, PUT or DELETE';
   if (typeof path !== 'string' || !path.startsWith('/api/')) return 'path must start with /api/';
   if (path.length > MAX_PATH) return `path is longer than ${MAX_PATH} characters`;
-  if (path.includes('%')) return 'path must not be percent-encoded (use the plain route path)';
-  if (!PATH_CHARS_RE.test(path) || path.includes('..') || path.includes('//')) return 'path may only contain letters, digits and / _ - . : ~ (put the query in `query`)';
+  if (!PATH_CHARS_RE.test(path) || path.includes('..') || path.includes('//')) return 'path may only contain letters, digits and / _ - . : ~ (put the query in `query`; percent-encode only a route parameter value)';
+  if (BAD_PCT_RE.test(path)) return 'path has a malformed percent-encoding';
+  for (const seg of path.split('/')) {
+    if (!seg.includes('%')) continue;
+    const dec = decodeSegment(seg);
+    if (dec === null || dec === '' || BAD_DECODED_RE.test(dec) || dec === '.' || dec === '..') return 'invalid percent-encoded path segment';
+  }
   if (query !== undefined && query !== null) {
     if (!isPlainObject(query)) return 'query must be an object';
     for (const v of Object.values(query)) {
@@ -154,7 +201,17 @@ export async function executeOsRequest(ctx, req, { confirmed = false, toolArgs =
   const resolved = resolveRoute(ctx.app, ctx.catalog, method, path);
   if (!resolved) return { kind: 'error', code: 'NOT_FOUND', statusCode: 404, message: `No route ${method} ${path}. Use os_route_search.`, danger: 'read', route: { method, path } };
   const route = { method, path, pattern: resolved.pattern };
-  const c = classifyRequest({ method, routePattern: resolved.pattern, path, query, body, routeConfig: resolved.routeConfig });
+  const enc = checkEncodedSegments(path, resolved.pattern);
+  if (enc.error) return { kind: 'error', code: 'INVALID_REQUEST', message: enc.error, danger: 'blocked', route };
+  if (path.includes('%')) {
+    // The decoded path (what Fastify's router matches) must resolve to the same pattern; the route guard checks again.
+    const decoded = path.split('/').map((s) => (s.includes('%') ? decodeSegment(s) : s)).join('/');
+    const again = ctx.catalog.match(method, decoded);
+    if (!again || normalizePattern(again.entry.path) !== resolved.pattern) {
+      return { kind: 'error', code: 'INVALID_REQUEST', message: 'percent-encoding is only allowed in a route parameter segment', danger: 'blocked', route };
+    }
+  }
+  const c = classifyRequest({ method, routePattern: resolved.pattern, path: enc.classifyPath, query, body, routeConfig: resolved.routeConfig });
   if (c.level === 'blocked') {
     return { kind: 'error', code: 'BLOCKED', statusCode: 403, message: 'This route is not available through MCP', reasons: c.reasons, danger: 'blocked', route };
   }

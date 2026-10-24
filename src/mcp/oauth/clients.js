@@ -21,6 +21,17 @@ export function isPinnedRedirect(uri, cfg) {
   return (cfg.pinnedRedirectUris || []).includes(uri);
 }
 
+/** Pinned Claude callback or a loopback URI: such registrations skip the global DCR cap (re-review N2). */
+export function isTrustedRedirect(uri, cfg) {
+  if (isPinnedRedirect(uri, cfg)) return true;
+  try {
+    const u = new URL(uri);
+    return (u.protocol === 'http:' || u.protocol === 'https:') && LOOPBACK.has(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
 /** Policy check for one redirect URI. Returns null when allowed, else the reason. */
 export function checkRedirectUri(uri, cfg) {
   if (typeof uri !== 'string' || !uri || uri.length > 500) return 'redirect_uri must be a string of at most 500 characters';
@@ -173,9 +184,21 @@ export async function registerRoute(app, { cfg, db }) {
       publicJsonHeaders(reply);
       const parsed = validateRegistration(request.body, cfg);
       if (!parsed.ok) return reply.code(400).send({ error: parsed.error, error_description: parsed.description });
-      // Global cap across all IPs and instances (per-IP limits are spoofable behind trustProxy; review M5).
-      const recent = await db.mcpClient.count({ where: { createdAt: { gte: new Date(Date.now() - 3_600_000) } } });
-      if (recent >= cfg.dcrMaxPerHour) {
+      // Global cap across all IPs and instances (review M5), counting only clients with a non-pinned, non-loopback
+      // redirect: a registration with only Claude's pinned callbacks or loopback skips it (keeps the per-IP limit), so
+      // junk traffic cannot lock out Claude's own connect / reconnect (re-review N2).
+      const trusted = parsed.value.redirectUris.every((u) => isTrustedRedirect(u, cfg));
+      let recent = 0;
+      if (!trusted) {
+        const rows = await db.mcpClient.findMany({
+          where: { createdAt: { gte: new Date(Date.now() - 3_600_000) } },
+          orderBy: { createdAt: 'desc' },
+          take: 5_000,
+          select: { redirectUris: true },
+        });
+        recent = rows.filter((r) => !(Array.isArray(r.redirectUris) && r.redirectUris.every((u) => isTrustedRedirect(u, cfg)))).length;
+      }
+      if (!trusted && recent >= cfg.dcrMaxPerHour) {
         reply.header('Retry-After', '600');
         return reply.code(429).send({ error: 'temporarily_unavailable', error_description: 'Too many client registrations; try again later' });
       }

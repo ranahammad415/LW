@@ -11,7 +11,7 @@ vi.mock('../../../src/lib/prisma.js', () => ({ prisma: {} }));
 
 const { default: Fastify } = await import('fastify');
 const { default: jwt } = await import('jsonwebtoken');
-const { validateOsRequest, mintInternalJwt, resolveRoute } = await import('../../../src/mcp/invoke.js');
+const { validateOsRequest, mintInternalJwt, resolveRoute, checkEncodedSegments } = await import('../../../src/mcp/invoke.js');
 const { installMcpRouteGuard, routeGuardDecision, mcpJwtClaims } = await import('../../../src/mcp/routeGuard.js');
 const { maskSecretsDeep, previewBody } = await import('../../../src/mcp/redact.js');
 const { clientIp } = await import('../../../src/mcp/clientIp.js');
@@ -24,22 +24,50 @@ const USER = { id: 'u1', role: 'OWNER', tokenVersion: 0 };
 
 describe('H1: encoded / odd paths are rejected before routing', () => {
   it.each([
-    '/api/admin/%69mpersonate',
-    '/api/%61uth/login',
-    '/api/projects/x/cms/rotat%65-keys',
-    '/api/admin/%6dcp/grants',
     '/api/tasks/a%2Fb',
+    '/api/tasks/a%5Cb',
+    '/api/tasks/a%3Fb',
+    '/api/tasks/%2525',
+    '/api/tasks/%2E%2E',
+    '/api/tasks/%00',
+    '/api/tasks/%zz',
+    '/api/tasks/%E0%A4%A',
     '/api/tasks/<x>',
     '/api/tasks/a b',
     "/api/tasks/'x'",
     '/api/tasks/x;y',
   ])('%s', (path) => {
-    expect(validateOsRequest({ method: 'POST', path })).toMatch(/percent-encoded|may only contain/);
+    expect(validateOsRequest({ method: 'POST', path })).toMatch(/percent-encod|may only contain/);
+  });
+
+  it('encoding is allowed only in a whole :param segment of the resolved pattern', () => {
+    const P = '/api/tasks/:taskId/comments/:commentId/reactions/:emoji';
+    expect(checkEncodedSegments('/api/tasks/t/comments/c/reactions/%F0%9F%91%8D', P)).toEqual({ classifyPath: '/api/tasks/t/comments/c/reactions/_' });
+    expect(checkEncodedSegments('/api/tasks/t/comments/c/reactions/x', P)).toEqual({ classifyPath: '/api/tasks/t/comments/c/reactions/x' });
+    expect(checkEncodedSegments('/api/tasks/t/comments/c/r%65actions/x', P).error).toMatch(/route parameter/);
+    expect(checkEncodedSegments('/api/admin/%69mpersonate', '/api/admin/impersonate').error).toMatch(/route parameter/);
+    expect(checkEncodedSegments('/api/x/%41/y', '/api/x/:a-:b/y').error).toMatch(/route parameter/);
+    expect(checkEncodedSegments('/api/x/%41', '/api/x/*').error).toMatch(/route parameter/);
   });
 
   it('plain paths still pass', () => {
     expect(validateOsRequest({ method: 'GET', path: '/api/tasks/99999999-9999-9999-9999-999999999991/comments' })).toBeNull();
     expect(validateOsRequest({ method: 'GET', path: '/api/pm/okf-review/drafts/a_b.c~d' })).toBeNull();
+  });
+
+  it('an encoded param value that decodes to a static sibling is refused even if the router did not decode it', async () => {
+    const { executeOsRequest } = await import('../../../src/mcp/invoke.js');
+    const catalog = new RouteCatalog([{ method: 'GET', url: '/api/x/:thing' }, { method: 'GET', url: '/api/x/impersonate' }], []);
+    const app = { findRoute: () => ({ params: { thing: 'whatever' } }), inject: () => { throw new Error('must not run'); } };
+    const ctx = { app, catalog, scope: 'os:read os:write', cfg: { toolTimeoutMs: 1000 }, user: USER, grant: { id: 'g' } };
+    const out = await executeOsRequest(ctx, { method: 'GET', path: '/api/x/%69mpersonate' });
+    expect(out).toMatchObject({ kind: 'error', code: 'INVALID_REQUEST' });
+  });
+
+  it('pagination: no OS route takes a *Token query / body key today, so the suffix rule blocks nothing legitimate', () => {
+    // routes/ grep (re-review): only /api/auth/* (blocked area) and /api/realtime (blocked) read `token`; Google
+    // pageToken / nextPageToken live inside lib/ and never reach a request. Cursors use `cursor` / `since`.
+    expect(validateOsRequest({ method: 'GET', path: '/api/tasks', query: { cursor: 'abc', limit: 5 } })).toBeNull();
   });
 
   it('a route the catalog cannot name is refused instead of classified on the raw path', () => {

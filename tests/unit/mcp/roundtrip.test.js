@@ -120,6 +120,14 @@ beforeAll(async () => {
     return { deleted: true };
   });
   app.post('/api/admin/notifications/send-test-email', { onRequest: [app.verifyJwt, app.requireOwner] }, async () => ({ sent: true }));
+  // Mirrors routes/tasks.js reactions (emoji in a :param segment) and an encoded-param route next to a static one.
+  app.post('/api/tasks/:taskId/comments/:commentId/reactions', { onRequest: [app.verifyJwt] }, async (request) => ({ emoji: request.body?.emoji }));
+  app.delete('/api/tasks/:taskId/comments/:commentId/reactions/:emoji', { onRequest: [app.verifyJwt] }, async (request) => ({ removed: request.params.emoji }));
+  app.get('/api/test/things/:thing', { onRequest: [app.verifyJwt] }, async (request) => ({ thing: request.params.thing }));
+  app.get('/api/test/things/impersonate', { onRequest: [app.verifyJwt] }, async () => {
+    globalThis.__impersonateRan = true;
+    return {};
+  });
   app.get('/api/test/echo-auth', { onRequest: [app.verifyJwt] }, async (request) => ({ viaMcp: request.viaMcp, mcpGrantId: request.mcpGrantId, authMethod: request.authMethod, tool: request.headers['x-mcp-tool'] }));
   registerMcp(app, { cfg, collector, db });
   app.register(adminMcpRoutes, { prefix: '/api/admin', cfg });
@@ -334,11 +342,34 @@ describe('security review regressions (through Fastify)', () => {
       for (const method of ['POST', 'GET']) {
         const { result, data } = await callTool(owner.tokens.access_token, 'os_api_request', { method, path });
         expect(result.isError).toBe(true);
-        expect(data.code).toBe('INVALID_REQUEST');
+        // an encoded static segment never resolves (404) or is refused once resolved (INVALID_REQUEST)
+        expect(['INVALID_REQUEST', 'NOT_FOUND']).toContain(data.code);
       }
     }
     expect(globalThis.__impersonateRan).toBe(false);
     expect(db._tables.mcpConfirmation.some((r) => /impersonate/.test(r.routeKey || ''))).toBe(false);
+  });
+
+  it('re-review: an emoji (percent-encoded) in a :param segment works; encoded static segments stay refused', async () => {
+    const C = '99999999-9999-9999-9999-999999999992';
+    const add = await callTool(owner.tokens.access_token, 'os_api_request', { method: 'POST', path: `/api/tasks/${TASK_ID}/comments/${C}/reactions`, body: { emoji: '👍' } });
+    expect(add.data).toMatchObject({ status: 200, body: { emoji: '👍' } });
+    const del = await callTool(owner.tokens.access_token, 'os_api_request', { method: 'DELETE', path: `/api/tasks/${TASK_ID}/comments/${C}/reactions/${encodeURIComponent('👍')}` });
+    expect(del.data.status).toBe('confirmation_required');
+    const done = await callTool(owner.tokens.access_token, 'confirm_action', { confirm_token: del.data.confirm_token });
+    expect(done.data).toMatchObject({ confirmed: true, result: { status: 200, body: { removed: '👍' } } });
+    const get = await callTool(owner.tokens.access_token, 'os_api_request', { method: 'GET', path: `/api/test/things/${encodeURIComponent('é x')}` });
+    expect(get.data).toMatchObject({ status: 200, body: { thing: 'é x' } });
+    // an encoded value that decodes to a static sibling segment must not run the static route
+    globalThis.__impersonateRan = false;
+    const sneaky = await callTool(owner.tokens.access_token, 'os_api_request', { method: 'GET', path: '/api/test/things/%69mpersonate' });
+    expect(['INVALID_REQUEST', 'NOT_FOUND']).toContain(sneaky.data.code);
+    expect(globalThis.__impersonateRan).toBe(false);
+    // and the route guard refuses it even with a JWT minted for the param route
+    const { mintInternalJwt } = await import('../../../src/mcp/invoke.js');
+    const direct = await app.inject({ method: 'GET', url: '/api/test/things/%69mpersonate', headers: { authorization: `Bearer ${mintInternalJwt(OWNER, 'g-x', { rk: 'GET /api/test/things/:thing' })}` } });
+    expect(direct.statusCode).toBe(403);
+    expect(globalThis.__impersonateRan).toBe(false);
   });
 
   it('H1: an internal JWT replayed directly on another route / an encoded path is refused by the route guard', async () => {
@@ -393,6 +424,18 @@ describe('security review regressions (through Fastify)', () => {
     expect((await callTool(owner.tokens.access_token, 'confirm_action', { confirm_token: token })).data.code).toBe('CONFIRM_USED');
   });
 
+  it('re-review: the approvals list carries the full stored body (no truncation), secrets masked', async () => {
+    const long = `<p>${'a'.repeat(900)} TAIL-END</p>`;
+    const first = await callTool(owner.tokens.access_token, 'os_api_request', { method: 'POST', path: '/api/admin/notifications/send-test-email', body: { to: 'x@client.test', html: long, note: 'see https://site.test/?agency_token=zzz' } });
+    expect(first.data.preview.body.html).not.toContain('TAIL-END');
+    const id = db._tables.mcpConfirmation.at(-1).id;
+    const list = await app.inject({ method: 'GET', url: '/api/admin/mcp/approvals', headers: { authorization: `Bearer ${sessionJwt(OWNER)}` } });
+    const item = list.json().find((r) => r.id === id);
+    expect(item.full.body.html).toBe(long);
+    expect(item.full.body.note).toBe('[REDACTED]');
+    expect(item).not.toHaveProperty('args');
+  });
+
   it('M3: a denied critical action never runs', async () => {
     globalThis.__clientDeleted = null;
     const del = await callTool(owner.tokens.access_token, 'os_api_request', { method: 'DELETE', path: '/api/admin/clients/c2' });
@@ -428,21 +471,52 @@ describe('security review regressions (through Fastify)', () => {
     expect(res.json().error.code).toBe(-32600);
   });
 
-  it('M5: global caps on new DCR clients and auth requests per hour; CF-Connecting-IP is the audited IP', async () => {
-    const saved = [cfg.dcrMaxPerHour, cfg.authRequestsMaxPerHour];
+  it('M5 / N2: caps count only non-pinned registrations and pending requests; Claude cannot be locked out by junk', async () => {
+    const saved = { dcr: cfg.dcrMaxPerHour, auth: cfg.authRequestsMaxPerHour, per: cfg.authRequestsPerClient, uris: cfg.redirectUris };
+    const JUNK = 'https://custom.example/cb';
+    const authorizeUrl = (clientId, redirect) => `/api/mcp/oauth/authorize?response_type=code&client_id=${clientId}&redirect_uri=${encodeURIComponent(redirect)}&code_challenge=${s256Challenge(VERIFIER)}&code_challenge_method=S256`;
     try {
-      cfg.dcrMaxPerHour = db._tables.mcpClient.length;
-      const reg = await app.inject({ method: 'POST', url: '/api/mcp/oauth/register', payload: { client_name: 'x', redirect_uris: [REDIRECT] } });
-      expect(reg.statusCode).toBe(429);
-      cfg.dcrMaxPerHour = saved[0];
-      const ok = await app.inject({ method: 'POST', url: '/api/mcp/oauth/register', headers: { 'cf-connecting-ip': '198.51.100.9' }, payload: { client_name: 'x', redirect_uris: [REDIRECT] } });
-      expect(ok.statusCode).toBe(201);
+      cfg.redirectUris = [...saved.uris, JUNK];
+      cfg.dcrMaxPerHour = 3;
+      cfg.authRequestsMaxPerHour = 3;
+      cfg.authRequestsPerClient = 3;
+      // junk floods DCR with a non-pinned redirect until the global cap answers 429
+      const junkClients = [];
+      for (let i = 0; i < 6; i += 1) {
+        const r = await app.inject({ method: 'POST', url: '/api/mcp/oauth/register', payload: { client_name: `junk${i}`, redirect_uris: [JUNK] } });
+        if (r.statusCode === 201) junkClients.push(r.json().client_id);
+        else expect(r.statusCode).toBe(429);
+      }
+      expect(junkClients).toHaveLength(3);
+      // junk floods authorize: one client hits its per-client cap; spread over clients it hits the global cap
+      for (let i = 0; i < 3; i += 1) expect((await app.inject({ method: 'GET', url: authorizeUrl(junkClients[0], JUNK) })).statusCode).toBe(302);
+      expect((await app.inject({ method: 'GET', url: authorizeUrl(junkClients[0], JUNK) })).statusCode).toBe(429);
+      expect((await app.inject({ method: 'GET', url: authorizeUrl(junkClients[1], JUNK) })).statusCode).toBe(429);
+      // a junk client that registers Claude's pinned callback only spends its own per-client quota
+      const junkPinned = (await app.inject({ method: 'POST', url: '/api/mcp/oauth/register', payload: { client_name: 'junk-pinned', redirect_uris: [REDIRECT] } })).json().client_id;
+      for (let i = 0; i < 3; i += 1) await app.inject({ method: 'GET', url: authorizeUrl(junkPinned, REDIRECT) });
+      expect((await app.inject({ method: 'GET', url: authorizeUrl(junkPinned, REDIRECT) })).statusCode).toBe(429);
+
+      // Claude still registers (pinned → skips the global DCR cap) and authorizes, from a fresh CF-Connecting-IP
+      const claude = await app.inject({ method: 'POST', url: '/api/mcp/oauth/register', headers: { 'cf-connecting-ip': '198.51.100.9' }, payload: { client_name: 'Claude', redirect_uris: [REDIRECT] } });
+      expect(claude.statusCode).toBe(201);
       expect(db._tables.mcpClient.at(-1).registrationIp).toBe('198.51.100.9');
-      cfg.authRequestsMaxPerHour = db._tables.mcpAuthRequest.length;
-      const auth = await app.inject({ method: 'GET', url: `/api/mcp/oauth/authorize?response_type=code&client_id=${ok.json().client_id}&redirect_uri=${encodeURIComponent(REDIRECT)}&code_challenge=${s256Challenge(VERIFIER)}&code_challenge_method=S256` });
-      expect(auth.statusCode).toBe(429);
+      const loop = await app.inject({ method: 'POST', url: '/api/mcp/oauth/register', payload: { client_name: 'Claude Code', redirect_uris: ['http://localhost:33418/callback'] } });
+      expect(loop.statusCode).toBe(201);
+      const auth = await app.inject({ method: 'GET', url: authorizeUrl(claude.json().client_id, REDIRECT) });
+      expect(auth.statusCode).toBe(302);
+      expect(auth.headers.location).toMatch(/\/mcp\/authorize\?rid=/);
+      // reconnect: the existing Claude client keeps working too
+      expect((await app.inject({ method: 'GET', url: authorizeUrl(owner.clientId, REDIRECT) })).statusCode).toBe(302);
+
+      // expired requests never count: expire the junk client's rows and it may try again
+      for (const r of db._tables.mcpAuthRequest) if (r.clientId === junkClients[0]) r.expiresAt = new Date(Date.now() - 1000);
+      expect((await app.inject({ method: 'GET', url: authorizeUrl(junkClients[0], JUNK) })).statusCode).toBe(302);
     } finally {
-      [cfg.dcrMaxPerHour, cfg.authRequestsMaxPerHour] = saved;
+      cfg.dcrMaxPerHour = saved.dcr;
+      cfg.authRequestsMaxPerHour = saved.auth;
+      cfg.authRequestsPerClient = saved.per;
+      cfg.redirectUris = saved.uris;
     }
   });
 });

@@ -147,13 +147,21 @@ describe('DCR redirect allow-list', () => {
 });
 
 describe('authorize validation', () => {
-  const client = { id: 'c1', redirectUris: ['https://claude.ai/cb'], scope: null };
-  const good = { response_type: 'code', client_id: 'c1', redirect_uri: 'https://claude.ai/cb', state: 'st', code_challenge: s256Challenge('v'.repeat(43)), code_challenge_method: 'S256' };
+  const client = { id: 'c1', redirectUris: ['https://claude.ai/api/mcp/auth_callback'], scope: null };
+  const good = { response_type: 'code', client_id: 'c1', redirect_uri: 'https://claude.ai/api/mcp/auth_callback', state: 'st', code_challenge: s256Challenge('v'.repeat(43)), code_challenge_method: 'S256' };
   it('unknown client / unregistered redirect → no redirect', () => {
     expect(validateAuthorizeQuery(good, null, cfg)).toMatchObject({ ok: false, redirect: false });
     expect(validateAuthorizeQuery({ ...good, redirect_uri: 'https://claude.ai/other' }, client, cfg)).toMatchObject({ ok: false, redirect: false });
     expect(validateAuthorizeQuery(good, { ...client, disabledAt: new Date() }, cfg)).toMatchObject({ ok: false, redirect: false });
   });
+  it('N3: a client registered under the old broader policy is refused at authorize (no redirect to it)', () => {
+    const old = { id: 'c0', redirectUris: ['https://app.claude.ai/cb', 'https://evil.example/cb', 'http://localhost:9999/cb'], scope: null };
+    for (const uri of ['https://app.claude.ai/cb', 'https://evil.example/cb']) {
+      expect(validateAuthorizeQuery({ ...good, client_id: 'c0', redirect_uri: uri }, old, cfg)).toMatchObject({ ok: false, redirect: false, message: expect.stringMatching(/no longer allowed/) });
+    }
+    expect(validateAuthorizeQuery({ ...good, client_id: 'c0', redirect_uri: 'http://localhost:9999/cb' }, old, cfg).ok).toBe(true);
+  });
+
   it('registered redirect + bad params → redirect with error', () => {
     expect(validateAuthorizeQuery({ ...good, code_challenge: undefined }, client, cfg)).toMatchObject({ redirect: true, error: 'invalid_request' });
     expect(validateAuthorizeQuery({ ...good, code_challenge_method: 'plain' }, client, cfg)).toMatchObject({ redirect: true, error: 'invalid_request' });
@@ -162,7 +170,7 @@ describe('authorize validation', () => {
     expect(validateAuthorizeQuery({ ...good, resource: 'https://evil.example/api/mcp' }, client, cfg)).toMatchObject({ redirect: true, error: 'invalid_target' });
   });
   it('valid → stored values (default scope both, resource canonical)', () => {
-    expect(validateAuthorizeQuery(good, client, cfg)).toEqual({ ok: true, value: { clientId: 'c1', redirectUri: 'https://claude.ai/cb', state: 'st', scope: 'os:read os:write', resource: cfg.resource, codeChallenge: good.code_challenge } });
+    expect(validateAuthorizeQuery(good, client, cfg)).toEqual({ ok: true, value: { clientId: 'c1', redirectUri: 'https://claude.ai/api/mcp/auth_callback', state: 'st', scope: 'os:read os:write', resource: cfg.resource, codeChallenge: good.code_challenge } });
     expect(validateAuthorizeQuery({ ...good, scope: 'os:read', resource: cfg.resource }, client, cfg).value.scope).toBe('os:read');
     expect(validateAuthorizeQuery({ ...good, resource: 'https://Account.localwaves.ai/api/mcp/' }, client, cfg).ok).toBe(true);
     expect(validateAuthorizeQuery({ ...good, resource: 'https://account.localwaves.ai/api/other' }, client, cfg).error).toBe('invalid_target');

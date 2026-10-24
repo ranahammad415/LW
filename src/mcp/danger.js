@@ -69,6 +69,9 @@ const CRITICAL_SEGMENT_RE = /\/(rotate|rotate-keys|keys?|tokens?|secret|pairing|
 /** Body keys that change plans / ownership / sender identity, or point the OS at another host (credential exfiltration). */
 const DANGEROUS_BODY_KEY_RE = /^(packageId|package|plan|tier|isActive|email|billing|leadPmId|secondaryPmId|canApproveDeliverables|canSignContracts|emailHeaderHtml|emailFooterHtml|emailFromAddress|emailFromName)$/;
 const DANGEROUS_BODY_KEY_LOOSE_RE = /url$|webhook/i;
+/** Email content keys: dangerous on notification / email / template routes (re-review N1: phishing from the agency sender). */
+const EMAIL_CONTENT_KEY_RE = /^(subject|bodyHtml|bodyText|inAppMessage|ctaLabel)$/;
+const EMAIL_ROUTE_RE = /\/(notifications?|emails?|templates?|digest)(\/|-|$)/i;
 /** Body keys that are critical: roles / agent flag, and the site the OS sends its plugin key to. */
 const CRITICAL_BODY_KEY_RE = /^(role|isAgent|wpUrl|siteUrl|cmsType)$|webhook/i;
 
@@ -94,6 +97,8 @@ const EXPLICIT_DANGEROUS = [
   [/^PATCH$/, /^\/api\/projects\/:id\/keywords\/:keywordId\/(accept-edit|reject-edit)$/, 'approval'],
   [/^POST$/, /^\/api\/admin\/integrations\/google\/disconnect$/, 'disconnect'],
   [/^POST$/, /^\/api\/admin\/work-cycles/, 'work cycle'],
+  // Notification / email templates and their test sends (re-review N1).
+  [WRITE, /^\/api\/admin\/notifications\/(templates|test)(\/|$)/, 'email templates'],
   [/^POST$/, /^\/api\/admin\/projects\/:id\/next-month/, 'bulk'],
   [/^POST$/, /^\/api\/projects\/:id\/tasks\/bulk$/, 'bulk'],
   [/^POST$/, /^\/api\/admin\/backlinks\/bulk$/, 'bulk'],
@@ -231,6 +236,7 @@ export function classifyRequest({ method, routePattern, path, query, body, route
   const seg = pattern.match(DANGEROUS_SEGMENT_RE);
   if (seg) add(`path: ${seg[1].toLowerCase()}`);
   for (const k of bodyKeys) if (DANGEROUS_BODY_KEY_RE.test(k) || DANGEROUS_BODY_KEY_LOOSE_RE.test(k)) add(`changes ${k}`);
+  if (EMAIL_ROUTE_RE.test(pattern)) for (const k of bodyKeys) if (EMAIL_CONTENT_KEY_RE.test(k)) add(`changes email ${k}`);
   for (const [mre, pre, why] of EXPLICIT_DANGEROUS) if (mre.test(m) && pre.test(pattern)) add(why);
   if (m === 'PATCH' && pattern === '/api/tasks/:id/status' && HUMAN_ONLY_STATUSES.has(String(body?.status || '').toUpperCase())) {
     add('completes or cancels a task');

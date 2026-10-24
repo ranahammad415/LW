@@ -46,6 +46,17 @@ const TABLE = [
   ['PATCH', '/api/admin/agency-settings', { body: { emailFooterHtml: 'x' } }, 'dangerous'],
   ['PATCH', '/api/admin/agency-settings', { body: { emailFromAddress: 'a@b.c' } }, 'dangerous'],
   ['PATCH', '/api/admin/agency-settings', { body: { logoUrl: 'https://x.test/l.png' } }, 'dangerous'],
+  // ── dangerous: notification / email templates and content (re-review N1)
+  ['PATCH', '/api/admin/notifications/templates/:id', { body: { isActive: true } }, 'dangerous'],
+  ['PATCH', '/api/admin/notifications/templates/:id', { body: { subject: 'Hi', bodyHtml: '<a href=x>' } }, 'dangerous'],
+  ['PUT', '/api/admin/notifications/templates/:id/variants/:audience', { body: { bodyText: 'x' } }, 'dangerous'],
+  ['DELETE', '/api/admin/notifications/templates/:id/variants/:audience', {}, 'dangerous'],
+  ['POST', '/api/admin/notifications/templates/:id/variants/:audience/test', {}, 'dangerous'],
+  ['POST', '/api/admin/notifications/test/:slug', {}, 'dangerous'],
+  ['PATCH', '/api/x/emails/:id', { body: { subject: 'x' } }, 'dangerous'],
+  ['PATCH', '/api/x/digest-settings', { body: { bodyHtml: 'x' } }, 'dangerous'],
+  ['PATCH', '/api/tasks/:id', { body: { subject: 'x' } }, 'write'],
+  ['POST', '/api/pm/cms-drafts/:id/notes', { body: { bodyHtml: 'x' } }, 'write'],
   // ── dangerous: explicit HUMAN_ONLY / approval list
   ['POST', '/api/pm/pipeline/:projectId/:wpPipelineId/review', {}, 'dangerous'],
   ['POST', '/api/pm/pipeline/:projectId/:wpPipelineId/client-review', {}, 'dangerous'],

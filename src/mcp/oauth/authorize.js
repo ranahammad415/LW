@@ -13,7 +13,7 @@ import { isValidCodeChallenge } from './pkce.js';
 import { generateSecret, isMcpPaused, sha256Hex, PREFIX } from './tokens.js';
 import { writeAudit } from '../audit.js';
 import { clientIp, mcpRateLimit } from '../clientIp.js';
-import { isPinnedRedirect } from './clients.js';
+import { checkRedirectUri, isPinnedRedirect } from './clients.js';
 
 const ERR_PAGE = (msg) =>
   `<!doctype html><html><head><meta charset="utf-8"><title>Authorization error</title></head><body style="font-family:sans-serif;max-width:560px;margin:3rem auto"><h1>Authorization error</h1><p>${msg}</p><p>Start the connection again from Claude.</p></body></html>`;
@@ -54,6 +54,10 @@ export function validateAuthorizeQuery(query, client, cfg) {
   if (!redirectUri || !registered.includes(redirectUri)) {
     return { ok: false, redirect: false, message: 'redirect_uri does not match a registered redirect URI.' };
   }
+  // A client registered under an older, broader policy is refused here too (re-review N3); no redirect to it.
+  if (checkRedirectUri(redirectUri, cfg)) {
+    return { ok: false, redirect: false, message: 'This redirect URI is no longer allowed. Remove the connector in Claude and add it again.' };
+  }
   const state = q(query.state);
   if (state && state.length > 1024) return { ok: false, redirect: true, error: 'invalid_request', description: 'state is too long', redirectUri, state: null };
   const back = (error, description) => ({ ok: false, redirect: true, error, description, redirectUri, state });
@@ -84,11 +88,21 @@ export async function authorizeRoutes(app, { cfg, db }) {
     if (!v.ok) {
       return reply.redirect(buildRedirect(v.redirectUri, { error: v.error, error_description: v.description, state: v.state, iss: cfg.issuer }), 302);
     }
-    // Global cap across all IPs and instances (review M5).
-    const recent = await db.mcpAuthRequest.count({ where: { createdAt: { gte: new Date(Date.now() - 3_600_000) } } });
-    if (recent >= cfg.authRequestsMaxPerHour) {
+    // Caps (review M5, re-review N2), all on pending, unexpired requests so finished / expired ones never count:
+    // - per client_id (MCP_AUTH_REQUESTS_PER_CLIENT): one junk client cannot fill the table; Claude's client_id is an
+    //   unguessable UUID known only to Claude, so others cannot spend its quota;
+    // - global (MCP_AUTH_REQUESTS_MAX_PER_HOUR) only for non-pinned redirects, so Claude's hosted callbacks are never
+    //   locked out by junk traffic.
+    const now = new Date();
+    const pending = { status: 'pending', expiresAt: { gt: now }, createdAt: { gte: new Date(now.getTime() - 3_600_000) } };
+    const tooMany = () => {
       reply.header('Retry-After', '600');
       return reply.code(429).type('text/html; charset=utf-8').send(ERR_PAGE('Too many connection attempts right now. Try again in a few minutes.'));
+    };
+    if ((await db.mcpAuthRequest.count({ where: { ...pending, clientId: v.value.clientId } })) >= cfg.authRequestsPerClient) return tooMany();
+    if (!isPinnedRedirect(v.value.redirectUri, cfg)) {
+      const recent = await db.mcpAuthRequest.count({ where: { ...pending, redirectUri: { notIn: cfg.pinnedRedirectUris || [] } } });
+      if (recent >= cfg.authRequestsMaxPerHour) return tooMany();
     }
     const row = await db.mcpAuthRequest.create({
       data: { ...v.value, ip: clientIp(request), expiresAt: new Date(Date.now() + cfg.authRequestTtlSec * 1000) },
