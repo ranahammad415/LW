@@ -22,6 +22,8 @@ const BLOCKED_PREFIXES = [
   '/api/auth/',
   '/api/mcp',
   '/api/admin/mcp',
+  // OS Backups (features/os-backups.md): human-only full-DB backup, restore and download; reads included.
+  '/api/admin/os-backups',
   '/api/public/',
   '/api/webhooks/',
   '/api/tool/',
