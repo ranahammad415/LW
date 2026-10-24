@@ -10,7 +10,7 @@
  *   04:00        signals.retention (compaction + deletes, ≤ 5 000 rows per statement)
  * No AI calls anywhere in this module.
  */
-import cron from 'node-cron';
+import cron from '../osBackup/cronGate.js'; // node-cron + maintenance gate (features/os-backups.md)
 import { prisma } from '../prisma.js';
 import { isLeader } from '../emdashSync.js';
 import { signalsJobsEnabled } from './common.js';

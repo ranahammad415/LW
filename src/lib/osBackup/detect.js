@@ -4,6 +4,7 @@
  * credential ever reaches a child process. Result goes to osbackupstate.detectJson and the CLI prints it.
  */
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { execFile } from 'child_process';
 import { BACKEND_ROOT } from './config.js';
@@ -137,8 +138,15 @@ export async function detect({ cfg, data }) {
       serverError = String(err?.code || 'ERROR');
     }
   }
+  // statfs cannot see the per-user hosting quota: with OS_BACKUP_QUOTA_MB set, measure the home directory (du -sk).
+  let homeUsageKb = null;
+  if (cfg.quotaMb && binaries.exec !== 'blocked' && process.platform !== 'win32') {
+    const du = await probe('du', ['-sk', os.homedir()], 60_000);
+    if (du.ok) homeUsageKb = Number(String(du.version).split(/\s+/)[0]) || null;
+  }
   return {
     at,
+    homeUsageKb,
     engine: { configured: cfg.engineRequested, used: 'node', mysqldumpEngineBuilt: false },
     binaries,
     server,

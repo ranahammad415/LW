@@ -63,6 +63,7 @@ export function readJobFile(dir, jobId) {
 
 /** Merge `patch` into the job file (atomic tmp + rename). */
 export function writeJobFile(dir, jobId, patch) {
+  fs.mkdirSync(layout(dir).jobs, { recursive: true, mode: 0o700 });
   const cur = readJobFile(dir, jobId) || { id: jobId };
   const next = { ...cur, ...patch, id: jobId, updatedAt: new Date().toISOString() };
   writeJsonAtomicSync(jobFile(dir, jobId), next);
@@ -76,6 +77,7 @@ export function appendJournal(dir, entry) {
   const line = { at: new Date().toISOString() };
   for (const k of JOURNAL_KEYS) if (entry[k] !== undefined && entry[k] !== null) line[k] = typeof entry[k] === 'string' ? entry[k].slice(0, 300) : entry[k];
   try {
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     fs.appendFileSync(layout(dir).journal, `${JSON.stringify(line)}\n`, { mode: 0o600 });
   } catch {
     /* the journal must never break a job */

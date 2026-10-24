@@ -5,7 +5,7 @@
  *   every minute  ghl.leadImport   lead-import mirror queue (≤ 20 leads per run; no DB write when nothing is due)
  *   04:40 UTC     ghl.receipts     ExternalFormReceipt older than 90 days deleted (≤ 5 000 rows per statement)
  */
-import cron from 'node-cron';
+import cron from '../osBackup/cronGate.js'; // node-cron + maintenance gate (features/os-backups.md)
 import { prisma } from '../prisma.js';
 import { isLeader } from '../emdashSync.js';
 import { runLeadImportQueue } from './leadImport.js';

@@ -62,6 +62,7 @@ const FOOTER_MESSAGES = {
   report:       "Don't want emails about reports?",
   standup:      "Don't want emails about standups?",
   interview:    "You received this because your account team asked for your input.",
+  security:     "Security email for the owners of this Agency OS (always sent).",
 };
 
 /**
@@ -78,6 +79,7 @@ const FOOTER_MESSAGES = {
  * @param {string} [opts.summaryHtml]       - Optional short summary block (e.g. AI 2–3 line content summary)
  * @param {string} [opts.detailCardHtml]    - Rendered taskDetailCard() or issueDetailCard()
  * @param {string} [opts.commentThreadHtml] - Rendered commentThread() for recent comments
+ * @param {object|null} [opts.settings]     - AgencySetting-like branding; when not undefined, getAgencySettings() is skipped
  * @returns {string} Complete HTML email document
  */
 export async function wrapInBrandedLayout(opts = {}) {
@@ -92,10 +94,12 @@ export async function wrapInBrandedLayout(opts = {}) {
     summaryHtml = '',
     detailCardHtml = '',
     commentThreadHtml = '',
+    settings,
   } = opts;
 
-  // Fetch dynamic agency settings
-  const s = await getAgencySettings();
+  // Fetch dynamic agency settings. `settings` given (even null) = use it and never touch the DB (OS Backups emails are
+  // rendered while the DB is being restored; branding is captured before maintenance starts).
+  const s = settings !== undefined ? settings : await getAgencySettings();
   const agencyName      = s?.agencyName || 'Localwaves';
   const logoUrl         = s?.logoUrl ? `${BACKEND_URL}${s.logoUrl}` : DEFAULT_LOGO_URL;
   const brandPrimary    = s?.emailPrimaryColor || DEFAULT_PRIMARY;

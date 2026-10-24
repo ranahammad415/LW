@@ -1,4 +1,5 @@
 import { prisma } from './prisma.js';
+import { isMaintenance } from './osBackup/maintenance.js';
 import { safeSiteLink } from './siteLinks.js';
 import {
   commentsForStatus,
@@ -348,6 +349,7 @@ export function startPipelineSyncInterval(logger) {
 
   logger.info(`Starting pipeline sync interval every ${ms}ms`);
   syncIntervalId = setInterval(async () => {
+    if (isMaintenance()) return; // OS restore in progress (features/os-backups.md)
     try {
       const result = await syncPipelineFromWp();
       if (result.synced > 0 || result.errors > 0) {

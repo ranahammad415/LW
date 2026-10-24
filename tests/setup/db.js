@@ -47,6 +47,11 @@ export async function truncateAllTables() {
   // Table names match Prisma model names (no @@map in schema)
   const tables = [
     'apitoken',
+    // OS Backups preserved tables (features/os-backups.md)
+    'osbackup',
+    'osbackupjob',
+    'osbackupchallenge',
+    'osbackupstate',
     'idempotencykey',
     'engine_review_outbox',
     'engine_review_challenge',
